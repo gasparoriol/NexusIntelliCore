@@ -137,19 +137,132 @@ Helpful probe options:
 - Analysis results are cached by file modification time.
 - Security audit output reports issue type and location, never secret values.
 
+## Using NexusIntelliCore Effectively
+
+NexusIntelliCore is most useful when it helps reduce irrelevant context before sending anything to an LLM. The main savings do not come from adding more context; they come from narrowing the context to the smallest slice that still explains the behavior you care about.
+
+This matters especially in Angular and Java projects, where it is easy to waste tokens on:
+
+- entire components or services
+- full controller-service-repository chains
+- large feature modules or multiple layers "just in case"
+
+In practice, the most effective workflow is:
+
+1. `get_project_structure` to locate the relevant slice.
+2. `get_file_outline` to inspect imports, types, and signatures without sending implementation details.
+3. `inspect_symbol` only for the method, service, or class that directly controls the behavior.
+4. `get_dependencies_graph` only when the change spans multiple modules or layers.
+
+For Angular, this usually means inspecting the outline of a component and its backing service before opening any full implementation. For Java, it usually means starting from a controller or service outline, then inspecting one public method and following one call hop at a time.
+
+The practical rule is simple: do not send whole files unless you already know they are the minimal necessary unit.
+
+### Honest Guidance
+
+NexusIntelliCore will not compensate for poor context discipline. If you use it to ask an LLM to "analyze the whole module" or "understand the full backend flow," token usage will still be high and answer quality will still degrade.
+
+The tool is a context filter, not a substitute for engineering judgment.
+
+What it does well:
+
+- expose project structure quickly
+- surface signatures, types, and imports without dumping full source
+- let you inspect one symbol at a time
+- reduce unnecessary code sent to the model
+
+What it does not do:
+
+- understand business intent on its own
+- replace debugging hypotheses or architectural judgment
+- make broad prompts efficient if the prompt itself is unfocused
+
+If used well, NexusIntelliCore can materially reduce token usage and improve answer precision. If used loosely, it mostly becomes another layer of noise.
+
+### Practical Example: Creating a Component with Project Context
+
+The most effective use of NexusIntelliCore is not to generate code directly, but to extract your project's exact patterns before asking an LLM to create code. This results in a precise, context-aware prompt that produces correct code on the first try instead of multiple iterations.
+
+**Scenario**: You need to create a success/error dialog component in Angular.
+
+**Without NexusIntelliCore (weak prompt)**:
+
+```
+Create an Angular dialog component that shows success or error messages.
+```
+
+Result: Generic Material dialog. Doesn't match your project's styling, patterns, or service architecture. Requires iterations to fix.
+
+**With NexusIntelliCore (strong prompt)**:
+
+1. **Investigate structure**:
+   - `get_project_structure` → find `src/app/shared/dialogs` and `src/app/core/services`
+
+2. **Extract existing pattern**:
+   - `get_file_outline` on `src/app/shared/dialogs/notification-dialog.component.ts` → see current inputs, outputs, imports
+   - `inspect_symbol` on the component's `constructor` → copy exact dependency injection pattern
+   - `inspect_symbol` on the RxJS subscription pattern → see how ngOnDestroy cleanup works
+
+3. **Find styling and theming**:
+   - `get_file_outline` on `src/app/shared/styles/theme.scss` → see available CSS variables
+   - `search_design_patterns` on `src/app/shared/dialogs` → confirm the modal/dialog pattern used
+
+4. **Extract service integration**:
+   - `get_file_outline` on `src/app/core/services/notification.service.ts` → see how errors are broadcast
+   - `get_dependencies_graph` → understand which services depend on which
+
+5. **Generate precise prompt** to the LLM:
+
+```
+Create a SuccessErrorDialogComponent for Angular based on these project-specific requirements:
+
+**Existing Pattern (from NotificationDialogComponent)**:
+- MatDialog.DialogRef<NotificationDialogComponent> injected in constructor
+- @Input() message: string
+- @Input() type: 'success' | 'error' | 'info'
+- @Output() onClose = new EventEmitter<void>()
+- RxJS: destroy$ = new Subject<void>()
+- ngOnDestroy: destroy$.next(); destroy$.complete()
+
+**Styling** (from theme.scss):
+- Success: var(--color-success-light), var(--color-success-dark)
+- Error: var(--color-error-light), var(--color-error-dark)
+- Use Tailwind utilities where possible, custom vars for colors
+
+**Service Integration** (from notification.service.ts):
+- Inject NotificationService
+- Subscribe to errorOccurred$ event in ngOnInit
+- Use takeUntil(destroy$) to unsubscribe
+
+**Requirements**:
+1. Auto-close after 5 seconds for success, manual close for error
+2. Display icon (checkmark for success, X for error)
+3. Dismiss button that emits onClose
+4. Follow existing NotificationDialogComponent structure exactly
+5. Use the same imports and dependencies
+
+Here is the exact constructor signature from NotificationDialogComponent:
+[copied from inspect_symbol]
+
+Here are the exact styles from theme.scss:
+[copied from get_file_outline]
+```
+
+Result: The LLM creates a component that fits perfectly into your project on the first try. No iteration needed. Tokens saved because the first response is correct.
+
+**The difference in practice**:
+
+- Without NexusIntelliCore: 4-6 exchanges with the LLM, lots of "adjust the styling", "use this pattern", "add this service"
+- With NexusIntelliCore: 1-2 exchanges, minimal adjustments
+
+The time investment in NexusIntelliCore queries (2-3 minutes) pays back immediately in fewer LLM iterations and higher-quality code.
+
 ## Known Constraints
 
 - Design-pattern detection is heuristic.
 - Dependency resolution is best-effort across languages.
 - Security checks intentionally favor broad detection and may require manual validation.
 
-## Contributing
-
-1. Add or update tool logic in `src/tools.rs`.
-2. Keep output sanitization centralized in `src/privacy_gateway.rs`.
-3. Add tests for behavior and regressions.
-4. Validate MCP framing behavior after transport changes.
-
 ## License
 
-No license file is currently present in this repository.
+This project is licensed under the MIT License. See `LICENSE.md` for the full text.
