@@ -1,0 +1,36 @@
+[package]
+name = "NexusIntelliCore"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "nexusintellicore-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# MCP Server and communication
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1"
+
+# Static Analysis Core — pin to 0.20 so all language crates share one ABI
+tree-sitter = "0.20"
+tree-sitter-rust = "0.20"
+tree-sitter-java = "0.20"
+tree-sitter-javascript = "0.20"
+tree-sitter-typescript = "0.20"
+tree-sitter-python = "0.20"
+
+# File System and Graph Utilities
+ignore = "0.4"
+petgraph = "0.6"
+globset = "0.4"
+
+# Sanitization and Privacy
+regex = "1.10"
+lazy_static = "1.5"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

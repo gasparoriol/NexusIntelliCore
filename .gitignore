@@ -1,0 +1,6 @@
+/target
+Cargo.lock
+/scripts
+/.vscode
+*.md
+*.log
