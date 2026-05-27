@@ -21,6 +21,8 @@ pub enum Lang {
     TypeScript,
     Tsx,
     Java,
+    C,
+    CSharp,
     Unknown,
 }
 
@@ -32,6 +34,8 @@ pub fn detect_language(path: &Path) -> Lang {
         Some("ts") => Lang::TypeScript,
         Some("tsx") => Lang::Tsx,
         Some("java") => Lang::Java,
+        Some("c") | Some("h") => Lang::C,
+        Some("cs") => Lang::CSharp,
         _ => Lang::Unknown,
     }
 }
@@ -44,6 +48,8 @@ fn ts_language(lang: &Lang) -> Option<Language> {
         Lang::TypeScript => Some(tree_sitter_typescript::language_typescript()),
         Lang::Tsx => Some(tree_sitter_typescript::language_tsx()),
         Lang::Java => Some(tree_sitter_java::language()),
+        Lang::C => Some(tree_sitter_c::language()),
+        Lang::CSharp => Some(tree_sitter_c_sharp::language()),
         Lang::Unknown => None,
     }
 }
@@ -139,6 +145,8 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
         Lang::TypeScript => "typescript",
         Lang::Tsx => "tsx",
         Lang::Java => "java",
+        Lang::C => "c",
+        Lang::CSharp => "csharp",
         Lang::Unknown => "unknown",
     };
 
@@ -181,10 +189,31 @@ fn extract_functions(
         Lang::Rust => "(function_item name: (identifier) @name) @fn",
         Lang::Python => "(function_definition name: (identifier) @name) @fn",
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
+            // function_declaration + class method_definition +
+            // interface method_signature + const/let arrow/function expressions
             "[(function_declaration name: (identifier) @name) @fn \
-              (method_definition name: (property_identifier) @name) @fn]"
+              (method_definition name: (property_identifier) @name) @fn \
+              (method_signature name: (property_identifier) @name) @fn \
+              (variable_declarator name: (identifier) @name \
+                value: [(arrow_function) (function_expression)]) @fn]"
         }
-        Lang::Java => "(method_declaration name: (identifier) @name) @fn",
+        Lang::Java => {
+            "[(method_declaration name: (identifier) @name) @fn \
+              (constructor_declaration name: (identifier) @name) @fn]"
+        }
+        Lang::C => {
+            // Captures plain functions; pointer-returning functions
+            // (ptr_declarator wrapping function_declarator) are not covered here.
+            "(function_definition \
+               declarator: (function_declarator \
+                 declarator: (identifier) @name)) @fn"
+        }
+        Lang::CSharp => {
+            "[(method_declaration name: (identifier) @name) @fn \
+              (constructor_declaration name: (identifier) @name) @fn \
+              (operator_declaration) @fn \
+              (destructor_declaration name: (identifier) @name) @fn]"
+        }
         Lang::Unknown => return Ok(vec![]),
     };
 
@@ -197,8 +226,18 @@ fn extract_functions(
         let fn_text = &source[fn_node_ts.byte_range()];
         let name_text = name_cap.2.clone();
 
-        // Signature = everything up to (but not including) the body block
-        let signature = extract_signature(fn_text);
+        // Use the AST body-node boundary to correctly delimit the signature.
+        // find_body_node only returns block-style bodies, so expression arrow
+        // functions fall through to extract_signature (no truncation risk).
+        let signature = {
+            let fn_start = fn_node_ts.start_byte();
+            match find_body_node(fn_node_ts) {
+                Some(body_node) if body_node.start_byte() > fn_start => {
+                    source[fn_start..body_node.start_byte()].trim().to_owned()
+                }
+                _ => extract_signature(fn_text),
+            }
+        };
         let is_strip = crate::sanitizer::has_mcp_strip(fn_text);
 
         Some(FunctionInfo {
@@ -229,7 +268,25 @@ fn extract_classes(
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
             "(class_declaration name: (identifier) @name) @cls"
         }
-        Lang::Java => "(class_declaration name: (identifier) @name) @cls",
+        Lang::Java => {
+            "[(class_declaration name: (identifier) @name) @cls \
+              (interface_declaration name: (identifier) @name) @cls \
+              (enum_declaration name: (identifier) @name) @cls \
+              (record_declaration name: (identifier) @name) @cls \
+              (annotation_type_declaration name: (identifier) @name) @cls]"
+        }
+        Lang::C => {
+            // Named (tagged) struct / union / enum definitions.
+            "[(struct_specifier name: (type_identifier) @name) @cls \
+              (union_specifier  name: (type_identifier) @name) @cls \
+              (enum_specifier   name: (type_identifier) @name) @cls]"
+        }
+        Lang::CSharp => {
+            "[(class_declaration     name: (identifier) @name) @cls \
+              (interface_declaration name: (identifier) @name) @cls \
+              (struct_declaration    name: (identifier) @name) @cls \
+              (enum_declaration      name: (identifier) @name) @cls]"
+        }
         Lang::Unknown => return Ok(vec![]),
     };
 
@@ -245,6 +302,16 @@ fn extract_classes(
             "impl_item" => "impl",
             "trait_item" => "trait",
             "class_definition" | "class_declaration" => "class",
+            "interface_declaration" => "interface",
+            "enum_declaration" => "enum",
+            "record_declaration" => "record",
+            "annotation_type_declaration" => "@interface",
+            // C
+            "struct_specifier" => "struct",
+            "union_specifier" => "union",
+            "enum_specifier" => "enum",
+            // C# (struct_declaration distinct from Rust struct_item)
+            "struct_declaration" => "struct",
             _ => raw_kind,
         };
 
@@ -268,6 +335,8 @@ fn extract_imports(
         Lang::Python => "[(import_statement) @import (import_from_statement) @import]",
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => "(import_statement) @import",
         Lang::Java => "(import_declaration) @import",
+        Lang::C => "(preproc_include) @import",
+        Lang::CSharp => "(using_directive) @import",
         Lang::Unknown => return Ok(vec![]),
     };
 
@@ -289,13 +358,38 @@ fn extract_imports(
                 extract_python_import_path(&raw)
             }
             Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
-                // For JS/TS: `import { foo } from './utils/helper'` → extract `./utils/helper`
-                extract_js_import_path(&raw)
+                // Prefer AST source field over brittle text parsing of 'from ...'
+                if let Some(src_node) = imp.1.child_by_field_name("source") {
+                    let quoted = source[src_node.byte_range()].trim();
+                    quoted
+                        .trim_matches(|c: char| c == '"' || c == '\'')
+                        .to_owned()
+                } else {
+                    extract_js_import_path(&raw)
+                }
             }
             Lang::Java => {
                 // For Java: `import com.example.Service;` → path is `com.example.Service`
                 raw.trim_start_matches("import ")
                     .trim_end_matches(';')
+                    .to_owned()
+            }
+            Lang::C => {
+                // `#include <stdio.h>` → `stdio.h`, `#include "foo.h"` → `foo.h`
+                raw.trim_start_matches("#include")
+                    .trim()
+                    .trim_matches(|c: char| c == '<' || c == '>' || c == '"')
+                    .to_owned()
+            }
+            Lang::CSharp => {
+                // `using System.Collections.Generic;` → `System.Collections.Generic`
+                // `using static System.Math;`         → `System.Math`
+                raw.trim_start_matches("using")
+                    .trim()
+                    .trim_start_matches("static")
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim()
                     .to_owned()
             }
             Lang::Unknown => raw.clone(),
@@ -361,6 +455,8 @@ fn extract_strings(
         Lang::Python => "(string) @str",
         Lang::JavaScript | Lang::TypeScript | Lang::Tsx => "(string) @str",
         Lang::Java => "(string_literal) @str",
+        Lang::C => "(string_literal) @str",
+        Lang::CSharp => "[(string_literal) @str (verbatim_string_literal) @str]",
         Lang::Unknown => return Ok(vec![]),
     };
 
@@ -414,6 +510,32 @@ fn run_named_query<T>(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Find the block body of a function-like AST node.
+///
+/// Only returns nodes with kind `block` or `statement_block` — the
+/// brace-delimited bodies — so that expression arrow functions
+/// (`() => expr`) fall through to the text-based fallback.
+/// Also handles `variable_declarator` wrapping `arrow_function` /
+/// `function_expression` by diving into the `value` field.
+fn find_body_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> {
+    let body = node.child_by_field_name("body").or_else(|| {
+        // variable_declarator: look inside the arrow/function_expression value
+        node.child_by_field_name("value")
+            .and_then(|val| val.child_by_field_name("body"))
+    })?;
+
+    // Only block-style bodies delimit signatures reliably.
+    // `compound_statement` is the C/C++ equivalent of `block`.
+    if matches!(
+        body.kind(),
+        "block" | "statement_block" | "compound_statement"
+    ) {
+        Some(body)
+    } else {
+        None
+    }
+}
 
 /// Extract function signature (text before the opening brace / body).
 pub fn extract_signature(fn_source: &str) -> String {
