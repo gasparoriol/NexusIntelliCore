@@ -28,14 +28,32 @@ All tool outputs pass through a centralized Privacy Gateway.
 
 ### Analysis Tools
 
-The server currently exposes six MCP tools:
+The server currently exposes nine MCP tools:
 
-1. `get_project_structure`
-2. `get_file_outline`
-3. `inspect_symbol`
-4. `get_dependencies_graph`
-5. `search_design_patterns`
-6. `audit_security_measures`
+1. `list_directory`
+2. `read_file`
+3. `search_code`
+4. `get_file_outline`
+5. `analyze_code`
+6. `get_server_stats`
+7. `refresh_index`
+8. `get_lru_stats`
+9. `analyze_angular_component`
+
+### CSS, HTML, and Angular Support
+
+`get_file_outline` understands CSS and HTML files:
+
+- **CSS** — extracts all rule-set selectors, their property counts, line ranges, and enclosing `@media` queries.
+- **HTML** — extracts element tags, referenced CSS class names, Angular input (`[…]`) and output (`(…)`) bindings, and flags Angular component tags (tags containing a hyphen).
+- **SCSS / Sass** — files are detected and their language reported, but selectors are not parsed (returned as an empty outline).
+
+`analyze_angular_component` resolves the full triad of an Angular component:
+
+- Reads the `@Component` decorator from a `.component.ts` file.
+- Resolves `templateUrl` → HTML file, `styleUrls` → CSS files.
+- Normalises relative paths (including `..` segments) without touching the filesystem.
+- Returns a combined JSON object with `component`, `template`, and `styles` sections, sanitised through the Privacy Gateway.
 
 ### Privacy and Security Controls
 
@@ -55,7 +73,8 @@ High-level module responsibilities:
 - `src/tools.rs`: tool registry and tool dispatch implementation
 - `src/state.rs`: global state, lazy index initialization, analysis cache
 - `src/indexer.rs`: file discovery, tree rendering, restriction matching
-- `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter
+- `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, JS, TS, Java, C, C#, CSS, HTML)
+- `src/relations.rs`: Angular `@Component` decorator parser — resolves `templateUrl` and `styleUrls` to filesystem paths
 - `src/privacy_gateway.rs`: policy-driven sanitization layer
 - `src/sanitizer.rs`: secret detection/redaction utilities
 
@@ -262,6 +281,9 @@ The time investment in NexusIntelliCore queries (2-3 minutes) pays back immediat
 - Design-pattern detection is heuristic.
 - Dependency resolution is best-effort across languages.
 - Security checks intentionally favor broad detection and may require manual validation.
+- SCSS and Sass files are detected and reported as `scss` but their selectors are not parsed.
+- `analyze_angular_component` does not resolve dynamically constructed `templateUrl`/`styleUrls` expressions or spread operators in the decorator.
+- Inline `template` and `styles` properties inside `@Component` are not parsed by `analyze_angular_component`.
 
 ## License
 
