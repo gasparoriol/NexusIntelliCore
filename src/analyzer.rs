@@ -23,6 +23,10 @@ pub enum Lang {
     Java,
     C,
     CSharp,
+    Css,
+    Scss,
+    Sass,
+    Html,
     Unknown,
 }
 
@@ -36,6 +40,10 @@ pub fn detect_language(path: &Path) -> Lang {
         Some("java") => Lang::Java,
         Some("c") | Some("h") => Lang::C,
         Some("cs") => Lang::CSharp,
+        Some("css") => Lang::Css,
+        Some("scss") => Lang::Scss,
+        Some("sass") => Lang::Sass,
+        Some("html") | Some("htm") => Lang::Html,
         _ => Lang::Unknown,
     }
 }
@@ -50,6 +58,7 @@ fn ts_language(lang: &Lang) -> Option<Language> {
         Lang::Java => Some(tree_sitter_java::language()),
         Lang::C => Some(tree_sitter_c::language()),
         Lang::CSharp => Some(tree_sitter_c_sharp::language()),
+        Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => None,
         Lang::Unknown => None,
     }
 }
@@ -94,6 +103,29 @@ pub struct StringLiteral {
     pub line: usize,
 }
 
+/// A single CSS rule set (selector + property names).
+#[derive(Debug, Clone)]
+pub struct CssRuleInfo {
+    pub selector: String,
+    pub properties: Vec<String>,
+    pub media_query: Option<String>,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+/// An HTML element extracted from a template (including Angular binding attributes).
+#[derive(Debug, Clone)]
+pub struct HtmlElementInfo {
+    pub tag_name: String,
+    pub class_names: Vec<String>,
+    pub is_angular_component: bool,
+    pub input_bindings: Vec<String>,
+    pub output_bindings: Vec<String>,
+    pub start_line: usize,
+    #[allow(dead_code)]
+    pub end_line: usize,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct FileAnalysis {
     pub functions: Vec<FunctionInfo>,
@@ -102,6 +134,10 @@ pub struct FileAnalysis {
     #[allow(dead_code)]
     pub string_literals: Vec<StringLiteral>,
     pub language: String,
+    /// Populated for `.css` files; `None` for all other languages.
+    pub css_rules: Option<Vec<CssRuleInfo>>,
+    /// Populated for `.html` / `.htm` files; `None` for all other languages.
+    pub html_elements: Option<Vec<HtmlElementInfo>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -128,6 +164,19 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
 
     let lang = detect_language(path);
 
+    // CSS / SCSS / HTML: dedicated parsers with a different data model — return early
+    match &lang {
+        Lang::Css => return parse_css_file(&source),
+        Lang::Html => return parse_html_file(&source),
+        Lang::Scss | Lang::Sass => {
+            return Ok(FileAnalysis {
+                language: "scss".to_owned(),
+                ..Default::default()
+            })
+        }
+        _ => {}
+    }
+
     let ts_lang = match ts_language(&lang) {
         Some(l) => l,
         None => {
@@ -148,6 +197,10 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
         Lang::C => "c",
         Lang::CSharp => "csharp",
         Lang::Unknown => "unknown",
+        // Handled by early returns above — these branches are unreachable at runtime
+        Lang::Css => "css",
+        Lang::Scss | Lang::Sass => "scss",
+        Lang::Html => "html",
     };
 
     let mut parser = Parser::new();
@@ -172,6 +225,8 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
         imports,
         string_literals,
         language: lang_name.to_owned(),
+        css_rules: None,
+        html_elements: None,
     })
 }
 
@@ -214,7 +269,7 @@ fn extract_functions(
               (operator_declaration) @fn \
               (destructor_declaration name: (identifier) @name) @fn]"
         }
-        Lang::Unknown => return Ok(vec![]),
+        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
@@ -287,7 +342,7 @@ fn extract_classes(
               (struct_declaration    name: (identifier) @name) @cls \
               (enum_declaration      name: (identifier) @name) @cls]"
         }
-        Lang::Unknown => return Ok(vec![]),
+        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
@@ -337,7 +392,7 @@ fn extract_imports(
         Lang::Java => "(import_declaration) @import",
         Lang::C => "(preproc_include) @import",
         Lang::CSharp => "(using_directive) @import",
-        Lang::Unknown => return Ok(vec![]),
+        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
@@ -392,7 +447,7 @@ fn extract_imports(
                     .trim()
                     .to_owned()
             }
-            Lang::Unknown => raw.clone(),
+            Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => raw.clone(),
         };
 
         Some(ImportInfo { raw, path })
@@ -457,7 +512,7 @@ fn extract_strings(
         Lang::Java => "(string_literal) @str",
         Lang::C => "(string_literal) @str",
         Lang::CSharp => "[(string_literal) @str (verbatim_string_literal) @str]",
-        Lang::Unknown => return Ok(vec![]),
+        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
@@ -698,4 +753,345 @@ pub fn detect_patterns(analysis: &FileAnalysis, file_path: &str) -> Vec<PatternM
     }
 
     found
+}
+
+// ---------------------------------------------------------------------------
+// CSS parser
+// ---------------------------------------------------------------------------
+
+fn parse_css_file(source: &str) -> Result<FileAnalysis> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(tree_sitter_css::language())
+        .context("Failed to set tree-sitter CSS language")?;
+    let tree = parser
+        .parse(source, None)
+        .context("tree-sitter-css failed to produce a parse tree")?;
+
+    let root = tree.root_node();
+    let mut rules = Vec::new();
+    collect_css_rule_sets(root, source, &mut rules, None);
+
+    Ok(FileAnalysis {
+        language: "css".to_owned(),
+        css_rules: Some(rules),
+        ..Default::default()
+    })
+}
+
+fn collect_css_rule_sets(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    rules: &mut Vec<CssRuleInfo>,
+    media_query: Option<String>,
+) {
+    match node.kind() {
+        "rule_set" => {
+            let mut selector = String::new();
+            let mut properties = Vec::new();
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                match child.kind() {
+                    "selectors" => {
+                        selector = source[child.byte_range()].trim().to_owned();
+                    }
+                    "block" => {
+                        let mut block_cursor = child.walk();
+                        for block_child in child.children(&mut block_cursor) {
+                            if block_child.kind() == "declaration" {
+                                if let Some(prop) = extract_css_property_name(block_child, source) {
+                                    properties.push(prop);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !selector.is_empty() {
+                rules.push(CssRuleInfo {
+                    selector,
+                    properties,
+                    media_query: media_query.clone(),
+                    start_line: node.start_position().row + 1,
+                    end_line: node.end_position().row + 1,
+                });
+            }
+        }
+        "media_statement" => {
+            // Extract the condition between "@media" and the first "{"
+            let raw = &source[node.byte_range()];
+            let media_text = raw
+                .find("@media")
+                .and_then(|start| {
+                    let after = &raw[start + "@media".len()..];
+                    after.find('{').map(|end| after[..end].trim().to_owned())
+                })
+                .unwrap_or_default();
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_css_rule_sets(child, source, rules, Some(media_text.clone()));
+            }
+        }
+        _ => {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_css_rule_sets(child, source, rules, media_query.clone());
+            }
+        }
+    }
+}
+
+fn extract_css_property_name(node: tree_sitter::Node<'_>, source: &str) -> Option<String> {
+    // Try field name first (tree-sitter-css uses a "property_name" field)
+    if let Some(prop_node) = node.child_by_field_name("property_name") {
+        let text = source[prop_node.byte_range()].trim().to_owned();
+        if !text.is_empty() {
+            return Some(text);
+        }
+    }
+    // Fallback: take raw text before the first ':'
+    let raw = source[node.byte_range()].trim();
+    raw.find(':')
+        .map(|i| raw[..i].trim().to_owned())
+        .filter(|s| !s.is_empty() && !s.contains('{') && !s.contains('}'))
+}
+
+// ---------------------------------------------------------------------------
+// HTML parser
+// ---------------------------------------------------------------------------
+
+fn parse_html_file(source: &str) -> Result<FileAnalysis> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(tree_sitter_html::language())
+        .context("Failed to set tree-sitter HTML language")?;
+    let tree = parser
+        .parse(source, None)
+        .context("tree-sitter-html failed to produce a parse tree")?;
+
+    let root = tree.root_node();
+    let mut elements = Vec::new();
+    collect_html_elements(root, source, &mut elements);
+
+    Ok(FileAnalysis {
+        language: "html".to_owned(),
+        html_elements: Some(elements),
+        ..Default::default()
+    })
+}
+
+fn collect_html_elements(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    elements: &mut Vec<HtmlElementInfo>,
+) {
+    let kind = node.kind();
+    if kind == "start_tag" || kind == "self_closing_tag" {
+        let mut tag_name = String::new();
+        let mut class_names = Vec::new();
+        let mut input_bindings = Vec::new();
+        let mut output_bindings = Vec::new();
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "tag_name" => {
+                    tag_name = source[child.byte_range()].to_owned();
+                }
+                "attribute" => {
+                    parse_html_attribute(
+                        child,
+                        source,
+                        &mut class_names,
+                        &mut input_bindings,
+                        &mut output_bindings,
+                    );
+                }
+                _ => {}
+            }
+        }
+        if !tag_name.is_empty() {
+            elements.push(HtmlElementInfo {
+                is_angular_component: is_angular_component(&tag_name),
+                tag_name,
+                class_names,
+                input_bindings,
+                output_bindings,
+                start_line: node.start_position().row + 1,
+                end_line: node.end_position().row + 1,
+            });
+        }
+    }
+    // Always recurse
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_html_elements(child, source, elements);
+    }
+}
+
+fn parse_html_attribute(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    class_names: &mut Vec<String>,
+    input_bindings: &mut Vec<String>,
+    output_bindings: &mut Vec<String>,
+) {
+    let mut attr_name = String::new();
+    let mut attr_value = String::new();
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "attribute_name" => {
+                attr_name = source[child.byte_range()].to_owned();
+            }
+            "quoted_attribute_value" => {
+                let mut val_cursor = child.walk();
+                for val_child in child.children(&mut val_cursor) {
+                    if val_child.kind() == "attribute_value" {
+                        attr_value = source[val_child.byte_range()].to_owned();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if attr_name.is_empty() {
+        return;
+    }
+    if attr_name.starts_with('[') && attr_name.ends_with(']') {
+        let inner = &attr_name[1..attr_name.len() - 1];
+        if inner.starts_with("class.") {
+            // Angular class binding: [class.active]="condition"
+            class_names.push(inner["class.".len()..].to_owned());
+        } else {
+            input_bindings.push(inner.to_owned());
+        }
+    } else if attr_name.starts_with('(') && attr_name.ends_with(')') {
+        // Angular event binding: (click)="handler()"
+        let event = &attr_name[1..attr_name.len() - 1];
+        output_bindings.push(event.to_owned());
+    } else if attr_name == "class" && !attr_value.is_empty() {
+        class_names.extend(attr_value.split_whitespace().map(str::to_owned));
+    }
+}
+
+/// Heuristic: custom Angular component selectors contain a hyphen and are not
+/// a known HTML built-in element that happens to contain a hyphen.
+fn is_angular_component(tag: &str) -> bool {
+    tag.contains('-')
+        && !matches!(
+            tag,
+            "accept-charset"
+                | "annotation-xml"
+                | "color-profile"
+                | "font-face"
+                | "font-face-src"
+                | "font-face-uri"
+                | "font-face-format"
+                | "font-face-name"
+                | "missing-glyph"
+        )
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_css_detect_language() {
+        use std::path::PathBuf;
+        assert!(matches!(
+            detect_language(&PathBuf::from("foo.css")),
+            Lang::Css
+        ));
+        assert!(matches!(
+            detect_language(&PathBuf::from("foo.scss")),
+            Lang::Scss
+        ));
+        assert!(matches!(
+            detect_language(&PathBuf::from("foo.html")),
+            Lang::Html
+        ));
+        assert!(matches!(
+            detect_language(&PathBuf::from("foo.htm")),
+            Lang::Html
+        ));
+    }
+
+    #[test]
+    fn test_parse_css_basic() {
+        let source = ".btn { color: red; background: blue; }\n.container { padding: 16px; }";
+        let result = parse_css_file(source).expect("CSS parse failed");
+        assert_eq!(result.language, "css");
+        let rules = result.css_rules.unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].selector, ".btn");
+        assert!(rules[0].properties.contains(&"color".to_owned()));
+        assert!(rules[0].properties.contains(&"background".to_owned()));
+        assert_eq!(rules[1].selector, ".container");
+    }
+
+    #[test]
+    fn test_parse_css_media_query() {
+        let source = "@media (max-width: 768px) { .hero { display: none; } }";
+        let result = parse_css_file(source).expect("CSS media parse failed");
+        let rules = result.css_rules.unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, ".hero");
+        assert!(rules[0].media_query.is_some());
+    }
+
+    #[test]
+    fn test_parse_html_basic() {
+        let source = r#"<div class="hero-container"><button (click)="save()">Save</button></div>"#;
+        let result = parse_html_file(source).expect("HTML parse failed");
+        assert_eq!(result.language, "html");
+        let elements = result.html_elements.unwrap();
+        let div = elements
+            .iter()
+            .find(|e| e.tag_name == "div")
+            .expect("No div");
+        assert!(div.class_names.contains(&"hero-container".to_owned()));
+        let btn = elements
+            .iter()
+            .find(|e| e.tag_name == "button")
+            .expect("No button");
+        assert!(btn.output_bindings.contains(&"click".to_owned()));
+    }
+
+    #[test]
+    fn test_html_angular_component_detection() {
+        let source = r#"<app-header [title]="pageTitle"></app-header>"#;
+        let result = parse_html_file(source).expect("HTML parse failed");
+        let elements = result.html_elements.unwrap();
+        let comp = elements.iter().find(|e| e.tag_name == "app-header");
+        assert!(comp.is_some(), "app-header not found");
+        let comp = comp.unwrap();
+        assert!(comp.is_angular_component);
+        assert!(comp.input_bindings.contains(&"title".to_owned()));
+    }
+
+    #[test]
+    fn test_is_angular_component() {
+        assert!(is_angular_component("app-header"));
+        assert!(is_angular_component("my-custom-element"));
+        assert!(!is_angular_component("div"));
+        assert!(!is_angular_component("font-face")); // SVG built-in
+    }
+
+    #[test]
+    fn test_scss_returns_empty_analysis() {
+        // SCSS files are detected but not parsed — we just record the language
+        use std::path::PathBuf;
+        assert!(matches!(
+            detect_language(&PathBuf::from("app.scss")),
+            Lang::Scss
+        ));
+    }
 }

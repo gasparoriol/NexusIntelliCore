@@ -271,6 +271,8 @@ mod tests {
             classes: vec![],
             functions: vec![],
             string_literals: vec![],
+            css_rules: None,
+            html_elements: None,
         };
 
         let cached = CachedAnalysis {

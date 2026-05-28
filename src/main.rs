@@ -7,6 +7,7 @@ mod analyzer;
 mod indexer;
 mod privacy_gateway;
 mod protocol;
+mod relations;
 mod sanitizer;
 mod state;
 mod tools;

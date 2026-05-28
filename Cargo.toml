@@ -39,3 +39,5 @@ lazy_static = "1.5"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tree-sitter-css = "=0.20"
+tree-sitter-html = "=0.20.0"

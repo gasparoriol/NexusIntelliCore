@@ -113,6 +113,20 @@ pub fn tool_definitions() -> Value {
                 "properties": {},
                 "required": []
             }
+        },
+        {
+            "name": "analyze_angular_component",
+            "description": "Analyses an Angular component (*.component.ts) and returns the resolved TS → HTML → CSS graph: selector, class name, template elements, Angular components used, CSS classes referenced, and style selectors.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "component_path": {
+                        "type": "string",
+                        "description": "Absolute path to the Angular *.component.ts file"
+                    }
+                },
+                "required": ["component_path"]
+            }
         }
     ])
 }
@@ -138,6 +152,10 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
         "audit_security_measures" => audit_security_measures().await,
         "refresh_index" => refresh_index().await,
         "get_server_stats" => get_server_stats().await,
+        "analyze_angular_component" => {
+            let path = require_str(&args, "component_path")?;
+            analyze_angular_component(path).await
+        }
         other => Ok(error_response(format!("Unknown tool: {}", other))),
     }
 }
@@ -238,6 +256,62 @@ async fn get_file_outline(file_path: &str) -> Result<Value> {
                     func.signature, func.start_line, func.end_line
                 ));
             }
+        }
+    }
+
+    // CSS selectors
+    if let Some(css_rules) = &analysis.css_rules {
+        if !css_rules.is_empty() {
+            out.push_str("## CSS Selectors\n");
+            for rule in css_rules {
+                let media = rule
+                    .media_query
+                    .as_deref()
+                    .map(|q| format!(" [@media {}]", q))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "  {} ({} props, lines {}-{}){}\n",
+                    rule.selector,
+                    rule.properties.len(),
+                    rule.start_line,
+                    rule.end_line,
+                    media
+                ));
+            }
+            out.push('\n');
+        }
+    }
+
+    // HTML elements
+    if let Some(html_elements) = &analysis.html_elements {
+        let components: Vec<_> = html_elements
+            .iter()
+            .filter(|e| e.is_angular_component)
+            .map(|e| e.tag_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let all_classes: Vec<_> = html_elements
+            .iter()
+            .flat_map(|e| e.class_names.iter())
+            .map(|s| s.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        if !components.is_empty() {
+            out.push_str("## Angular Components Used\n");
+            for c in &components {
+                out.push_str(&format!("  {}\n", c));
+            }
+            out.push('\n');
+        }
+        if !all_classes.is_empty() {
+            out.push_str("## CSS Classes Referenced\n");
+            for cls in &all_classes {
+                out.push_str(&format!("  .{}\n", cls));
+            }
+            out.push('\n');
         }
     }
 
@@ -769,6 +843,172 @@ async fn get_server_stats() -> Result<Value> {
     );
 
     Ok(tool_response(vec![text_content(msg)]))
+}
+
+// ---------------------------------------------------------------------------
+// Tool 9 — analyze_angular_component
+// ---------------------------------------------------------------------------
+
+async fn analyze_angular_component(component_path: &str) -> Result<Value> {
+    let state = crate::state::ServerState::get();
+    let ts_path = match state.validate_path(Path::new(component_path)) {
+        Ok(p) => p,
+        Err(e) => return Ok(error_response(format!("Access denied: {}", e))),
+    };
+
+    let index = state.index().await?;
+    if index.is_restricted(&ts_path) {
+        return Ok(tool_response(vec![text_content(format!(
+            "⚠ Access denied by .mcpignore policy: {}",
+            component_path
+        ))]));
+    }
+    drop(index);
+
+    // Read TS source and extract @Component decorator
+    let ts_path_clone = ts_path.clone();
+    let source =
+        match tokio::task::spawn_blocking(move || std::fs::read_to_string(&ts_path_clone)).await? {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(error_response(format!(
+                    "Cannot read {}: {}",
+                    component_path, e
+                )))
+            }
+        };
+
+    let info = match crate::relations::extract_component_info(&ts_path, &source) {
+        Some(i) => i,
+        None => {
+            return Ok(tool_response(vec![text_content(format!(
+                "No @Component decorator found in {}.\n\
+                 This file does not appear to be an Angular component.",
+                component_path
+            ))]))
+        }
+    };
+
+    // Analyse the .ts file itself (for class names / methods)
+    let ts_analysis = state.get_analysis(&ts_path).await.ok();
+
+    // Analyse the template file (HTML)
+    let template_analysis = if let Some(ref tmpl_path) = info.template_file {
+        match state.validate_path(tmpl_path) {
+            Ok(valid_path) => state.get_analysis(&valid_path).await.ok(),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    // Analyse each style file (CSS / SCSS detected-only)
+    let mut style_analyses: Vec<(String, crate::analyzer::FileAnalysis)> = Vec::new();
+    for style_path in &info.style_files {
+        if let Ok(valid_path) = state.validate_path(style_path) {
+            if let Ok(analysis) = state.get_analysis(&valid_path).await {
+                style_analyses.push((style_path.display().to_string(), analysis));
+            }
+        }
+    }
+
+    // --- Build response ---
+
+    let component_section = json!({
+        "ts_file": component_path,
+        "selector": info.selector,
+        "class": ts_analysis.as_ref()
+            .and_then(|a| a.classes.first())
+            .map(|c| c.name.as_str()),
+        "template_file": info.template_file.as_ref().map(|p| p.display().to_string()),
+        "style_files": info.style_files.iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>(),
+    });
+
+    let template_section = template_analysis.as_ref().map(|tmpl| {
+        let elements: Vec<_> = tmpl
+            .html_elements
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|e| {
+                json!({
+                    "tag": e.tag_name,
+                    "is_component": e.is_angular_component,
+                    "classes": e.class_names,
+                    "inputs": e.input_bindings,
+                    "outputs": e.output_bindings,
+                    "line": e.start_line,
+                })
+            })
+            .collect();
+
+        let angular_components: Vec<_> = tmpl
+            .html_elements
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter(|e| e.is_angular_component)
+            .map(|e| e.tag_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let css_classes: Vec<_> = tmpl
+            .html_elements
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|e| e.class_names.iter())
+            .map(|s| s.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        json!({
+            "elements": elements,
+            "angular_components_used": angular_components,
+            "css_classes_used": css_classes,
+        })
+    });
+
+    let styles_section: Vec<_> = style_analyses
+        .iter()
+        .map(|(path_str, analysis)| {
+            let selectors: Vec<_> = analysis
+                .css_rules
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|r| {
+                    json!({
+                        "selector": r.selector,
+                        "properties": r.properties,
+                        "lines": format!("{}-{}", r.start_line, r.end_line),
+                        "media": r.media_query,
+                    })
+                })
+                .collect();
+            json!({
+                "file": path_str,
+                "language": analysis.language,
+                "selectors": selectors,
+            })
+        })
+        .collect();
+
+    let result = json!({
+        "component": component_section,
+        "template": template_section,
+        "styles": styles_section,
+    });
+
+    let policy = privacy_gateway::PrivacyPolicy::default();
+    let result_str = serde_json::to_string_pretty(&result).unwrap_or_default();
+    let (sanitized, _) = privacy_gateway::sanitize_output_text(&result_str, &policy);
+
+    Ok(tool_response(vec![text_content(sanitized)]))
 }
 
 // ---------------------------------------------------------------------------
