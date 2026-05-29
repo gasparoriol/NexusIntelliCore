@@ -26,17 +26,17 @@ use crate::state::ServerState;
 /// Debounce window for topological file-system changes.
 const INDEX_REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
 
-enum WatchAction {
+pub(crate) enum WatchAction {
     Ignore,
     InvalidateCache(Vec<PathBuf>),
     ScheduleIndexRefresh,
 }
 
-fn is_rename_modify_kind(kind: &ModifyKind) -> bool {
+pub(crate) fn is_rename_modify_kind(kind: &ModifyKind) -> bool {
     matches!(kind, ModifyKind::Name(_))
 }
 
-fn classify_event(event: &Event) -> WatchAction {
+pub(crate) fn classify_event(event: &Event) -> WatchAction {
     match &event.kind {
         EventKind::Modify(kind) if is_rename_modify_kind(kind) => WatchAction::ScheduleIndexRefresh,
         EventKind::Modify(_) => WatchAction::InvalidateCache(event.paths.clone()),
@@ -126,9 +126,13 @@ impl FileWatcher {
                                     rt_handle.spawn(async move {
                                         tokio::time::sleep(INDEX_REFRESH_DEBOUNCE).await;
 
-                                        ServerState::get().request_watcher_refresh();
-
+                                        // Clear the debounce flag BEFORE signalling state.
+                                        // Any topological event that arrives in this narrow
+                                        // window will then succeed its CAS and arm a fresh
+                                        // debounce timer rather than being silently coalesced
+                                        // with no pending request outstanding.
                                         refresh_debounce_active.store(false, Ordering::Release);
+                                        ServerState::get().request_watcher_refresh();
                                     });
                                 } else {
                                     debug!("Index refresh already scheduled, coalescing event");
@@ -150,5 +154,138 @@ impl FileWatcher {
             _watcher: watcher,
             _task: task,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{CreateKind, DataChange, RemoveKind, RenameMode};
+
+    fn ev(kind: EventKind) -> Event {
+        Event {
+            kind,
+            paths: vec![],
+            attrs: Default::default(),
+        }
+    }
+
+    fn ev_with_paths(kind: EventKind, paths: Vec<PathBuf>) -> Event {
+        Event {
+            kind,
+            paths,
+            attrs: Default::default(),
+        }
+    }
+
+    // --- classify_event --------------------------------------------------
+
+    #[test]
+    fn create_file_schedules_refresh() {
+        assert!(matches!(
+            classify_event(&ev(EventKind::Create(CreateKind::File))),
+            WatchAction::ScheduleIndexRefresh
+        ));
+    }
+
+    #[test]
+    fn create_folder_schedules_refresh() {
+        assert!(matches!(
+            classify_event(&ev(EventKind::Create(CreateKind::Folder))),
+            WatchAction::ScheduleIndexRefresh
+        ));
+    }
+
+    #[test]
+    fn remove_file_schedules_refresh() {
+        assert!(matches!(
+            classify_event(&ev(EventKind::Remove(RemoveKind::File))),
+            WatchAction::ScheduleIndexRefresh
+        ));
+    }
+
+    #[test]
+    fn remove_folder_schedules_refresh() {
+        assert!(matches!(
+            classify_event(&ev(EventKind::Remove(RemoveKind::Folder))),
+            WatchAction::ScheduleIndexRefresh
+        ));
+    }
+
+    #[test]
+    fn rename_modify_schedules_refresh() {
+        let ev = ev(EventKind::Modify(ModifyKind::Name(RenameMode::Both)));
+        assert!(matches!(
+            classify_event(&ev),
+            WatchAction::ScheduleIndexRefresh
+        ));
+    }
+
+    #[test]
+    fn data_modify_invalidates_cache_with_paths() {
+        let path = PathBuf::from("/tmp/foo.rs");
+        let ev = ev_with_paths(
+            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            vec![path.clone()],
+        );
+        match classify_event(&ev) {
+            WatchAction::InvalidateCache(paths) => assert_eq!(paths, vec![path]),
+            _ => panic!("expected InvalidateCache"),
+        }
+    }
+
+    #[test]
+    fn data_modify_any_invalidates_cache() {
+        let ev = ev(EventKind::Modify(ModifyKind::Data(DataChange::Any)));
+        assert!(matches!(
+            classify_event(&ev),
+            WatchAction::InvalidateCache(_)
+        ));
+    }
+
+    #[test]
+    fn access_event_is_ignored() {
+        use notify::event::{AccessKind, AccessMode};
+        let ev = ev(EventKind::Access(AccessKind::Open(AccessMode::Read)));
+        assert!(matches!(classify_event(&ev), WatchAction::Ignore));
+    }
+
+    #[test]
+    fn other_event_is_ignored() {
+        let ev = ev(EventKind::Other);
+        assert!(matches!(classify_event(&ev), WatchAction::Ignore));
+    }
+
+    // --- is_rename_modify_kind -------------------------------------------
+
+    #[test]
+    fn rename_mode_both_is_rename() {
+        assert!(is_rename_modify_kind(&ModifyKind::Name(RenameMode::Both)));
+    }
+
+    #[test]
+    fn rename_mode_from_is_rename() {
+        assert!(is_rename_modify_kind(&ModifyKind::Name(RenameMode::From)));
+    }
+
+    #[test]
+    fn rename_mode_to_is_rename() {
+        assert!(is_rename_modify_kind(&ModifyKind::Name(RenameMode::To)));
+    }
+
+    #[test]
+    fn data_change_is_not_rename() {
+        assert!(!is_rename_modify_kind(&ModifyKind::Data(
+            DataChange::Content
+        )));
+    }
+
+    #[test]
+    fn modify_any_is_not_rename() {
+        assert!(!is_rename_modify_kind(&ModifyKind::Any));
     }
 }

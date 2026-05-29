@@ -382,4 +382,106 @@ mod tests {
         let invalid: Option<NonZeroUsize> = "0".parse::<usize>().ok().and_then(NonZeroUsize::new);
         assert!(invalid.is_none()); // Zero is invalid
     }
+
+    // --- Watcher coordination flag state-machine -------------------------
+    //
+    // The tests below verify the AtomicBool protocol that underpins
+    // `request_watcher_refresh` / `run_watcher_refresh_loop` without
+    // touching the OnceLock singleton.  Each test mirrors an observable
+    // execution path in the coordination logic.
+
+    #[test]
+    fn coordination_first_caller_claims_running() {
+        // When running=false, the first request should succeed its CAS and
+        // set running=true; pending should also be visible.
+        let running = AtomicBool::new(false);
+        let pending = AtomicBool::new(false);
+
+        pending.store(true, Ordering::Release);
+        let claimed = running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+
+        assert!(claimed, "first caller must claim running");
+        assert!(pending.load(Ordering::Acquire), "pending must survive");
+        assert!(running.load(Ordering::Acquire), "running must be set");
+    }
+
+    #[test]
+    fn coordination_second_caller_coalesces_via_pending() {
+        // When running=true (loop active), a concurrent request must NOT
+        // claim running; it must only set pending so the active loop picks
+        // it up.
+        let running = AtomicBool::new(true); // already running
+        let pending = AtomicBool::new(false);
+
+        pending.store(true, Ordering::Release);
+        let claimed = running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+
+        assert!(!claimed, "second caller must not claim already-running");
+        assert!(
+            pending.load(Ordering::Acquire),
+            "pending must be visible to loop"
+        );
+    }
+
+    #[test]
+    fn coordination_loop_drains_pending_and_releases_running() {
+        // Simulate one pass of run_watcher_refresh_loop: swap pending→false,
+        // do work, release running.
+        let running = AtomicBool::new(true);
+        let pending = AtomicBool::new(true);
+
+        let should_refresh = pending.swap(false, Ordering::AcqRel);
+        assert!(should_refresh, "loop must see pending=true on first pass");
+        assert!(
+            !pending.load(Ordering::Acquire),
+            "pending cleared after swap"
+        );
+
+        // Simulate: no new pending → release running
+        running.store(false, Ordering::Release);
+        assert!(
+            !running.load(Ordering::Acquire),
+            "running released after drain"
+        );
+    }
+
+    #[test]
+    fn coordination_close_race_guard_reclaims_running() {
+        // Simulates the close-race scenario: loop releases running, but a
+        // new event has set pending=true before the recheck.  The guard
+        // must reclaim running so the event is not lost.
+        let running = AtomicBool::new(false); // just released by loop
+        let pending = AtomicBool::new(true); // new event arrived simultaneously
+
+        // Mirror the guard in run_watcher_refresh_loop
+        let reclaimed = pending.load(Ordering::Acquire)
+            && running
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+
+        assert!(reclaimed, "close-race guard must reclaim running");
+        assert!(
+            running.load(Ordering::Acquire),
+            "running must be true after reclaim"
+        );
+    }
+
+    #[test]
+    fn coordination_no_reclaim_when_pending_false() {
+        // If pending is false when the guard runs, running stays released.
+        let running = AtomicBool::new(false);
+        let pending = AtomicBool::new(false);
+
+        let reclaimed = pending.load(Ordering::Acquire)
+            && running
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+
+        assert!(!reclaimed, "guard must not reclaim when nothing pending");
+        assert!(!running.load(Ordering::Acquire), "running stays false");
+    }
 }

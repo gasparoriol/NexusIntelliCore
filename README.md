@@ -89,10 +89,11 @@ High-level module responsibilities:
 - `src/transport.rs`: stdio framing/parsing and transport I/O
 - `src/protocol.rs`: JSON-RPC protocol types and response helpers
 - `src/tools.rs`: tool registry and tool dispatch implementation
-- `src/state.rs`: global state, lazy index initialization, analysis cache
+- `src/state.rs`: global state, lazy index initialization, LRU analysis cache, and watcher-driven refresh coordination (coalescing via `AtomicBool` pair)
 - `src/indexer.rs`: file discovery, tree rendering, restriction matching
 - `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, JS, TS, Java, C, C#, CSS, HTML); entry-point detection and use-case inference for `generate_project_docs`
 - `src/relations.rs`: Angular `@Component` decorator parser — resolves `templateUrl` and `styleUrls` to filesystem paths
+- `src/watcher.rs`: file-system watcher (FSEvents/inotify via `notify`); classifies events into cache invalidation or index refresh, with 500 ms debounce for topological changes
 - `src/privacy_gateway.rs`: policy-driven sanitization layer
 - `src/sanitizer.rs`: secret detection/redaction utilities
 
@@ -172,6 +173,7 @@ Helpful probe options:
 
 - The file index is initialized lazily on first index-dependent call.
 - Analysis results are cached by file modification time.
+- The file-system watcher (`notify`) automatically invalidates cache entries on content changes and schedules an index rebuild (debounced 500 ms) on create/remove/rename events; this requires no manual `refresh_index` call during normal operation.
 - Security audit output reports issue type and location, never secret values.
 
 ## Using NexusIntelliCore Effectively
