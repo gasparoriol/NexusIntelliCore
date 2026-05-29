@@ -1,0 +1,98 @@
+/// The MCP tools module.
+///
+/// Each tool handler lives in its own submodule. This file contains only
+/// the public dispatch entry-point and the JSON schema registry.
+use anyhow::Result;
+use serde_json::Value;
+
+use crate::protocol::error_response;
+
+mod angular;
+mod audit;
+mod definitions;
+mod deps_graph;
+mod outline;
+mod patterns;
+mod project;
+mod project_docs;
+mod server;
+mod summary;
+mod symbol;
+
+pub use definitions::tool_definitions;
+
+/// Dispatch a `tools/call` request to the appropriate handler.
+pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
+    match name {
+        "get_project_structure" => project::get_project_structure().await,
+        "get_file_outline" => {
+            let file = require_str(&args, "file_path")?;
+            outline::get_file_outline(file).await
+        }
+        "inspect_symbol" => {
+            let file = require_str(&args, "file_path")?;
+            let symbol = require_str(&args, "symbol_name")?;
+            symbol::inspect_symbol(file, symbol).await
+        }
+        "get_dependencies_graph" => deps_graph::get_dependencies_graph().await,
+        "search_design_patterns" => {
+            let file = args.get("file_path").and_then(|v| v.as_str());
+            patterns::search_design_patterns(file).await
+        }
+        "audit_security_measures" => audit::audit_security_measures().await,
+        "refresh_index" => server::refresh_index().await,
+        "get_server_stats" => server::get_server_stats().await,
+        "analyze_angular_component" => {
+            let path = require_str(&args, "component_path")?;
+            angular::analyze_angular_component(path).await
+        }
+        "get_module_summary" => {
+            let file = require_str(&args, "file_path")?;
+            let public_only = args
+                .get("public_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            summary::get_module_summary(file, public_only).await
+        }
+        "generate_project_docs" => {
+            let sections: Vec<String> = args
+                .get("sections")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    vec![
+                        "overview".into(),
+                        "usage".into(),
+                        "api".into(),
+                        "use_cases".into(),
+                    ]
+                });
+            let public_only = args
+                .get("public_only")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            let max_files = args
+                .get("max_files")
+                .and_then(|v| v.as_u64())
+                .map(|n| (n as usize).min(150))
+                .unwrap_or(50);
+            let language = args
+                .get("language")
+                .and_then(|v| v.as_str())
+                .unwrap_or("en")
+                .to_owned();
+            project_docs::generate_project_docs(sections, public_only, max_files, &language).await
+        }
+        other => Ok(error_response(format!("Unknown tool: {}", other))),
+    }
+}
+
+fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("Missing required argument: {}", key))
+}

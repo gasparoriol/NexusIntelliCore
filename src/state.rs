@@ -195,6 +195,21 @@ impl ServerState {
         Ok((files_found, cleared_count))
     }
 
+    /// Evict a single path from the AST cache.
+    ///
+    /// Called by the file watcher when a file is created, modified, or removed.
+    /// Returns `true` if an entry was present and removed; `false` if not cached.
+    pub fn evict_cache_entry(&self, path: &std::path::Path) -> bool {
+        // Use `try_write` — if the lock is busy we silently skip eviction.
+        // The mtime-check in `get_analysis` will catch the stale entry on the
+        // next request anyway.
+        if let Ok(mut cache) = self.ast_cache.try_write() {
+            cache.pop(path).is_some()
+        } else {
+            false
+        }
+    }
+
     /// Get current cache statistics (debug-only).
     pub async fn get_cache_stats(&self) -> (usize, usize) {
         let cache = self.ast_cache.read().await;

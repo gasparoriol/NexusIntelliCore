@@ -91,15 +91,13 @@ lazy_static! {
 ///
 /// Returns `(sanitized_text, list_of_pattern_labels_that_fired)`.
 ///
-/// **Note on memory security**: For true zeroization of sensitive data (so that
-/// secret values cannot be recovered from RAM), the entire processing pipeline
-/// would need to use `secrecy::SecretString` or `Zeroizing<Vec<u8>>` from the
-/// input stage through output. That refactor is beyond the scope of Phase 4.
-/// This implementation redacts the data in-place but does NOT guarantee that
-/// the original secret values are erased from heap memory after being read.
-/// For production use with highly sensitive secrets (e.g., decryption keys),
-/// consider moving sanitization to a separate process boundary or using a
-/// secrets management system.
+/// **Note on memory security (known limitation)**: This implementation redacts
+/// secrets in the output sent to the LLM client but does NOT guarantee zeroization
+/// of intermediate heap buffers. Copies of strings containing scanned secrets remain
+/// in memory until the system allocator overwrites them. For true zeroization,
+/// wrap intermediate buffers in `zeroize::Zeroizing<Vec<u8>>` (add `zeroize = "1"`
+/// to Cargo.toml) and call `.zeroize()` on drop. For production use with highly
+/// sensitive secrets (HIPAA, PCI-DSS), consider a separate process boundary.
 pub fn sanitize_text(text: &str) -> (String, Vec<String>) {
     let mut result = text.to_owned();
     let mut fired: Vec<String> = Vec::new();
@@ -248,6 +246,30 @@ pub fn strip_function_body(code: &str, language: &str) -> String {
         }
     }
     code.to_owned()
+}
+
+/// Strip a function body using precise byte offsets from the AST rather than
+/// searching for the first `{`.
+///
+/// `source` is the full function text (i.e. `FunctionInfo::body_source`).
+/// `body_range` is `(inner_start, inner_end)` **relative to the start of
+/// `source`**, where:
+/// - `inner_start` is the byte immediately after the opening `{`
+/// - `inner_end` is the byte offset of the closing `}`
+///
+/// Returns `source` unchanged if the offsets are out of bounds.
+pub fn strip_body_by_range(source: &str, body_range: (usize, usize)) -> String {
+    let bytes = source.as_bytes();
+    let (start, end) = body_range;
+    if start > bytes.len() || end > bytes.len() || start > end {
+        return source.to_owned();
+    }
+    let before = std::str::from_utf8(&bytes[..start]).unwrap_or(source);
+    let after = std::str::from_utf8(&bytes[end..]).unwrap_or("");
+    format!(
+        "{}\n    // [implementation restricted by @mcp-strip]\n{}",
+        before, after
+    )
 }
 
 // ---------------------------------------------------------------------------
