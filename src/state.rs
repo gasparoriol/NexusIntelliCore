@@ -273,6 +273,7 @@ mod tests {
             string_literals: vec![],
             css_rules: None,
             html_elements: None,
+            module_doc: None,
         };
 
         let cached = CachedAnalysis {

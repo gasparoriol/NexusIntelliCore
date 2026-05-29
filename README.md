@@ -14,6 +14,7 @@ NexusIntelliCore helps LLM-enabled tooling understand repositories safely and ef
 - Dependency graph extraction
 - Design pattern heuristics
 - Security-oriented static checks
+- Automated project documentation generation (Markdown, multilingual)
 
 All tool outputs pass through a centralized Privacy Gateway.
 
@@ -28,17 +29,34 @@ All tool outputs pass through a centralized Privacy Gateway.
 
 ### Analysis Tools
 
-The server currently exposes nine MCP tools:
+The server exposes eleven MCP tools:
 
-1. `list_directory`
-2. `read_file`
-3. `search_code`
-4. `get_file_outline`
-5. `analyze_code`
-6. `get_server_stats`
-7. `refresh_index`
-8. `get_lru_stats`
-9. `analyze_angular_component`
+1. `get_project_structure` — directory tree with access-control markers
+2. `get_file_outline` — structural map of a file (signatures, types, imports, doc-comments)
+3. `get_module_summary` — module-level doc-comments and public API
+4. `inspect_symbol` — sanitized source of a specific function or method
+5. `get_dependencies_graph` — import graph between modules
+6. `search_design_patterns` — heuristic design-pattern detection
+7. `audit_security_measures` — secret scanning and insecure-code detection
+8. `analyze_angular_component` — full Angular component analysis (TS + HTML + CSS)
+9. `refresh_index` — rebuild the file index and flush the AST cache
+10. `get_server_stats` — operational stats (cache entries, indexed files, uptime)
+11. `generate_project_docs` — auto-generate structured Markdown documentation from AST analysis
+
+### Documentation Generation
+
+`generate_project_docs` produces structured Markdown documentation by statically analysing the project's AST. It accepts four optional parameters:
+
+| Parameter     | Type            | Default                        | Description                                                                   |
+| ------------- | --------------- | ------------------------------ | ----------------------------------------------------------------------------- |
+| `sections`    | `array[string]` | `["overview","tools","usage"]` | Sections to include: `overview`, `tools`, `usage`, `security`, `architecture` |
+| `public_only` | `boolean`       | `true`                         | When `true`, only documents public symbols                                    |
+| `max_files`   | `integer`       | `50`                           | Maximum number of files to analyse                                            |
+| `language`    | `string`        | `"en"`                         | Output language: `"en"`, `"es"`, `"ca"`                                       |
+
+The tool infers project entry-points and use-cases from the AST (via `detect_entrypoints` / `infer_use_cases` in `src/analyzer.rs`) and all output is sanitized through the Privacy Gateway before reaching the client.
+
+---
 
 ### CSS, HTML, and Angular Support
 
@@ -73,7 +91,7 @@ High-level module responsibilities:
 - `src/tools.rs`: tool registry and tool dispatch implementation
 - `src/state.rs`: global state, lazy index initialization, analysis cache
 - `src/indexer.rs`: file discovery, tree rendering, restriction matching
-- `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, JS, TS, Java, C, C#, CSS, HTML)
+- `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, JS, TS, Java, C, C#, CSS, HTML); entry-point detection and use-case inference for `generate_project_docs`
 - `src/relations.rs`: Angular `@Component` decorator parser — resolves `templateUrl` and `styleUrls` to filesystem paths
 - `src/privacy_gateway.rs`: policy-driven sanitization layer
 - `src/sanitizer.rs`: secret detection/redaction utilities
