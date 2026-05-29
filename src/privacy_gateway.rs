@@ -66,6 +66,21 @@ pub fn sanitize_file_outline(outline: &str, policy: &PrivacyPolicy) -> (String, 
     sanitize_output_text(outline, policy)
 }
 
+/// Sanitize a doc comment (/// lines, /** */ blocks, Python docstrings).
+///
+/// Applies only the secret-redaction pass — `strip_sensitive_comments` is
+/// intentionally skipped here because doc comments are, by definition, meant
+/// to be read; stripping them on keyword matches would destroy the output.
+/// Secrets in doc comments (e.g. example tokens) are still redacted.
+pub fn sanitize_doc_comment(comment: &str, policy: &PrivacyPolicy) -> (String, Vec<String>) {
+    if !policy.redact_secrets {
+        return (comment.to_string(), Vec::new());
+    }
+    let (sanitized, redactions) = sanitizer::sanitize_text(comment);
+    let redaction_summary: Vec<String> = redactions.iter().map(|r| r.to_string()).collect();
+    (sanitized, redaction_summary)
+}
+
 /// Sanitize function/method source code.
 /// - Strips body when `@mcp-strip` is present (language-aware)
 /// - Removes sensitive comments

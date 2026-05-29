@@ -5,7 +5,7 @@
 //! we test that the MCP framing layer is correctly implemented via unit tests
 //! in the transport module.
 
-use std::io::{Write, Read};
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 fn read_framed_responses(mut reader: std::process::ChildStdout, count: usize) -> Vec<String> {
@@ -113,8 +113,16 @@ fn mcp_framing_is_correct() {
         r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#,
     );
     // The response should be valid JSON with id 1
-    assert!(response.contains(r#""id":1"#), "Response should have id. Got: {}", response);
-    assert!(response.contains(r#""jsonrpc":"2.0""#), "Response should be JSON-RPC 2.0. Got: {}", response);
+    assert!(
+        response.contains(r#""id":1"#),
+        "Response should have id. Got: {}",
+        response
+    );
+    assert!(
+        response.contains(r#""jsonrpc":"2.0""#),
+        "Response should be JSON-RPC 2.0. Got: {}",
+        response
+    );
 }
 
 #[test]
@@ -125,8 +133,95 @@ fn access_control_blocks_traversal() {
         r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inspect_symbol","arguments":{"file_path":"/etc/passwd","symbol_name":"root"}}}"#,
     );
     assert!(
-        response.contains("Access denied") || response.contains("outside") || response.contains("Internal error"),
+        response.contains("Access denied")
+            || response.contains("outside")
+            || response.contains("Internal error"),
         "Path traversal should be denied. Got: {}",
         response
+    );
+}
+
+/// Helper: extract the text content from a tools/call MCP response.
+fn extract_tool_text(response: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(response).unwrap_or_default();
+    v.pointer("/result/content/0/text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_owned()
+}
+
+fn call_generate_project_docs(root: &str, args: &str) -> String {
+    let request = format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"generate_project_docs","arguments":{}}}}}"#,
+        args
+    );
+    send_single_mcp_request(root, &request)
+}
+
+#[test]
+fn generate_project_docs_returns_project_name_and_overview() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = call_generate_project_docs(root, r#"{"max_files": 5}"#);
+    let text = extract_tool_text(&response);
+
+    assert!(
+        text.contains("NexusIntelliCore"),
+        "Generated docs should contain the project name. Got: {}",
+        &text[..text.len().min(500)]
+    );
+    assert!(
+        text.contains("## Overview") || text.contains("# NexusIntelliCore"),
+        "Generated docs should have an Overview section. Got: {}",
+        &text[..text.len().min(500)]
+    );
+}
+
+#[test]
+fn generate_project_docs_sections_filter_overview_only() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response =
+        call_generate_project_docs(root, r#"{"sections": ["overview"], "max_files": 5}"#);
+    let text = extract_tool_text(&response);
+
+    assert!(
+        text.contains("## Overview"),
+        "Should contain Overview section. Got: {}",
+        &text[..text.len().min(500)]
+    );
+    assert!(
+        !text.contains("## Public API") && !text.contains("## How to use it"),
+        "Should NOT contain API or Usage sections when only 'overview' requested. Got: {}",
+        &text[..text.len().min(500)]
+    );
+}
+
+#[test]
+fn generate_project_docs_max_files_one_does_not_panic() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    // max_files=1 is an edge-case that must not panic or return an error
+    let response = call_generate_project_docs(root, r#"{"max_files": 1}"#);
+    // Must be valid JSON
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response).expect("Response must be valid JSON even for max_files=1");
+    assert!(
+        parsed.pointer("/result/content").is_some() || parsed.pointer("/error").is_some(),
+        "Response must have result.content or error. Got: {}",
+        response
+    );
+}
+
+#[test]
+fn generate_project_docs_spanish_headings() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = call_generate_project_docs(
+        root,
+        r#"{"sections": ["overview", "use_cases"], "language": "es", "max_files": 5}"#,
+    );
+    let text = extract_tool_text(&response);
+
+    assert!(
+        text.contains("Descripción general") || text.contains("Casos de uso"),
+        "Spanish language option should produce Spanish headings. Got: {}",
+        &text[..text.len().min(500)]
     );
 }

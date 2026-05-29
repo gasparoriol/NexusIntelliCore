@@ -78,6 +78,10 @@ pub struct FunctionInfo {
     pub end_line: usize,
     /// `true` when the comment `// @mcp-strip` appears inside this function.
     pub is_strip_marked: bool,
+    /// Doc comment block immediately preceding the function definition.
+    pub doc_comment: Option<String>,
+    /// `true` when the symbol is publicly visible (language-aware heuristic).
+    pub is_public: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +90,10 @@ pub struct ClassInfo {
     pub kind: String, // "class", "struct", "impl", "trait", …
     pub start_line: usize,
     pub end_line: usize,
+    /// Doc comment block immediately preceding the type definition.
+    pub doc_comment: Option<String>,
+    /// `true` when the symbol is publicly visible (language-aware heuristic).
+    pub is_public: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +146,8 @@ pub struct FileAnalysis {
     pub css_rules: Option<Vec<CssRuleInfo>>,
     /// Populated for `.html` / `.htm` files; `None` for all other languages.
     pub html_elements: Option<Vec<HtmlElementInfo>>,
+    /// Module-level / file-level documentation comment (e.g. Rust `//!`, Python module docstring).
+    pub module_doc: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +229,8 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
     let imports = extract_imports(root, &source, &lang, &ts_lang)?;
     let string_literals = extract_strings(root, &source, &lang, &ts_lang)?;
 
+    let module_doc = extract_module_doc(&source, &lang);
+
     Ok(FileAnalysis {
         functions,
         classes,
@@ -227,6 +239,7 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
         language: lang_name.to_owned(),
         css_rules: None,
         html_elements: None,
+        module_doc,
     })
 }
 
@@ -272,6 +285,7 @@ fn extract_functions(
         Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
     };
 
+    let source_lines: Vec<&str> = source.lines().collect();
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
         // caps: list of (capture_name, node, text)
         let fn_node = caps.iter().find(|(name, _, _)| *name == "fn")?;
@@ -294,14 +308,19 @@ fn extract_functions(
             }
         };
         let is_strip = crate::sanitizer::has_mcp_strip(fn_text);
+        let start_line = fn_node_ts.start_position().row + 1;
+        let doc_comment = extract_preceding_comment(&source_lines, start_line);
+        let is_public = is_public_fn(&signature, &name_text, lang);
 
         Some(FunctionInfo {
             name: name_text,
             signature,
             body_source: fn_text.to_owned(),
-            start_line: fn_node_ts.start_position().row + 1,
+            start_line,
             end_line: fn_node_ts.end_position().row + 1,
             is_strip_marked: is_strip,
+            doc_comment,
+            is_public,
         })
     })
 }
@@ -345,6 +364,7 @@ fn extract_classes(
         Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
     };
 
+    let source_lines: Vec<&str> = source.lines().collect();
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
         let cls_node = caps.iter().find(|(n, _, _)| *n == "cls")?;
         let name_cap = caps.iter().find(|(n, _, _)| *n == "name")?;
@@ -370,11 +390,17 @@ fn extract_classes(
             _ => raw_kind,
         };
 
+        let start_line = ts_node.start_position().row + 1;
+        let doc_comment = extract_preceding_comment(&source_lines, start_line);
+        let is_public = is_public_class(&source_lines, start_line, &name_cap.2, lang);
+
         Some(ClassInfo {
             name: name_cap.2.clone(),
             kind: kind.to_owned(),
-            start_line: ts_node.start_position().row + 1,
+            start_line,
             end_line: ts_node.end_position().row + 1,
+            doc_comment,
+            is_public,
         })
     })
 }
@@ -611,6 +637,163 @@ pub fn extract_signature(fn_source: &str) -> String {
             }
         }
         fn_source.trim().to_owned()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Doc comment and visibility helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the doc-comment block immediately preceding the given 1-based line.
+///
+/// Walks backwards from `before_line - 1`, collecting contiguous comment lines.
+/// Stops at the first blank or non-comment line. Returns `None` if nothing found.
+///
+/// Recognised prefixes: `///`, `//!`, `//`, `#` (Python), `/**`, `/*`, ` *`.
+/// This is intentionally line-based rather than AST-based because tree-sitter
+/// does not guarantee adjacency between a `line_comment` node and the
+/// following declaration.
+pub fn extract_preceding_comment(lines: &[&str], before_line: usize) -> Option<String> {
+    if before_line < 2 || before_line > lines.len() {
+        return None;
+    }
+    let mut collected: Vec<&str> = Vec::new();
+    let mut i = before_line - 1; // start one position above (0-based)
+    while i > 0 {
+        i -= 1;
+        let trimmed = lines[i].trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        if trimmed.starts_with("///")
+            || trimmed.starts_with("//!")
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("/**")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+        {
+            collected.push(lines[i]);
+        } else {
+            break;
+        }
+    }
+    if collected.is_empty() {
+        return None;
+    }
+    collected.reverse();
+    Some(collected.join("\n"))
+}
+
+/// Extract the module-level / file-level documentation comment.
+///
+/// - **Rust**: consecutive `//!` lines at the top of the file.
+/// - **Python**: first triple-quoted string (`"""` or `'''`) at the top.
+/// - **Java / TypeScript / JavaScript**: `/** … */` block before the first
+///   non-comment token.
+/// - All other languages: `None`.
+pub fn extract_module_doc(source: &str, lang: &Lang) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    match lang {
+        Lang::Rust => {
+            let doc_lines: Vec<&str> = lines
+                .iter()
+                .take_while(|l| {
+                    let t = l.trim();
+                    t.starts_with("//!") || t.is_empty()
+                })
+                .filter(|l| l.trim().starts_with("//!"))
+                .copied()
+                .collect();
+            if doc_lines.is_empty() {
+                None
+            } else {
+                Some(doc_lines.join("\n"))
+            }
+        }
+        Lang::Python => {
+            let first = lines.iter().position(|l| !l.trim().is_empty())?;
+            let trimmed = lines[first].trim();
+            let quote = if trimmed.starts_with("\"\"\"") {
+                "\"\"\""
+            } else if trimmed.starts_with("'''") {
+                "'''"
+            } else {
+                return None;
+            };
+            let mut doc = vec![lines[first]];
+            // Single-line docstring closes on the same line after the opening
+            let rest_of_first = trimmed.get(3..).unwrap_or("");
+            if rest_of_first.contains(quote) {
+                return Some(doc.join("\n"));
+            }
+            for line in lines.iter().skip(first + 1) {
+                doc.push(line);
+                if line.contains(quote) {
+                    break;
+                }
+            }
+            Some(doc.join("\n"))
+        }
+        Lang::Java | Lang::TypeScript | Lang::Tsx | Lang::JavaScript => {
+            let first = lines.iter().position(|l| !l.trim().is_empty())?;
+            let trimmed = lines[first].trim();
+            if !trimmed.starts_with("/**") && !trimmed.starts_with("/*") {
+                return None;
+            }
+            let mut doc = vec![lines[first]];
+            if !trimmed.contains("*/") {
+                for line in lines.iter().skip(first + 1) {
+                    doc.push(line);
+                    if line.contains("*/") {
+                        break;
+                    }
+                }
+            }
+            Some(doc.join("\n"))
+        }
+        _ => None,
+    }
+}
+
+/// Determine if a function is publicly visible (language-aware heuristic).
+///
+/// For languages with no visibility keyword (C), returns `true` by convention.
+/// TypeScript/JS use `export` presence and absence of `private` keyword.
+fn is_public_fn(signature: &str, name: &str, lang: &Lang) -> bool {
+    match lang {
+        Lang::Rust => signature.starts_with("pub ") || signature.starts_with("pub("),
+        Lang::Java => signature.contains("public "),
+        Lang::Python => !name.starts_with('_'),
+        Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
+            !name.starts_with('_') && !signature.contains("private ") && !signature.contains("#")
+            // JS private fields (#name)
+        }
+        Lang::CSharp => signature.contains("public "),
+        Lang::C => true,
+        _ => true,
+    }
+}
+
+/// Determine if a type definition is publicly visible (language-aware heuristic).
+///
+/// Examines the source line at `start_line` (1-based) for visibility modifiers.
+fn is_public_class(source_lines: &[&str], start_line: usize, name: &str, lang: &Lang) -> bool {
+    let line_text = if start_line > 0 && start_line <= source_lines.len() {
+        source_lines[start_line - 1].trim()
+    } else {
+        ""
+    };
+    match lang {
+        Lang::Rust => line_text.starts_with("pub ") || line_text.starts_with("pub("),
+        Lang::Java => line_text.contains("public "),
+        Lang::Python => !name.starts_with('_'),
+        Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
+            !name.starts_with('_') && !line_text.contains("private ")
+        }
+        Lang::CSharp => line_text.contains("public "),
+        Lang::C => true,
+        _ => true,
     }
 }
 
@@ -996,6 +1179,339 @@ fn is_angular_component(tag: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Doc-generation helpers: entrypoint detection & use-case inference
+// ---------------------------------------------------------------------------
+
+/// How an application entrypoint was identified.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EntrypointKind {
+    /// A `main` function (or `__main__` sentinel for Python).
+    MainFunction,
+    /// A CLI framework was detected via imports.
+    CliFramework(String),
+    /// An HTTP framework was detected via imports.
+    HttpFramework(String),
+    /// No `main` found but public symbols exist — likely a library crate/module.
+    LibraryCrate,
+}
+
+/// A detected application entrypoint.
+#[derive(Debug, Clone)]
+pub struct Entrypoint {
+    pub kind: EntrypointKind,
+    pub file: std::path::PathBuf,
+    /// Name of the entry symbol when applicable (e.g. `"main"`, `"__main__"`).
+    pub symbol: Option<String>,
+    /// Signature string when available.
+    pub signature: Option<String>,
+}
+
+/// Scan `analyses` and return detected entrypoints.
+///
+/// Operates entirely on data already in memory — no new I/O or parsing.
+pub fn detect_entrypoints(analyses: &[(std::path::PathBuf, FileAnalysis)]) -> Vec<Entrypoint> {
+    const CLI_MARKERS: &[(&str, &str)] = &[
+        ("clap", "clap"),
+        ("structopt", "structopt"),
+        ("argparse", "argparse"),
+        ("click", "click"),
+        ("typer", "typer"),
+        ("commander", "commander"),
+        ("yargs", "yargs"),
+        ("picocli", "picocli"),
+        ("commons-cli", "commons-cli"),
+    ];
+
+    const HTTP_MARKERS: &[(&str, &str)] = &[
+        ("actix_web", "actix-web"),
+        ("actix-web", "actix-web"),
+        ("axum", "axum"),
+        ("warp", "warp"),
+        ("rocket", "rocket"),
+        ("fastapi", "fastapi"),
+        ("flask", "flask"),
+        ("django", "django"),
+        ("express", "express"),
+        ("fastify", "fastify"),
+        ("springframework", "spring-boot"),
+        ("spring-boot", "spring-boot"),
+        ("quarkus", "quarkus"),
+        ("hyper", "hyper"),
+    ];
+
+    let mut result: Vec<Entrypoint> = Vec::new();
+    let mut found_main = false;
+    let mut has_public_api = false;
+    let mut cli_found = false;
+    let mut http_found = false;
+
+    for (path, analysis) in analyses {
+        // Main function
+        for func in &analysis.functions {
+            if func.name == "main" {
+                found_main = true;
+                result.push(Entrypoint {
+                    kind: EntrypointKind::MainFunction,
+                    file: path.clone(),
+                    symbol: Some("main".to_owned()),
+                    signature: Some(func.signature.clone()),
+                });
+                break;
+            }
+        }
+
+        // Python __main__ sentinel (appears as a string literal `"__main__"`)
+        if analysis.language == "python" {
+            for lit in &analysis.string_literals {
+                if lit.value == "__main__" {
+                    found_main = true;
+                    result.push(Entrypoint {
+                        kind: EntrypointKind::MainFunction,
+                        file: path.clone(),
+                        symbol: Some("__main__".to_owned()),
+                        signature: None,
+                    });
+                    break;
+                }
+            }
+        }
+
+        // Framework detection via imports
+        for imp in &analysis.imports {
+            let imp_lower = imp.path.to_lowercase();
+            if !cli_found {
+                for (marker, name) in CLI_MARKERS {
+                    if imp_lower.contains(marker) {
+                        cli_found = true;
+                        result.push(Entrypoint {
+                            kind: EntrypointKind::CliFramework((*name).to_owned()),
+                            file: path.clone(),
+                            symbol: None,
+                            signature: None,
+                        });
+                        break;
+                    }
+                }
+            }
+            if !http_found {
+                for (marker, name) in HTTP_MARKERS {
+                    if imp_lower.contains(marker) {
+                        http_found = true;
+                        result.push(Entrypoint {
+                            kind: EntrypointKind::HttpFramework((*name).to_owned()),
+                            file: path.clone(),
+                            symbol: None,
+                            signature: None,
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
+        if analysis.functions.iter().any(|f| f.is_public)
+            || analysis.classes.iter().any(|c| c.is_public)
+        {
+            has_public_api = true;
+        }
+    }
+
+    // No main found but public API exists → library
+    if !found_main && has_public_api && result.is_empty() {
+        result.push(Entrypoint {
+            kind: EntrypointKind::LibraryCrate,
+            file: std::path::PathBuf::new(),
+            symbol: None,
+            signature: None,
+        });
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+
+/// Confidence level for an inferred use case.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UseCaseConfidence {
+    Low,
+    Medium,
+    High,
+}
+
+/// A use case inferred from public symbols and their doc-comments.
+#[derive(Debug, Clone)]
+pub struct InferredUseCase {
+    pub title: String,
+    pub description: String,
+    /// Function names that contributed to this inference.
+    pub functions: Vec<String>,
+    pub confidence: UseCaseConfidence,
+}
+
+/// Infer practical use cases from public API names and doc-comments.
+///
+/// Strategy:
+/// 1. **High** — doc-comment lines containing action verbs (`allows`, `enables`, …).
+/// 2. **Medium** — public functions grouped by semantic name prefix (`create_*`, …),
+///    groups of ≥ 2 functions.
+/// Low-confidence items are kept only when nothing better was found.
+pub fn infer_use_cases(analyses: &[(std::path::PathBuf, FileAnalysis)]) -> Vec<InferredUseCase> {
+    const VERB_PREFIXES: &[(&str, &str)] = &[
+        ("create_", "Creating"),
+        ("new_", "Creating"),
+        ("build_", "Building"),
+        ("generate_", "Generating"),
+        ("parse_", "Parsing"),
+        ("read_", "Reading"),
+        ("load_", "Loading"),
+        ("write_", "Writing"),
+        ("save_", "Saving"),
+        ("export_", "Exporting"),
+        ("import_", "Importing"),
+        ("validate_", "Validating"),
+        ("check_", "Checking"),
+        ("verify_", "Verifying"),
+        ("search_", "Searching"),
+        ("find_", "Finding"),
+        ("query_", "Querying"),
+        ("get_", "Retrieving"),
+        ("fetch_", "Fetching"),
+        ("send_", "Sending"),
+        ("process_", "Processing"),
+        ("handle_", "Handling"),
+        ("convert_", "Converting"),
+        ("transform_", "Transforming"),
+        ("analyze_", "Analyzing"),
+        ("audit_", "Auditing"),
+        ("inspect_", "Inspecting"),
+        ("refresh_", "Refreshing"),
+        ("update_", "Updating"),
+        ("delete_", "Deleting"),
+        ("remove_", "Removing"),
+    ];
+
+    const DOC_VERBS: &[&str] = &[
+        "use this",
+        "useful for",
+        "allows",
+        "enables",
+        "use when",
+        "use it to",
+        "can be used",
+        "is used to",
+        "provides",
+        "supports",
+    ];
+
+    let mut use_cases: Vec<InferredUseCase> = Vec::new();
+
+    // --- Pass 1: High confidence — explicit doc-comment phrases ---
+    for (_, analysis) in analyses {
+        for func in &analysis.functions {
+            if !func.is_public {
+                continue;
+            }
+            if let Some(ref doc) = func.doc_comment {
+                let doc_lower = doc.to_lowercase();
+                for verb in DOC_VERBS {
+                    if doc_lower.contains(verb) {
+                        let sentence = doc
+                            .lines()
+                            .find(|l| l.to_lowercase().contains(verb))
+                            .map(|l| {
+                                l.trim()
+                                    .trim_start_matches("///")
+                                    .trim_start_matches("//")
+                                    .trim_start_matches('#')
+                                    .trim()
+                                    .to_owned()
+                            })
+                            .unwrap_or_default();
+
+                        if sentence.len() > 10 {
+                            let already = use_cases.iter().any(|uc| {
+                                uc.confidence == UseCaseConfidence::High
+                                    && uc.functions.contains(&func.name)
+                            });
+                            if !already {
+                                use_cases.push(InferredUseCase {
+                                    title: format!("Using `{}`", func.name),
+                                    description: sentence,
+                                    functions: vec![func.name.clone()],
+                                    confidence: UseCaseConfidence::High,
+                                });
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Pass 2: Medium confidence — function name prefix grouping ---
+    {
+        use std::collections::HashMap;
+        let mut prefix_groups: HashMap<&str, Vec<String>> = HashMap::new();
+
+        for (_, analysis) in analyses {
+            for func in &analysis.functions {
+                if !func.is_public {
+                    continue;
+                }
+                for (prefix, _) in VERB_PREFIXES {
+                    if func.name.starts_with(prefix) {
+                        prefix_groups
+                            .entry(prefix)
+                            .or_default()
+                            .push(func.name.clone());
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (prefix, fns) in &prefix_groups {
+            if fns.len() < 2 {
+                continue;
+            }
+            let label = VERB_PREFIXES
+                .iter()
+                .find(|(p, _)| p == prefix)
+                .map(|(_, l)| *l)
+                .unwrap_or("Working with");
+
+            let already_covered = use_cases.iter().any(|uc| {
+                uc.confidence == UseCaseConfidence::High
+                    && uc.functions.iter().any(|f| fns.contains(f))
+            });
+            if already_covered {
+                continue;
+            }
+
+            let sample: Vec<&str> = fns.iter().take(3).map(String::as_str).collect();
+            use_cases.push(InferredUseCase {
+                title: format!("{} data", label),
+                description: format!(
+                    "Functions such as `{}` provide {} capabilities.",
+                    sample.join("`, `"),
+                    label.to_lowercase()
+                ),
+                functions: fns.clone(),
+                confidence: UseCaseConfidence::Medium,
+            });
+        }
+    }
+
+    // Sort High → Medium → Low; truncate to 8
+    use_cases.sort_by(|a, b| b.confidence.cmp(&a.confidence));
+    use_cases.truncate(8);
+
+    use_cases
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1093,5 +1609,320 @@ mod tests {
             detect_language(&PathBuf::from("app.scss")),
             Lang::Scss
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for get_module_summary helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_preceding_comment_rust_triple_slash() {
+        let src = "/// Initialises the server.\n/// Returns an error if root is invalid.\npub fn init() {}";
+        let lines: Vec<&str> = src.lines().collect();
+        // fn is on line 3 (1-based)
+        let doc = extract_preceding_comment(&lines, 3);
+        assert!(doc.is_some());
+        let doc = doc.unwrap();
+        assert!(doc.contains("Initialises the server."));
+        assert!(doc.contains("Returns an error"));
+    }
+
+    #[test]
+    fn test_extract_preceding_comment_none_when_no_comment() {
+        let src = "\npub fn foo() {}";
+        let lines: Vec<&str> = src.lines().collect();
+        // fn is on line 2, but line 1 is blank → no comment
+        let doc = extract_preceding_comment(&lines, 2);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn test_extract_preceding_comment_on_first_line() {
+        let src = "pub fn foo() {}";
+        let lines: Vec<&str> = src.lines().collect();
+        // before_line = 1 → nothing above it
+        let doc = extract_preceding_comment(&lines, 1);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn test_extract_preceding_comment_python_hash() {
+        let src = "# Compute the checksum.\ndef checksum(data):\n    pass";
+        let lines: Vec<&str> = src.lines().collect();
+        let doc = extract_preceding_comment(&lines, 2);
+        assert!(doc.is_some());
+        assert!(doc.unwrap().contains("Compute the checksum"));
+    }
+
+    #[test]
+    fn test_extract_preceding_comment_java_block() {
+        let src = "/**\n * Parses the request body.\n */\npublic void parse() {}";
+        let lines: Vec<&str> = src.lines().collect();
+        let doc = extract_preceding_comment(&lines, 4);
+        assert!(doc.is_some());
+        let doc = doc.unwrap();
+        assert!(doc.contains("/**"));
+        assert!(doc.contains("Parses the request body."));
+    }
+
+    #[test]
+    fn test_extract_module_doc_rust() {
+        let src = "//! Top-level module doc.\n//! More info.\n\nuse std::io;";
+        let doc = extract_module_doc(src, &Lang::Rust);
+        assert!(doc.is_some());
+        let doc = doc.unwrap();
+        assert!(doc.contains("Top-level module doc."));
+        assert!(doc.contains("More info."));
+    }
+
+    #[test]
+    fn test_extract_module_doc_rust_no_inner_doc() {
+        let src = "// Regular comment\npub fn foo() {}";
+        let doc = extract_module_doc(src, &Lang::Rust);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn test_extract_module_doc_python_triple_quote() {
+        let src = "\"\"\"\nThis module handles authentication.\n\"\"\"\n\ndef login(): pass";
+        let doc = extract_module_doc(src, &Lang::Python);
+        assert!(doc.is_some());
+        assert!(doc.unwrap().contains("authentication"));
+    }
+
+    #[test]
+    fn test_extract_module_doc_python_single_line() {
+        let src = "\"\"\"Short module doc.\"\"\"\ndef foo(): pass";
+        let doc = extract_module_doc(src, &Lang::Python);
+        assert!(doc.is_some());
+        assert!(doc.unwrap().contains("Short module doc."));
+    }
+
+    #[test]
+    fn test_is_public_fn_rust() {
+        assert!(is_public_fn("pub fn dispatch()", "dispatch", &Lang::Rust));
+        assert!(!is_public_fn("fn internal()", "internal", &Lang::Rust));
+        assert!(is_public_fn("pub(crate) fn semi()", "semi", &Lang::Rust));
+    }
+
+    #[test]
+    fn test_is_public_fn_python_underscore() {
+        assert!(is_public_fn("def process(data):", "process", &Lang::Python));
+        assert!(!is_public_fn("def _helper():", "_helper", &Lang::Python));
+        assert!(!is_public_fn(
+            "def __init__(self):",
+            "__init__",
+            &Lang::Python
+        ));
+    }
+
+    #[test]
+    fn test_is_public_fn_java() {
+        assert!(is_public_fn("public void serve()", "serve", &Lang::Java));
+        assert!(!is_public_fn("private void serve()", "serve", &Lang::Java));
+        assert!(!is_public_fn(
+            "protected void serve()",
+            "serve",
+            &Lang::Java
+        ));
+    }
+
+    #[test]
+    fn test_is_public_class_rust() {
+        let lines = vec!["pub struct Config {", "    field: u32,", "}"];
+        assert!(is_public_class(&lines, 1, "Config", &Lang::Rust));
+
+        let lines2 = vec!["struct Internal {", "}"];
+        assert!(!is_public_class(&lines2, 1, "Internal", &Lang::Rust));
+    }
+
+    #[test]
+    fn test_extract_preceding_comment_stops_at_blank_line() {
+        // Only the last comment block (no blank between it and the fn) should be captured
+        let src = "/// Old comment\n\n/// Real doc.\nfn foo() {}";
+        let lines: Vec<&str> = src.lines().collect();
+        // fn is on line 4
+        let doc = extract_preceding_comment(&lines, 4);
+        assert!(doc.is_some());
+        let doc = doc.unwrap();
+        // Must NOT include "Old comment" (it's separated by a blank line)
+        assert!(!doc.contains("Old comment"));
+        assert!(doc.contains("Real doc."));
+    }
+
+    // --- detect_entrypoints tests ---
+
+    fn make_analysis(
+        language: &str,
+        functions: Vec<FunctionInfo>,
+        imports: Vec<ImportInfo>,
+    ) -> FileAnalysis {
+        FileAnalysis {
+            language: language.to_owned(),
+            functions,
+            imports,
+            ..Default::default()
+        }
+    }
+
+    fn make_fn(name: &str, is_public: bool) -> FunctionInfo {
+        FunctionInfo {
+            name: name.to_owned(),
+            signature: format!("pub fn {}()", name),
+            body_source: String::new(),
+            start_line: 1,
+            end_line: 3,
+            is_strip_marked: false,
+            doc_comment: None,
+            is_public,
+        }
+    }
+
+    fn make_import(path: &str) -> ImportInfo {
+        ImportInfo {
+            raw: path.to_owned(),
+            path: path.to_owned(),
+        }
+    }
+
+    #[test]
+    fn test_detect_main_function_rust() {
+        use std::path::PathBuf;
+        let analysis = make_analysis("rust", vec![make_fn("main", false)], vec![]);
+        let analyses = vec![(PathBuf::from("src/main.rs"), analysis)];
+        let entrypoints = detect_entrypoints(&analyses);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].kind, EntrypointKind::MainFunction);
+        assert_eq!(entrypoints[0].symbol, Some("main".to_owned()));
+    }
+
+    #[test]
+    fn test_detect_clap_from_imports() {
+        use std::path::PathBuf;
+        let analysis = make_analysis(
+            "rust",
+            vec![make_fn("run", true)],
+            vec![make_import("clap::Parser")],
+        );
+        let analyses = vec![(PathBuf::from("src/cli.rs"), analysis)];
+        let entrypoints = detect_entrypoints(&analyses);
+        assert!(entrypoints
+            .iter()
+            .any(|e| matches!(&e.kind, EntrypointKind::CliFramework(n) if n == "clap")));
+    }
+
+    #[test]
+    fn test_detect_http_framework_from_imports() {
+        use std::path::PathBuf;
+        let analysis = make_analysis(
+            "rust",
+            vec![make_fn("serve", true)],
+            vec![make_import("axum::Router")],
+        );
+        let analyses = vec![(PathBuf::from("src/server.rs"), analysis)];
+        let entrypoints = detect_entrypoints(&analyses);
+        assert!(entrypoints
+            .iter()
+            .any(|e| matches!(&e.kind, EntrypointKind::HttpFramework(n) if n == "axum")));
+    }
+
+    #[test]
+    fn test_detect_library_crate_no_main() {
+        use std::path::PathBuf;
+        let analysis = make_analysis("rust", vec![make_fn("parse_config", true)], vec![]);
+        let analyses = vec![(PathBuf::from("src/lib.rs"), analysis)];
+        let entrypoints = detect_entrypoints(&analyses);
+        assert_eq!(entrypoints.len(), 1);
+        assert_eq!(entrypoints[0].kind, EntrypointKind::LibraryCrate);
+    }
+
+    #[test]
+    fn test_detect_nothing_when_no_signals() {
+        use std::path::PathBuf;
+        // Only private functions, no imports, no main
+        let analysis = make_analysis("rust", vec![make_fn("internal_helper", false)], vec![]);
+        let analyses = vec![(PathBuf::from("src/lib.rs"), analysis)];
+        let entrypoints = detect_entrypoints(&analyses);
+        assert!(entrypoints.is_empty());
+    }
+
+    // --- infer_use_cases tests ---
+
+    fn make_fn_with_doc(name: &str, doc: &str) -> FunctionInfo {
+        let mut f = make_fn(name, true);
+        f.doc_comment = Some(doc.to_owned());
+        f
+    }
+
+    #[test]
+    fn test_infer_use_case_from_doc_comment_verb() {
+        use std::path::PathBuf;
+        let analysis = make_analysis(
+            "rust",
+            vec![make_fn_with_doc(
+                "send_notification",
+                "/// allows sending push notifications to registered users",
+            )],
+            vec![],
+        );
+        let analyses = vec![(PathBuf::from("src/notif.rs"), analysis)];
+        let cases = infer_use_cases(&analyses);
+        assert!(!cases.is_empty());
+        assert_eq!(cases[0].confidence, UseCaseConfidence::High);
+        assert!(cases[0].description.contains("allows"));
+    }
+
+    #[test]
+    fn test_group_by_function_name_prefix() {
+        use std::path::PathBuf;
+        let analysis = make_analysis(
+            "rust",
+            vec![
+                make_fn("parse_json", true),
+                make_fn("parse_yaml", true),
+                make_fn("parse_toml", true),
+            ],
+            vec![],
+        );
+        let analyses = vec![(PathBuf::from("src/parser.rs"), analysis)];
+        let cases = infer_use_cases(&analyses);
+        assert!(!cases.is_empty());
+        let parsing_case = cases
+            .iter()
+            .find(|c| c.title.contains("Parsing") || c.description.contains("parsing"));
+        assert!(parsing_case.is_some());
+        assert_eq!(parsing_case.unwrap().confidence, UseCaseConfidence::Medium);
+    }
+
+    #[test]
+    fn test_no_use_cases_when_data_insufficient() {
+        use std::path::PathBuf;
+        // Single function with no doc-comment and no group partner
+        let analysis = make_analysis("rust", vec![make_fn("do_something", true)], vec![]);
+        let analyses = vec![(PathBuf::from("src/lib.rs"), analysis)];
+        let cases = infer_use_cases(&analyses);
+        // "do_something" doesn't match any prefix and has no doc-comment → no cases
+        assert!(cases.is_empty());
+    }
+
+    #[test]
+    fn test_high_confidence_beats_medium_for_same_function() {
+        use std::path::PathBuf;
+        // A function that both has a doc-comment verb AND falls in a prefix group
+        let analysis = make_analysis(
+            "rust",
+            vec![
+                make_fn_with_doc(
+                    "parse_config",
+                    "/// allows parsing TOML configuration files",
+                ),
+                make_fn("parse_yaml", true),
+            ],
+            vec![],
+        );
+        let analyses = vec![(PathBuf::from("src/config.rs"), analysis)];
+        let cases = infer_use_cases(&analyses);
+        // High confidence case must appear first
+        assert_eq!(cases[0].confidence, UseCaseConfidence::High);
     }
 }
