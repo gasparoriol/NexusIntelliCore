@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use lru::LruCache;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::analyzer;
 use crate::indexer::FileIndex;
@@ -35,6 +35,10 @@ pub struct ServerState {
     index_ready: AtomicBool,
     /// AST cache with LRU eviction, indexed by absolute path.
     ast_cache: RwLock<LruCache<PathBuf, CachedAnalysis>>,
+    /// True while a watcher-triggered index refresh loop is running.
+    watch_refresh_running: AtomicBool,
+    /// Set when watcher events require at least one refresh pass.
+    watch_refresh_pending: AtomicBool,
 }
 
 impl ServerState {
@@ -64,6 +68,8 @@ impl ServerState {
             root,
             index_ready: AtomicBool::new(false),
             ast_cache: RwLock::new(LruCache::new(cache_limit)),
+            watch_refresh_running: AtomicBool::new(false),
+            watch_refresh_pending: AtomicBool::new(false),
         };
 
         STATE
@@ -195,9 +201,69 @@ impl ServerState {
         Ok((files_found, cleared_count))
     }
 
+    /// Rebuild index when requested by the file-system watcher.
+    ///
+    /// This is the single explicit entry point from watcher-driven events.
+    pub async fn refresh_index_from_watcher(&self) -> Result<()> {
+        let (files_found, cache_cleared) = self.refresh_index().await?;
+        debug!(
+            files_found,
+            cache_cleared, "Watcher-triggered index refresh completed"
+        );
+        Ok(())
+    }
+
+    /// Request a watcher-driven refresh pass.
+    ///
+    /// Requests are coalesced while a refresh loop is active.
+    pub fn request_watcher_refresh(&'static self) {
+        self.watch_refresh_pending.store(true, Ordering::Release);
+
+        if self
+            .watch_refresh_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            debug!("Watcher refresh already running; coalescing pending work");
+            return;
+        }
+
+        tokio::spawn(async move {
+            self.run_watcher_refresh_loop().await;
+        });
+    }
+
+    async fn run_watcher_refresh_loop(&self) {
+        loop {
+            let should_refresh = self.watch_refresh_pending.swap(false, Ordering::AcqRel);
+
+            if should_refresh {
+                if let Err(e) = self.refresh_index_from_watcher().await {
+                    warn!("Watcher-triggered index refresh failed: {}", e);
+                }
+                continue;
+            }
+
+            self.watch_refresh_running.store(false, Ordering::Release);
+
+            // Close race: if a new pending request arrives between swap(false)
+            // and releasing `watch_refresh_running`, reclaim ownership and run again.
+            if self.watch_refresh_pending.load(Ordering::Acquire)
+                && self
+                    .watch_refresh_running
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            {
+                continue;
+            }
+
+            break;
+        }
+    }
+
     /// Evict a single path from the AST cache.
     ///
-    /// Called by the file watcher when a file is created, modified, or removed.
+    /// Called by the file watcher on content changes (e.g. modify).
     /// Returns `true` if an entry was present and removed; `false` if not cached.
     pub fn evict_cache_entry(&self, path: &std::path::Path) -> bool {
         // Use `try_write` — if the lock is busy we silently skip eviction.
