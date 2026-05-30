@@ -76,7 +76,7 @@ fn read_framed_responses(mut reader: std::process::ChildStdout, count: usize) ->
 }
 
 fn send_single_mcp_request(root: &str, request: &str) -> String {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_nexusintellicore-mcp"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_nexusintellicore"))
         .arg(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -222,6 +222,22 @@ fn generate_project_docs_spanish_headings() {
     assert!(
         text.contains("Descripción general") || text.contains("Casos de uso"),
         "Spanish language option should produce Spanish headings. Got: {}",
+        &text[..text.len().min(500)]
+    );
+}
+
+#[test]
+fn generate_project_docs_catalan_headings() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = call_generate_project_docs(
+        root,
+        r#"{"sections": ["overview", "use_cases"], "language": "ca", "max_files": 5}"#,
+    );
+    let text = extract_tool_text(&response);
+
+    assert!(
+        text.contains("Descripció general") || text.contains("Casos d'ús"),
+        "Catalan language option should produce Catalan headings. Got: {}",
         &text[..text.len().min(500)]
     );
 }

@@ -60,30 +60,111 @@ pub(super) async fn generate_project_docs(
     // --- Phase 3: detect entrypoints and infer use cases (on in-memory data) ---
     let entrypoints = analyzer::detect_entrypoints(&analyses);
     let inferred_cases = analyzer::infer_use_cases(&analyses);
+    let is_es = language == "es";
+    let is_ca = language == "ca";
 
     // --- Phase 4: build output ---
-    let (h1, h2, h3, lbl_overview, lbl_usage, lbl_api, lbl_use_cases, lbl_no_doc, lbl_truncated) =
-        if language == "es" {
-            (
+    let (
+        h1,
+        h2,
+        h3,
+        lbl_overview,
+        lbl_usage,
+        lbl_api,
+        lbl_use_cases,
+        lbl_languages,
+        lbl_public_symbols,
+        lbl_functions,
+        lbl_types,
+        lbl_documented,
+        lbl_no_doc,
+        lbl_binary_executable,
+        lbl_entry_point,
+        lbl_executable_entry_point,
+        lbl_type_header,
+        lbl_function_header,
+        lbl_description_header,
+        lbl_api_truncated,
+        lbl_restricted,
+        lbl_inferred,
+        lbl_low_confidence,
+        lbl_truncated,
+    ) = if is_es {
+        (
                 "#", "##", "###",
                 "Descripción general",
                 "Cómo usar la aplicación",
                 "API pública",
                 "Casos de uso",
+            "Idiomas",
+                "Símbolos públicos",
+            "funciones",
+            "tipos",
+            "documentados",
                 "(sin documentación)",
+            "Ejecutable binario",
+            "Punto de entrada",
+            "Punto de entrada ejecutable",
+            "Tipo",
+            "Clase",
+            "Descripción",
+            "> ⚠ Sección de API truncada en {} entradas. Usa `get_module_summary` para la lista completa.",
+            " `[restringido]`",
+            " *(inferido)*",
+            " *(baja confianza)*",
                 "> ⚠ Salida truncada: se alcanzó el límite de 2 MB. Usa `get_module_summary` en ficheros individuales para la referencia completa de la API.",
             )
-        } else {
-            (
+    } else if is_ca {
+        (
+                "#", "##", "###",
+                "Descripció general",
+                "Com utilitzar l'aplicació",
+                "API pública",
+                "Casos d'ús",
+                "Llenguatges",
+                "Símbols públics",
+                "funcions",
+                "tipus",
+                "documentades",
+                "(sense documentació)",
+                "Executable binari",
+                "Punt d'entrada",
+                "Punt d'entrada executable",
+                "Tipus",
+                "Classe",
+                "Descripció",
+                "> ⚠ Secció d'API truncada a {} entrades. Usa `get_module_summary` per a la llista completa.",
+                " `[restringit]`",
+                " *(inferit)*",
+                " *(confiança baixa)*",
+                "> ⚠ Sortida truncada: s'ha assolit el límit de 2 MB. Usa `get_module_summary` en fitxers individuals per a la referència completa de l'API.",
+            )
+    } else {
+        (
                 "#", "##", "###",
                 "Overview",
                 "How to use it",
                 "Public API",
                 "Use cases",
+                "Languages",
+                "Public symbols",
+                "functions",
+                "types",
+                "documented",
                 "(undocumented)",
+                "Binary executable",
+                "Entry point",
+                "Executable entry point",
+                "Type",
+                "Function",
+                "Description",
+                "> ⚠ API section truncated at {} entries. Use `get_module_summary` for the full list.",
+                " `[restricted]`",
+                " *(inferred)*",
+                " *(low confidence)*",
                 "> ⚠ Output truncated: 2 MB limit reached. Use `get_module_summary` on individual files for the full API reference.",
             )
-        };
+    };
 
     const OUTPUT_LIMIT: usize = 2 * 1024 * 1024; // 2 MB
 
@@ -106,7 +187,11 @@ pub(super) async fn generate_project_docs(
             .iter()
             .map(|(l, n)| format!("{} ({})", l, n))
             .collect();
-        out.push_str(&format!("**Languages:** {}\n\n", lang_list.join(", ")));
+        out.push_str(&format!(
+            "**{}:** {}\n\n",
+            lbl_languages,
+            lang_list.join(", ")
+        ));
 
         // Total public symbols
         let total_pub_fns: usize = analyses
@@ -127,8 +212,14 @@ pub(super) async fn generate_project_docs(
             })
             .sum();
         out.push_str(&format!(
-            "**Public symbols:** {} functions, {} types ({} documented)\n\n",
-            total_pub_fns, total_pub_types, documented_fns
+            "**{}:** {} {}, {} {} ({} {})\n\n",
+            lbl_public_symbols,
+            total_pub_fns,
+            lbl_functions,
+            total_pub_types,
+            lbl_types,
+            documented_fns,
+            lbl_documented
         ));
 
         // Best module-level doc found
@@ -141,10 +232,15 @@ pub(super) async fn generate_project_docs(
             let (clean, _) = privacy_gateway::sanitize_doc_comment(doc, &policy);
             out.push_str(&clean);
             out.push_str("\n\n");
-        } else if language == "es" {
+        } else if is_es {
             out.push_str(
                 "> No se encontró documentación a nivel de módulo. La siguiente descripción se \
                  infiere de la estructura del proyecto y los nombres de los símbolos.\n\n",
+            );
+        } else if is_ca {
+            out.push_str(
+                "> No s'ha trobat documentació a nivell de mòdul. La descripció següent \
+                 s'infereix de l'estructura del projecte i dels noms dels símbols.\n\n",
             );
         } else {
             out.push_str(
@@ -155,9 +251,15 @@ pub(super) async fn generate_project_docs(
 
         // Files analysed note
         if sorted_files.len() < all_files.len() {
-            let note = if language == "es" {
+            let note = if is_es {
                 format!(
                     "> Nota: se analizaron {} de {} ficheros accesibles (límite `max_files`).\n\n",
+                    sorted_files.len(),
+                    all_files.len()
+                )
+            } else if is_ca {
+                format!(
+                    "> Nota: s'han analitzat {} de {} fitxers accessibles (límit `max_files`).\n\n",
                     sorted_files.len(),
                     all_files.len()
                 )
@@ -177,9 +279,13 @@ pub(super) async fn generate_project_docs(
         out.push_str(&format!("{h2} {lbl_usage}\n\n"));
 
         if entrypoints.is_empty() {
-            if language == "es" {
+            if is_es {
                 out.push_str(
                     "No se pudieron determinar los puntos de entrada mediante análisis estático.\n\n",
+                );
+            } else if is_ca {
+                out.push_str(
+                    "No s'han pogut determinar els punts d'entrada mitjançant anàlisi estàtica.\n\n",
                 );
             } else {
                 out.push_str("Entry points could not be determined from static analysis.\n\n");
@@ -198,17 +304,20 @@ pub(super) async fn generate_project_docs(
                     if let Some(ref sig) = ep.signature {
                         let (clean_sig, _) = privacy_gateway::sanitize_output_text(sig, &policy);
                         out.push_str(&format!(
-                            "{h3} Binary executable\n\n\
-                             Entry point: `{}` in `{}`\n\n\
+                            "{h3} {}\n\n\
+                             {}: `{}` a `{}`\n\n\
                              ```\n{}\n```\n\n",
+                            lbl_binary_executable,
+                            lbl_entry_point,
                             ep.symbol.as_deref().unwrap_or("main"),
                             file_name,
                             clean_sig
                         ));
                     } else {
                         out.push_str(&format!(
-                            "{h3} Executable entry point\n\n\
+                            "{h3} {}\n\n\
                              `{}` in `{}`\n\n",
+                            lbl_executable_entry_point,
                             ep.symbol.as_deref().unwrap_or("main"),
                             file_name
                         ));
@@ -221,10 +330,16 @@ pub(super) async fn generate_project_docs(
                         .unwrap_or(&ep.file)
                         .display()
                         .to_string();
-                    if language == "es" {
+                    if is_es {
                         out.push_str(&format!(
                             "{h3} Interfaz de línea de comandos ({})\n\n\
                              Se detectó el framework CLI **{}** en `{}`.\n\n",
+                            name, name, file_name
+                        ));
+                    } else if is_ca {
+                        out.push_str(&format!(
+                            "{h3} Interfície de línia d'ordres ({})\n\n\
+                             S'ha detectat el framework CLI **{}** a `{}`.\n\n",
                             name, name, file_name
                         ));
                     } else {
@@ -242,10 +357,16 @@ pub(super) async fn generate_project_docs(
                         .unwrap_or(&ep.file)
                         .display()
                         .to_string();
-                    if language == "es" {
+                    if is_es {
                         out.push_str(&format!(
                             "{h3} Servidor HTTP ({})\n\n\
                              Se detectó el framework HTTP **{}** en `{}`.\n\n",
+                            name, name, file_name
+                        ));
+                    } else if is_ca {
+                        out.push_str(&format!(
+                            "{h3} Servidor HTTP ({})\n\n\
+                             S'ha detectat el framework HTTP **{}** a `{}`.\n\n",
                             name, name, file_name
                         ));
                     } else {
@@ -257,11 +378,17 @@ pub(super) async fn generate_project_docs(
                     }
                 }
                 analyzer::EntrypointKind::LibraryCrate => {
-                    if language == "es" {
+                    if is_es {
                         out.push_str(&format!(
                             "{h3} Librería / módulo reutilizable\n\n\
                              No se encontró función `main`. Este proyecto expone una API pública \
                              pensada para ser importada como dependencia.\n\n"
+                        ));
+                    } else if is_ca {
+                        out.push_str(&format!(
+                            "{h3} Biblioteca / mòdul reutilitzable\n\n\
+                             No s'ha trobat cap funció `main`. Aquest projecte exposa una API \
+                             pública pensada per ser importada com a dependència.\n\n"
                         ));
                     } else {
                         out.push_str(&format!(
@@ -337,7 +464,10 @@ pub(super) async fn generate_project_docs(
 
             // Types table
             if !pub_types.is_empty() {
-                out.push_str("| Type | Kind | Description |\n|---|---|---|\n");
+                out.push_str(&format!(
+                    "| {} | Kind | {} |\n|---|---|---|\n",
+                    lbl_type_header, lbl_description_header
+                ));
                 for cls in &pub_types {
                     let desc = cls
                         .doc_comment
@@ -371,8 +501,8 @@ pub(super) async fn generate_project_docs(
                     api_entry_count += 1;
                     if api_entry_count >= MAX_API_ENTRIES {
                         out.push_str(&format!(
-                            "\n> ⚠ API section truncated at {} entries. Use `get_module_summary` for the full list.\n\n",
-                            MAX_API_ENTRIES
+                            "\n{}\n\n",
+                            lbl_api_truncated.replace("{}", &MAX_API_ENTRIES.to_string())
                         ));
                         break 'files;
                     }
@@ -382,7 +512,10 @@ pub(super) async fn generate_project_docs(
 
             // Functions table
             if !pub_fns.is_empty() {
-                out.push_str("| Function | Description |\n|---|---|\n");
+                out.push_str(&format!(
+                    "| {} | {} |\n|---|---|\n",
+                    lbl_function_header, lbl_description_header
+                ));
                 for func in &pub_fns {
                     let desc = func
                         .doc_comment
@@ -412,7 +545,7 @@ pub(super) async fn generate_project_docs(
                         privacy_gateway::sanitize_output_text(&func.signature, &policy);
                     let (clean_desc, _) = privacy_gateway::sanitize_doc_comment(&desc, &policy);
                     let strip_note = if func.is_strip_marked {
-                        " `[restricted]`"
+                        lbl_restricted
                     } else {
                         ""
                     };
@@ -423,8 +556,8 @@ pub(super) async fn generate_project_docs(
                     api_entry_count += 1;
                     if api_entry_count >= MAX_API_ENTRIES {
                         out.push_str(&format!(
-                            "\n> ⚠ API section truncated at {} entries. Use `get_module_summary` for the full list.\n\n",
-                            MAX_API_ENTRIES
+                            "\n{}\n\n",
+                            lbl_api_truncated.replace("{}", &MAX_API_ENTRIES.to_string())
                         ));
                         break 'files;
                     }
@@ -450,20 +583,27 @@ pub(super) async fn generate_project_docs(
             for uc in &inferred_cases {
                 let confidence_label = match uc.confidence {
                     analyzer::UseCaseConfidence::High => "",
-                    analyzer::UseCaseConfidence::Medium => " *(inferred)*",
-                    analyzer::UseCaseConfidence::Low => " *(low confidence)*",
+                    analyzer::UseCaseConfidence::Medium => lbl_inferred,
+                    analyzer::UseCaseConfidence::Low => lbl_low_confidence,
                 };
                 out.push_str(&format!(
                     "{h3} {}{}\n\n{}\n\n",
                     uc.title, confidence_label, uc.description
                 ));
             }
-        } else if language == "es" {
+        } else if is_es {
             out.push_str(&format!("{h2} {lbl_use_cases}\n\n"));
             out.push_str(
                 "> No se pudieron inferir casos de uso con suficiente confianza a partir de \
                  la documentación disponible. Usa `get_module_summary` en los módulos \
                  principales para obtener la API detallada.\n\n",
+            );
+        } else if is_ca {
+            out.push_str(&format!("{h2} {lbl_use_cases}\n\n"));
+            out.push_str(
+                "> No s'han pogut inferir casos d'ús amb prou confiança a partir de la \
+                 documentació disponible. Usa `get_module_summary` als mòduls principals \
+                 per obtenir l'API detallada.\n\n",
             );
         } else {
             out.push_str(&format!("{h2} {lbl_use_cases}\n\n"));

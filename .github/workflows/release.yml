@@ -14,16 +14,16 @@ jobs:
         include:
           - os: ubuntu-latest
             task: linux-release
-            source_path: target/x86_64-unknown-linux-musl/release/nexusintellicore-mcp
-            asset_name: nexusintellicore-mcp-linux-musl
+            source_path: target/x86_64-unknown-linux-musl/release/nexusintellicore
+            asset_name: nexusintellicore-linux-musl
           - os: windows-latest
             task: windows-release
-            source_path: target/x86_64-pc-windows-msvc/release/nexusintellicore-mcp.exe
-            asset_name: nexusintellicore-mcp-windows.exe
+            source_path: target/x86_64-pc-windows-msvc/release/nexusintellicore.exe
+            asset_name: nexusintellicore-windows.exe
           - os: macos-latest
             task: mac-universal-release
-            source_path: target/aarch64-apple-darwin/release/nexusintellicore-mcp
-            asset_name: nexusintellicore-mcp-macos
+            source_path: target/aarch64-apple-darwin/release/nexusintellicore
+            asset_name: nexusintellicore-macos
 
     permissions:
       contents: write

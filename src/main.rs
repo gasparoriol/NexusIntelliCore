@@ -1,4 +1,4 @@
-/// NexusIntelliCore — Code2Prompt MCP Server
+/// NexusIntelliCore MCP Server
 ///
 /// Implements the Model Context Protocol (MCP) over stdin/stdout using
 /// standard MCP framing (Content-Length headers).  All code extracts pass through the
@@ -41,8 +41,8 @@ async fn main() {
         .nth(1)
         .or_else(|| std::env::var("MCP_ROOT_PATH").ok())
         .unwrap_or_else(|| {
-            eprintln!("Usage: nexusintellicore-mcp <project-root>");
-            eprintln!("   or: MCP_ROOT_PATH=/path/to/project nexusintellicore-mcp");
+            eprintln!("Usage: nexusintellicore <project-root>");
+            eprintln!("   or: MCP_ROOT_PATH=/path/to/project nexusintellicore");
             std::process::exit(1);
         });
 
@@ -165,7 +165,7 @@ fn handle_initialize(id: Value) -> JsonRpcResponse {
                 "tools": {}
             },
             "serverInfo": {
-                "name": "code2prompt-mcp",
+                "name": "NexusIntelliCore",
                 "version": env!("CARGO_PKG_VERSION"),
                 "description": "Semantic code analysis MCP server with Privacy Gateway"
             }

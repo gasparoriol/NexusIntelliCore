@@ -1,8 +1,23 @@
-# NexusIntelliCore MCP Server
+# NexusIntelliCore
 
 NexusIntelliCore is a Rust-based Model Context Protocol (MCP) server for semantic code analysis with built-in privacy controls.
 
 It exposes code intelligence tools over stdio JSON-RPC/MCP and sanitizes outputs before returning them to clients.
+
+## Current Status
+
+NexusIntelliCore is a serious functional prototype, not a production-ready product.
+
+This distinction is intentional and technical, not rhetorical. In its current state, the project should be evaluated as an MCP server for local experimentation, workflow design, and context-compression research, not as a hardened runtime for operational deployment.
+
+Current operational limits:
+
+- No authentication or authorization layer for multi-user or untrusted environments
+- No strong end-to-end privacy validation proving that every relevant output path is covered under realistic deployment conditions
+- No formal benchmark demonstrating token savings, quality improvements, or iteration reduction across representative repositories
+- No real production adoption history or operating track record under sustained usage
+
+That means the right category for NexusIntelliCore today is: useful engineering prototype, credible local tool, and promising foundation for further hardening, but not a deployable production service yet.
 
 ## What This Project Solves
 
@@ -47,12 +62,12 @@ The server exposes eleven MCP tools:
 
 `generate_project_docs` produces structured Markdown documentation by statically analysing the project's AST. It accepts four optional parameters:
 
-| Parameter     | Type            | Default                        | Description                                                                   |
-| ------------- | --------------- | ------------------------------ | ----------------------------------------------------------------------------- |
-| `sections`    | `array[string]` | `["overview","tools","usage"]` | Sections to include: `overview`, `tools`, `usage`, `security`, `architecture` |
-| `public_only` | `boolean`       | `true`                         | When `true`, only documents public symbols                                    |
-| `max_files`   | `integer`       | `50`                           | Maximum number of files to analyse                                            |
-| `language`    | `string`        | `"en"`                         | Output language: `"en"`, `"es"`, `"ca"`                                       |
+| Parameter     | Type            | Default                                  | Description                                                  |
+| ------------- | --------------- | ---------------------------------------- | ------------------------------------------------------------ |
+| `sections`    | `array[string]` | `["overview","usage","api","use_cases"]` | Sections to include: `overview`, `usage`, `api`, `use_cases` |
+| `public_only` | `boolean`       | `true`                                   | When `true`, only documents public symbols                   |
+| `max_files`   | `integer`       | `50`                                     | Maximum number of files to analyse                           |
+| `language`    | `string`        | `"en"`                                   | Output language: `"en"`, `"es"`, `"ca"`                      |
 
 The tool infers project entry-points and use-cases from the AST (via `detect_entrypoints` / `infer_use_cases` in `src/analyzer.rs`) and all output is sanitized through the Privacy Gateway before reaching the client.
 
@@ -88,7 +103,7 @@ High-level module responsibilities:
 - `src/main.rs`: server bootstrap, MCP lifecycle handling, request dispatch
 - `src/transport.rs`: stdio framing/parsing and transport I/O
 - `src/protocol.rs`: JSON-RPC protocol types and response helpers
-- `src/tools.rs`: tool registry and tool dispatch implementation
+- `src/tools/mod.rs`: tool registry and tool dispatch implementation
 - `src/state.rs`: global state, lazy index initialization, LRU analysis cache, and watcher-driven refresh coordination (coalescing via `AtomicBool` pair)
 - `src/indexer.rs`: file discovery, tree rendering, restriction matching
 - `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, JS, TS, Java, C, C#, CSS, HTML); entry-point detection and use-case inference for `generate_project_docs`
@@ -112,20 +127,20 @@ cargo build --release
 
 Binary output:
 
-- `target/release/nexusintellicore-mcp`
+- `target/release/nexusintellicore`
 
 ## Run Locally
 
 Use a project root as argument:
 
 ```bash
-target/release/nexusintellicore-mcp /absolute/path/to/project
+target/release/nexusintellicore /absolute/path/to/project
 ```
 
 Alternative (environment variable):
 
 ```bash
-MCP_ROOT_PATH=/absolute/path/to/project target/release/nexusintellicore-mcp
+MCP_ROOT_PATH=/absolute/path/to/project target/release/nexusintellicore
 ```
 
 ## VS Code MCP Configuration Example
@@ -137,7 +152,7 @@ Example `.vscode/mcp.json`:
   "servers": {
     "nexusintellicore": {
       "transport": "stdio",
-      "command": "${workspaceFolder}/target/release/nexusintellicore-mcp",
+      "command": "${workspaceFolder}/target/release/nexusintellicore",
       "cwd": "${workspaceFolder}",
       "args": ["${workspaceFolder}"],
       "env": {
@@ -161,7 +176,7 @@ cargo test
 Probe MCP handshake and tool response:
 
 ```bash
-scripts/mcp_handshake_probe.sh --server ./target/release/nexusintellicore-mcp --root "$(pwd)"
+scripts/mcp_handshake_probe.sh --server ./target/release/nexusintellicore --root "$(pwd)"
 ```
 
 Helpful probe options:

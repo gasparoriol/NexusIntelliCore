@@ -151,7 +151,7 @@ pub fn tool_definitions() -> Value {
                     },
                     "language": {
                         "type": "string",
-                        "enum": ["en", "es"],
+                        "enum": ["en", "es", "ca"],
                         "description": "Language for generated headings and inferred descriptions (default: en). Does not translate doc-comments."
                     }
                 },
