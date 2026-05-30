@@ -22,7 +22,7 @@ Options:
 
 Examples:
   scripts/mcp_handshake_probe.sh
-  scripts/mcp_handshake_probe.sh --server ./target/release/nexusintellicore-mcp
+  scripts/mcp_handshake_probe.sh --server ./target/release/nexusintellicore
   scripts/mcp_handshake_probe.sh --tool tools/list
 EOF
 }
@@ -58,10 +58,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$SERVER_CMD" ]]; then
-  if [[ -x "$ROOT_PATH/target/release/nexusintellicore-mcp" ]]; then
-    SERVER_CMD="$ROOT_PATH/target/release/nexusintellicore-mcp"
-  elif [[ -x "/Users/gasparoriol/Projects/MCP/nexusintellicore-mcp" ]]; then
-    SERVER_CMD="/Users/gasparoriol/Projects/MCP/nexusintellicore-mcp"
+  if [[ -x "$ROOT_PATH/target/release/nexusintellicore" ]]; then
+    SERVER_CMD="$ROOT_PATH/target/release/nexusintellicore"
+  elif [[ -x "/Users/gasparoriol/Projects/MCP/nexusintellicore" ]]; then
+    SERVER_CMD="/Users/gasparoriol/Projects/MCP/nexusintellicore"
   else
     echo "Could not auto-detect MCP server binary." >&2
     echo "Pass --server <path>." >&2

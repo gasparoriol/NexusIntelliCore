@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use lru::LruCache;
 use tokio::sync::RwLock;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::analyzer;
 use crate::indexer::FileIndex;
@@ -35,6 +35,10 @@ pub struct ServerState {
     index_ready: AtomicBool,
     /// AST cache with LRU eviction, indexed by absolute path.
     ast_cache: RwLock<LruCache<PathBuf, CachedAnalysis>>,
+    /// True while a watcher-triggered index refresh loop is running.
+    watch_refresh_running: AtomicBool,
+    /// Set when watcher events require at least one refresh pass.
+    watch_refresh_pending: AtomicBool,
 }
 
 impl ServerState {
@@ -64,6 +68,8 @@ impl ServerState {
             root,
             index_ready: AtomicBool::new(false),
             ast_cache: RwLock::new(LruCache::new(cache_limit)),
+            watch_refresh_running: AtomicBool::new(false),
+            watch_refresh_pending: AtomicBool::new(false),
         };
 
         STATE
@@ -195,6 +201,81 @@ impl ServerState {
         Ok((files_found, cleared_count))
     }
 
+    /// Rebuild index when requested by the file-system watcher.
+    ///
+    /// This is the single explicit entry point from watcher-driven events.
+    pub async fn refresh_index_from_watcher(&self) -> Result<()> {
+        let (files_found, cache_cleared) = self.refresh_index().await?;
+        debug!(
+            files_found,
+            cache_cleared, "Watcher-triggered index refresh completed"
+        );
+        Ok(())
+    }
+
+    /// Request a watcher-driven refresh pass.
+    ///
+    /// Requests are coalesced while a refresh loop is active.
+    pub fn request_watcher_refresh(&'static self) {
+        self.watch_refresh_pending.store(true, Ordering::Release);
+
+        if self
+            .watch_refresh_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            debug!("Watcher refresh already running; coalescing pending work");
+            return;
+        }
+
+        tokio::spawn(async move {
+            self.run_watcher_refresh_loop().await;
+        });
+    }
+
+    async fn run_watcher_refresh_loop(&self) {
+        loop {
+            let should_refresh = self.watch_refresh_pending.swap(false, Ordering::AcqRel);
+
+            if should_refresh {
+                if let Err(e) = self.refresh_index_from_watcher().await {
+                    warn!("Watcher-triggered index refresh failed: {}", e);
+                }
+                continue;
+            }
+
+            self.watch_refresh_running.store(false, Ordering::Release);
+
+            // Close race: if a new pending request arrives between swap(false)
+            // and releasing `watch_refresh_running`, reclaim ownership and run again.
+            if self.watch_refresh_pending.load(Ordering::Acquire)
+                && self
+                    .watch_refresh_running
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            {
+                continue;
+            }
+
+            break;
+        }
+    }
+
+    /// Evict a single path from the AST cache.
+    ///
+    /// Called by the file watcher on content changes (e.g. modify).
+    /// Returns `true` if an entry was present and removed; `false` if not cached.
+    pub fn evict_cache_entry(&self, path: &std::path::Path) -> bool {
+        // Use `try_write` — if the lock is busy we silently skip eviction.
+        // The mtime-check in `get_analysis` will catch the stale entry on the
+        // next request anyway.
+        if let Ok(mut cache) = self.ast_cache.try_write() {
+            cache.pop(path).is_some()
+        } else {
+            false
+        }
+    }
+
     /// Get current cache statistics (debug-only).
     pub async fn get_cache_stats(&self) -> (usize, usize) {
         let cache = self.ast_cache.read().await;
@@ -300,5 +381,107 @@ mod tests {
 
         let invalid: Option<NonZeroUsize> = "0".parse::<usize>().ok().and_then(NonZeroUsize::new);
         assert!(invalid.is_none()); // Zero is invalid
+    }
+
+    // --- Watcher coordination flag state-machine -------------------------
+    //
+    // The tests below verify the AtomicBool protocol that underpins
+    // `request_watcher_refresh` / `run_watcher_refresh_loop` without
+    // touching the OnceLock singleton.  Each test mirrors an observable
+    // execution path in the coordination logic.
+
+    #[test]
+    fn coordination_first_caller_claims_running() {
+        // When running=false, the first request should succeed its CAS and
+        // set running=true; pending should also be visible.
+        let running = AtomicBool::new(false);
+        let pending = AtomicBool::new(false);
+
+        pending.store(true, Ordering::Release);
+        let claimed = running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+
+        assert!(claimed, "first caller must claim running");
+        assert!(pending.load(Ordering::Acquire), "pending must survive");
+        assert!(running.load(Ordering::Acquire), "running must be set");
+    }
+
+    #[test]
+    fn coordination_second_caller_coalesces_via_pending() {
+        // When running=true (loop active), a concurrent request must NOT
+        // claim running; it must only set pending so the active loop picks
+        // it up.
+        let running = AtomicBool::new(true); // already running
+        let pending = AtomicBool::new(false);
+
+        pending.store(true, Ordering::Release);
+        let claimed = running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+
+        assert!(!claimed, "second caller must not claim already-running");
+        assert!(
+            pending.load(Ordering::Acquire),
+            "pending must be visible to loop"
+        );
+    }
+
+    #[test]
+    fn coordination_loop_drains_pending_and_releases_running() {
+        // Simulate one pass of run_watcher_refresh_loop: swap pending→false,
+        // do work, release running.
+        let running = AtomicBool::new(true);
+        let pending = AtomicBool::new(true);
+
+        let should_refresh = pending.swap(false, Ordering::AcqRel);
+        assert!(should_refresh, "loop must see pending=true on first pass");
+        assert!(
+            !pending.load(Ordering::Acquire),
+            "pending cleared after swap"
+        );
+
+        // Simulate: no new pending → release running
+        running.store(false, Ordering::Release);
+        assert!(
+            !running.load(Ordering::Acquire),
+            "running released after drain"
+        );
+    }
+
+    #[test]
+    fn coordination_close_race_guard_reclaims_running() {
+        // Simulates the close-race scenario: loop releases running, but a
+        // new event has set pending=true before the recheck.  The guard
+        // must reclaim running so the event is not lost.
+        let running = AtomicBool::new(false); // just released by loop
+        let pending = AtomicBool::new(true); // new event arrived simultaneously
+
+        // Mirror the guard in run_watcher_refresh_loop
+        let reclaimed = pending.load(Ordering::Acquire)
+            && running
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+
+        assert!(reclaimed, "close-race guard must reclaim running");
+        assert!(
+            running.load(Ordering::Acquire),
+            "running must be true after reclaim"
+        );
+    }
+
+    #[test]
+    fn coordination_no_reclaim_when_pending_false() {
+        // If pending is false when the guard runs, running stays released.
+        let running = AtomicBool::new(false);
+        let pending = AtomicBool::new(false);
+
+        let reclaimed = pending.load(Ordering::Acquire)
+            && running
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok();
+
+        assert!(!reclaimed, "guard must not reclaim when nothing pending");
+        assert!(!running.load(Ordering::Acquire), "running stays false");
     }
 }

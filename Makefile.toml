@@ -22,5 +22,5 @@ script = [
   "rustup target add aarch64-apple-darwin x86_64-apple-darwin",
   "cargo build --release --target aarch64-apple-darwin",
   "cargo build --release --target x86_64-apple-darwin",
-  "lipo -create -output nexusintellicore-mcp target/aarch64-apple-darwin/release/nexusintellicore-mcp target/x86_64-apple-darwin/release/nexusintellicore-mcp",
+  "lipo -create -output nexusintellicore target/aarch64-apple-darwin/release/nexusintellicore target/x86_64-apple-darwin/release/nexusintellicore",
 ]

@@ -1,10 +1,10 @@
 [package]
 name = "NexusIntelliCore"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [[bin]]
-name = "nexusintellicore-mcp"
+name = "nexusintellicore"
 path = "src/main.rs"
 
 [dependencies]
@@ -41,3 +41,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tree-sitter-css = "=0.20"
 tree-sitter-html = "=0.20.0"
+
+# File watcher for cache invalidation
+notify = "6"

@@ -1,9 +1,10 @@
-/// NexusIntelliCore — Code2Prompt MCP Server
+/// NexusIntelliCore MCP Server
 ///
 /// Implements the Model Context Protocol (MCP) over stdin/stdout using
 /// standard MCP framing (Content-Length headers).  All code extracts pass through the
 /// Phase-4 Privacy Gateway before being returned to the LLM client.
 mod analyzer;
+mod audit_queries;
 mod indexer;
 mod privacy_gateway;
 mod protocol;
@@ -12,6 +13,7 @@ mod sanitizer;
 mod state;
 mod tools;
 mod transport;
+mod watcher;
 
 use protocol::{JsonRpcRequest, JsonRpcResponse};
 use serde_json::{json, Value};
@@ -39,8 +41,8 @@ async fn main() {
         .nth(1)
         .or_else(|| std::env::var("MCP_ROOT_PATH").ok())
         .unwrap_or_else(|| {
-            eprintln!("Usage: nexusintellicore-mcp <project-root>");
-            eprintln!("   or: MCP_ROOT_PATH=/path/to/project nexusintellicore-mcp");
+            eprintln!("Usage: nexusintellicore <project-root>");
+            eprintln!("   or: MCP_ROOT_PATH=/path/to/project nexusintellicore");
             std::process::exit(1);
         });
 
@@ -51,6 +53,10 @@ async fn main() {
 
     let state = state::ServerState::get();
     info!(root = %state.root().display(), "NexusIntelliCore MCP server started");
+
+    // Start the file watcher for automatic cache invalidation.
+    // The result is intentionally kept alive for the duration of the process.
+    let _file_watcher = watcher::FileWatcher::start(state.root().to_path_buf());
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -159,7 +165,7 @@ fn handle_initialize(id: Value) -> JsonRpcResponse {
                 "tools": {}
             },
             "serverInfo": {
-                "name": "code2prompt-mcp",
+                "name": "NexusIntelliCore",
                 "version": env!("CARGO_PKG_VERSION"),
                 "description": "Semantic code analysis MCP server with Privacy Gateway"
             }
