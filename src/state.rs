@@ -12,6 +12,8 @@ use tracing::{debug, info, warn};
 use crate::analyzer;
 use crate::indexer::FileIndex;
 
+use crate::security::SecurityConfig;
+
 /// Default maximum number of entries in AST cache.
 const DEFAULT_AST_CACHE_ENTRIES: usize = 256;
 
@@ -39,6 +41,10 @@ pub struct ServerState {
     watch_refresh_running: AtomicBool,
     /// Set when watcher events require at least one refresh pass.
     watch_refresh_pending: AtomicBool,
+    /// Security configuration loaded at startup.
+    security_config: SecurityConfig,
+    /// Whether the client connection has been authenticated.
+    client_authenticated: AtomicBool,
 }
 
 impl ServerState {
@@ -63,6 +69,9 @@ impl ServerState {
             );
         }
 
+        let security_config = SecurityConfig::load();
+        let client_authenticated = AtomicBool::new(security_config.auth_token.is_none());
+
         let state = ServerState {
             index: RwLock::new(FileIndex::empty(&root)),
             root,
@@ -70,6 +79,8 @@ impl ServerState {
             ast_cache: RwLock::new(LruCache::new(cache_limit)),
             watch_refresh_running: AtomicBool::new(false),
             watch_refresh_pending: AtomicBool::new(false),
+            security_config,
+            client_authenticated,
         };
 
         STATE
@@ -84,6 +95,24 @@ impl ServerState {
         STATE
             .get()
             .expect("ServerState not initialised — call init() first")
+    }
+
+    pub fn security_config(&self) -> &SecurityConfig {
+        &self.security_config
+    }
+
+    pub fn is_authenticated(&self) -> bool {
+        self.client_authenticated.load(Ordering::Acquire)
+    }
+
+    pub fn authenticate(&self, token: &str) -> bool {
+        if let Some(ref expected) = self.security_config.auth_token {
+            if expected == token {
+                self.client_authenticated.store(true, Ordering::Release);
+                return true;
+            }
+        }
+        false
     }
 
     pub fn root(&self) -> &Path {
