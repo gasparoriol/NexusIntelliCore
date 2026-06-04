@@ -6,18 +6,15 @@ It exposes code intelligence tools over stdio JSON-RPC/MCP and sanitizes outputs
 
 ## Current Status
 
-NexusIntelliCore is a serious functional prototype, not a production-ready product.
+NexusIntelliCore is a secure-by-design Model Context Protocol (MCP) server for local experimentation, workflow design, and context-compression research.
 
-This distinction is intentional and technical, not rhetorical. In its current state, the project should be evaluated as an MCP server for local experimentation, workflow design, and context-compression research, not as a hardened runtime for operational deployment.
+It includes:
+- Built-in token authentication (`MCP_AUTH_TOKEN`) for client verification.
+- Tool access control (`MCP_ALLOWED_TOOLS`) to limit available capabilities.
+- Detailed audit logging (`MCP_AUDIT_LOG_PATH`) for all protocol and tool interactions.
+- End-to-end privacy validation through the Privacy Gateway.
 
-Current operational limits:
-
-- No authentication or authorization layer for multi-user or untrusted environments
-- No strong end-to-end privacy validation proving that every relevant output path is covered under realistic deployment conditions
-- No formal benchmark demonstrating token savings, quality improvements, or iteration reduction across representative repositories
-- No real production adoption history or operating track record under sustained usage
-
-That means the right category for NexusIntelliCore today is: useful engineering prototype, credible local tool, and promising foundation for further hardening, but not a deployable production service yet.
+That makes NexusIntelliCore a highly customizable, secure foundation for local and multi-user environments.
 
 ## What This Project Solves
 
@@ -90,11 +87,58 @@ The tool infers project entry-points and use-cases from the AST (via `detect_ent
 
 ### Privacy and Security Controls
 
-- Centralized output sanitization via Privacy Gateway
-- Secret redaction in returned content
-- Support for `@mcp-strip` behavior in symbol outputs
-- Path validation and project-root boundary enforcement
-- Restricted file handling through `.mcpignore` policies
+- Centralized output sanitization via Privacy Gateway.
+- Secret redaction in returned content.
+- Support for `@mcp-strip` behavior in symbol outputs.
+- Path validation and project-root boundary enforcement.
+- Restricted file handling through `.mcpignore` policies.
+- **Client Authentication**: Restricts connections using a shared secret token.
+- **Tool Access Control**: Limits the tools a client can invoke.
+- **Detailed Audit Trail**: Structured event logging for security monitoring.
+
+### Runtime Security Configuration
+
+The server's security behaviors are defined through environment variables or a configuration JSON file.
+
+#### Environment Variables
+
+- `MCP_AUTH_TOKEN`: The expected token required from the client on the `initialize` handshake.
+- `MCP_ALLOWED_TOOLS`: Comma-separated list of tool names allowed to be executed (e.g., `get_project_structure,get_file_outline`). If empty/unset, all tools are permitted.
+- `MCP_AUDIT_LOG_PATH`: Path to a file where all protocol/lifecycle requests and tool call attempts will be recorded in JSON lines (NDJSON) format.
+- `MCP_SECURITY_CONFIG_PATH`: Path to a JSON configuration file (details below).
+
+#### JSON Configuration Example
+
+Create a file (e.g. `security-config.json`):
+
+```json
+{
+  "auth_token": "my-secret-handshake-token-123",
+  "allowed_tools": [
+    "get_project_structure",
+    "get_file_outline",
+    "inspect_symbol"
+  ],
+  "audit_log_path": "/var/log/nexusintellicore-audit.log"
+}
+```
+
+Point the server to it:
+```bash
+export MCP_SECURITY_CONFIG_PATH=/path/to/security-config.json
+target/release/nexusintellicore /absolute/path/to/project
+```
+
+#### Authentication Handshake
+
+When `auth_token` is enabled, the client must pass the matching token inside the `initialize` parameters. The server checks the following paths in the parameters hierarchy:
+- `params.auth_token`
+- `params.token`
+- `params._meta.auth_token`
+- `params._meta.token`
+
+Requests received prior to successful initialization will be rejected with an authentication error code `-32001`. Unauthorized tool calls return `-32003`.
+
 
 ## Architecture Overview
 

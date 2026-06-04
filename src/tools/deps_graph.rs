@@ -135,7 +135,16 @@ fn resolve_import_path(
     } else {
         path.to_owned()
     };
-    let normalised = normalised.trim_matches('/').to_owned();
+    let mut normalised = normalised.trim_matches('/').to_owned();
+
+    if normalised.starts_with("crate/") {
+        normalised = normalised["crate/".len()..].to_owned();
+    } else if normalised.starts_with("self/") {
+        normalised = normalised["self/".len()..].to_owned();
+    }
+    while normalised.starts_with("super/") {
+        normalised = normalised["super/".len()..].to_owned();
+    }
 
     for file in allowed_files {
         let file_str = file.to_string_lossy();
@@ -168,3 +177,91 @@ fn resolve_import_path(
 
     (normalised, ImportKind::Unresolved, None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analyzer::{ImportInfo, ImportKind};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn test_resolve_import_path_rust_crate() {
+        let allowed = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/analyzer.rs"),
+            PathBuf::from("src/tools/deps_graph.rs"),
+        ];
+        let restricted = vec![];
+
+        let imp = ImportInfo {
+            raw: "use crate::analyzer;".to_owned(),
+            path: "crate::analyzer".to_owned(),
+            kind: ImportKind::InternalLocal,
+            resolved_path: None,
+        };
+
+        let (resolved, kind, path_opt) = resolve_import_path(
+            &imp,
+            Path::new("src/main.rs"),
+            &allowed,
+            &restricted,
+        );
+
+        assert_eq!(kind, ImportKind::InternalLocal);
+        assert_eq!(resolved, "src/analyzer.rs");
+        assert_eq!(path_opt, Some(PathBuf::from("src/analyzer.rs")));
+    }
+
+    #[test]
+    fn test_resolve_import_path_rust_super() {
+        let allowed = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/state.rs"),
+            PathBuf::from("src/tools/deps_graph.rs"),
+        ];
+        let restricted = vec![];
+
+        let imp = ImportInfo {
+            raw: "use super::super::state;".to_owned(),
+            path: "super::super::state".to_owned(),
+            kind: ImportKind::InternalLocal,
+            resolved_path: None,
+        };
+
+        let (resolved, kind, path_opt) = resolve_import_path(
+            &imp,
+            Path::new("src/tools/deps_graph.rs"),
+            &allowed,
+            &restricted,
+        );
+
+        assert_eq!(kind, ImportKind::InternalLocal);
+        assert_eq!(resolved, "src/state.rs");
+        assert_eq!(path_opt, Some(PathBuf::from("src/state.rs")));
+    }
+
+    #[test]
+    fn test_resolve_import_path_external() {
+        let allowed = vec![];
+        let restricted = vec![];
+
+        let imp = ImportInfo {
+            raw: "use serde_json::Value;".to_owned(),
+            path: "serde_json::Value".to_owned(),
+            kind: ImportKind::ExternalLibrary,
+            resolved_path: None,
+        };
+
+        let (resolved, kind, path_opt) = resolve_import_path(
+            &imp,
+            Path::new("src/main.rs"),
+            &allowed,
+            &restricted,
+        );
+
+        assert_eq!(kind, ImportKind::ExternalLibrary);
+        assert_eq!(resolved, "serde_json::Value");
+        assert!(path_opt.is_none());
+    }
+}
+
