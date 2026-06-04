@@ -62,18 +62,24 @@ pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
     if !analysis.functions.is_empty() {
         out.push_str("## Functions / Methods\n");
         for func in &analysis.functions {
+            let canonical = if func.qualified_name.is_empty() {
+                func.name.as_str()
+            } else {
+                func.qualified_name.as_str()
+            };
             if func.is_strip_marked {
                 out.push_str(&format!(
-                    "  {} — [implementation restricted by @mcp-strip] (lines {}-{})\n",
-                    func.signature, func.start_line, func.end_line
+                    "  {} | {} — [implementation restricted by @mcp-strip] (lines {}-{})\n",
+                    canonical, func.signature, func.start_line, func.end_line
                 ));
             } else {
                 out.push_str(&format!(
-                    "  {} (lines {}-{})\n",
-                    func.signature, func.start_line, func.end_line
+                    "  {} | {} (lines {}-{})\n",
+                    canonical, func.signature, func.start_line, func.end_line
                 ));
             }
         }
+        out.push_str("\nUse inspect_symbol with the canonical identifier shown before '|'.\n");
     }
 
     // CSS selectors

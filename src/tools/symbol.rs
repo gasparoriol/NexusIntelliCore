@@ -1,12 +1,19 @@
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::privacy_gateway;
 use crate::protocol::{error_response, text_content, tool_response};
 use crate::sanitizer;
 
-pub(super) async fn inspect_symbol(file_path: &str, symbol_name: &str) -> Result<Value> {
+pub(super) async fn inspect_symbol(
+    file_path: &str,
+    symbol_name: &str,
+    match_mode: &str,
+    return_all_matches: bool,
+    signature_hint: Option<&str>,
+) -> Result<Value> {
     let state = crate::state::ServerState::get();
     let path = match state.validate_path(Path::new(file_path)) {
         Ok(p) => p,
@@ -28,55 +35,170 @@ pub(super) async fn inspect_symbol(file_path: &str, symbol_name: &str) -> Result
         Err(e) => return Ok(error_response(format!("Analysis error: {}", e))),
     };
 
-    let func = match analysis.functions.iter().find(|f| f.name == symbol_name) {
-        Some(f) => f,
-        None => {
-            return Ok(tool_response(vec![text_content(format!(
-                "Symbol '{}' not found in {}.\n\
-                 Available functions: {}",
-                symbol_name,
-                file_path,
+    let mut matches: Vec<_> = match match_mode {
+        "simple" => analysis
+            .functions
+            .iter()
+            .filter(|f| f.name == symbol_name)
+            .collect(),
+        "qualified" => analysis
+            .functions
+            .iter()
+            .filter(|f| f.qualified_name == symbol_name)
+            .collect(),
+        // auto: if caller provides a qualified-looking symbol, use qualified mode.
+        // Otherwise try simple mode first, then qualified fallback.
+        _ => {
+            let looks_qualified = symbol_name.contains('.') || symbol_name.contains("::");
+            if looks_qualified {
                 analysis
                     .functions
                     .iter()
-                    .map(|f| f.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))]))
+                    .filter(|f| f.qualified_name == symbol_name)
+                    .collect()
+            } else {
+                let simple_matches: Vec<_> = analysis
+                    .functions
+                    .iter()
+                    .filter(|f| f.name == symbol_name)
+                    .collect();
+                if simple_matches.is_empty() {
+                    analysis
+                        .functions
+                        .iter()
+                        .filter(|f| f.qualified_name == symbol_name)
+                        .collect()
+                } else {
+                    simple_matches
+                }
+            }
         }
     };
 
-    // Phase 4 — Apply Privacy Gateway sanitization pipeline.
-    // If the function is strip-marked and we have an AST-derived body range,
-    // use strip_body_by_range for precise, false-positive-free stripping.
-    // Otherwise fall through to sanitize_function_source which uses regex.
-    let body_for_sanitization = if func.is_strip_marked {
-        if let Some(range) = func.body_byte_range {
-            sanitizer::strip_body_by_range(&func.body_source, range)
+    if let Some(hint) = signature_hint.map(str::trim).filter(|s| !s.is_empty()) {
+        let hint_lc = hint.to_ascii_lowercase();
+        matches.retain(|f| {
+            f.normalized_signature
+                .as_deref()
+                .unwrap_or(f.signature.as_str())
+                .to_ascii_lowercase()
+                .contains(&hint_lc)
+        });
+    }
+
+    if matches.is_empty() {
+        let available: Vec<_> = analysis
+            .functions
+            .iter()
+            .map(|f| f.qualified_name.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        return Ok(tool_response(vec![text_content(format!(
+            "Symbol '{}' not found in {}.\n\
+             match_mode='{}'.{}\n\
+             Available functions: {}",
+            symbol_name,
+            file_path,
+            match_mode,
+            signature_hint
+                .map(|h| format!(" signature_hint='{}'", h))
+                .unwrap_or_default(),
+            available.join(", ")
+        ))]));
+    }
+
+    if matches.len() > 1 && !return_all_matches {
+        let candidates = matches
+            .iter()
+            .map(|f| {
+                json!({
+                    "qualified_name": f.qualified_name,
+                    "signature": f.signature,
+                    "start_line": f.start_line,
+                    "end_line": f.end_line
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let payload = json!({
+            "status": "ambiguous",
+            "symbol": symbol_name,
+            "file_path": file_path,
+            "match_mode": match_mode,
+            "signature_hint": signature_hint,
+            "message": "Multiple symbol matches found. Use a qualified symbol, a signature_hint, or set return_all_matches=true.",
+            "candidates": candidates
+        });
+
+        return Ok(tool_response(vec![text_content(payload.to_string())]));
+    }
+
+    let policy = privacy_gateway::PrivacyPolicy::default();
+    let mut inspected = Vec::with_capacity(matches.len());
+    for func in &matches {
+        let body_for_sanitization = if func.is_strip_marked {
+            if let Some(range) = func.body_byte_range {
+                sanitizer::strip_body_by_range(&func.body_source, range)
+            } else {
+                func.body_source.clone()
+            }
         } else {
             func.body_source.clone()
-        }
-    } else {
-        func.body_source.clone()
-    };
-    let policy = privacy_gateway::PrivacyPolicy::default();
-    let (sanitized_code, redactions) = privacy_gateway::sanitize_function_source(
-        &body_for_sanitization,
-        &func.signature,
-        &analysis.language,
-        &policy,
-    );
+        };
 
+        let (sanitized_code, redactions) = privacy_gateway::sanitize_function_source(
+            &body_for_sanitization,
+            &func.signature,
+            &analysis.language,
+            &policy,
+        );
+
+        inspected.push(json!({
+            "qualified_name": func.qualified_name,
+            "signature": func.signature,
+            "start_line": func.start_line,
+            "end_line": func.end_line,
+            "source": sanitized_code,
+            "redactions": redactions,
+        }));
+    }
+
+    if return_all_matches {
+        let payload = json!({
+            "status": "ok",
+            "symbol": symbol_name,
+            "file_path": file_path,
+            "match_mode": match_mode,
+            "signature_hint": signature_hint,
+            "count": inspected.len(),
+            "matches": inspected
+        });
+        return Ok(tool_response(vec![text_content(payload.to_string())]));
+    }
+
+    let item = &inspected[0];
     let mut out = format!(
         "// Symbol: {} in {}\n// Lines {}-{}\n\n{}",
-        symbol_name, file_path, func.start_line, func.end_line, sanitized_code
+        item["qualified_name"].as_str().unwrap_or(symbol_name),
+        file_path,
+        item["start_line"].as_u64().unwrap_or(0),
+        item["end_line"].as_u64().unwrap_or(0),
+        item["source"].as_str().unwrap_or("")
     );
 
-    if !redactions.is_empty() {
-        out.push_str(&format!(
-            "\n\n// ⚠ MCP Privacy Gateway: the following were redacted: {}",
-            redactions.join(", ")
-        ));
+    if let Some(redactions) = item["redactions"].as_array() {
+        if !redactions.is_empty() {
+            let list = redactions
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "\n\n// ⚠ MCP Privacy Gateway: the following were redacted: {}",
+                list
+            ));
+        }
     }
 
     Ok(tool_response(vec![text_content(out)]))

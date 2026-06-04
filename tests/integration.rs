@@ -158,6 +158,20 @@ fn call_generate_project_docs(root: &str, args: &str) -> String {
     send_single_mcp_request(root, &request)
 }
 
+fn call_tool(root: &str, tool_name: &str, arguments: serde_json::Value) -> String {
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 99,
+        "method": "tools/call",
+        "params": {
+            "name": tool_name,
+            "arguments": arguments
+        }
+    })
+    .to_string();
+    send_single_mcp_request(root, &request)
+}
+
 #[test]
 fn generate_project_docs_returns_project_name_and_overview() {
     let root = env!("CARGO_MANIFEST_DIR");
@@ -240,4 +254,111 @@ fn generate_project_docs_catalan_headings() {
         "Catalan language option should produce Catalan headings. Got: {}",
         &text[..text.len().min(500)]
     );
+}
+
+#[test]
+fn inspect_symbol_simple_name_returns_ambiguous_payload_when_multiple_matches() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let response = call_tool(
+        root,
+        "inspect_symbol",
+        serde_json::json!({
+            "file_path": fixture,
+            "symbol_name": "onCommandSuccess",
+            "match_mode": "simple"
+        }),
+    );
+
+    let text = extract_tool_text(&response);
+    let payload: serde_json::Value =
+        serde_json::from_str(&text).expect("Ambiguous response should be JSON");
+
+    assert_eq!(payload["status"], "ambiguous", "Payload: {}", payload);
+    let candidates = payload["candidates"]
+        .as_array()
+        .expect("candidates must be an array");
+    assert!(candidates.len() >= 2, "Payload: {}", payload);
+    for c in candidates {
+        assert!(c.get("qualified_name").is_some(), "Candidate: {}", c);
+        assert!(c.get("signature").is_some(), "Candidate: {}", c);
+        assert!(c.get("start_line").is_some(), "Candidate: {}", c);
+        assert!(c.get("end_line").is_some(), "Candidate: {}", c);
+    }
+}
+
+#[test]
+fn inspect_symbol_qualified_mode_returns_exact_inner_method() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let response = call_tool(
+        root,
+        "inspect_symbol",
+        serde_json::json!({
+            "file_path": fixture,
+            "symbol_name": "OuterHandler.AuthListener.onCommandSuccess",
+            "match_mode": "qualified"
+        }),
+    );
+
+    let text = extract_tool_text(&response);
+    assert!(
+        text.contains("inner:"),
+        "Qualified match should return inner method body. Got: {}",
+        text
+    );
+}
+
+#[test]
+fn inspect_symbol_signature_hint_disambiguates_overloads() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let response = call_tool(
+        root,
+        "inspect_symbol",
+        serde_json::json!({
+            "file_path": fixture,
+            "symbol_name": "onCommandSuccess",
+            "match_mode": "simple",
+            "signature_hint": "int code"
+        }),
+    );
+
+    let text = extract_tool_text(&response);
+    assert!(
+        text.contains("outer-2:"),
+        "signature_hint should select int overload. Got: {}",
+        text
+    );
+}
+
+#[test]
+fn inspect_symbol_return_all_matches_returns_json_with_sanitized_sources() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let response = call_tool(
+        root,
+        "inspect_symbol",
+        serde_json::json!({
+            "file_path": fixture,
+            "symbol_name": "onCommandSuccess",
+            "match_mode": "simple",
+            "return_all_matches": true
+        }),
+    );
+
+    let text = extract_tool_text(&response);
+    let payload: serde_json::Value =
+        serde_json::from_str(&text).expect("return_all_matches response should be JSON");
+
+    assert_eq!(payload["status"], "ok", "Payload: {}", payload);
+    let matches = payload["matches"]
+        .as_array()
+        .expect("matches must be an array");
+    assert!(matches.len() >= 2, "Payload: {}", payload);
+    for m in matches {
+        assert!(m.get("qualified_name").is_some(), "Match: {}", m);
+        assert!(m.get("signature").is_some(), "Match: {}", m);
+        assert!(m.get("source").is_some(), "Match: {}", m);
+    }
 }

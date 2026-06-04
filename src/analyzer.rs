@@ -71,8 +71,18 @@ fn ts_language(lang: &Lang) -> Option<Language> {
 #[derive(Debug, Clone)]
 pub struct FunctionInfo {
     pub name: String,
+    /// Canonical symbol path including owner context when available
+    /// (e.g. `Outer.Inner.method` or `Type::method`).
+    pub qualified_name: String,
+    /// Optional owner path without the method name
+    /// (e.g. `Outer.Inner` or `Type`).
+    #[allow(dead_code)]
+    pub owner_chain: Option<String>,
     /// The function signature (everything before the opening brace).
     pub signature: String,
+    /// Normalized signature used for deterministic matching/disambiguation.
+    #[allow(dead_code)]
+    pub normalized_signature: Option<String>,
     /// The full source of the function body (may be stripped later).
     pub body_source: String,
     pub start_line: usize,
@@ -431,6 +441,7 @@ fn extract_functions(
         let fn_node_ts = fn_node.1;
         let fn_text = &source[fn_node_ts.byte_range()];
         let name_text = name_cap.2.clone();
+        let owner_chain = extract_owner_chain(fn_node_ts, source, lang);
 
         // Use the AST body-node boundary to correctly delimit the signature.
         // find_body_node only returns block-style bodies, so expression arrow
@@ -444,6 +455,8 @@ fn extract_functions(
                 _ => extract_signature(fn_text),
             }
         };
+        let qualified_name = build_qualified_name(&name_text, owner_chain.as_deref(), lang);
+        let normalized_signature = normalize_signature(&signature);
         // Python `comment` nodes are tree-sitter "extras" whose position inside
         // the body block is not guaranteed across parser versions. Regex-based
         // detection is safe for Python because `#` in a string literal is
@@ -475,7 +488,10 @@ fn extract_functions(
 
         Some(FunctionInfo {
             name: name_text,
+            qualified_name,
+            owner_chain,
             signature,
+            normalized_signature,
             body_source: fn_text.to_owned(),
             start_line,
             end_line: fn_node_ts.end_position().row + 1,
@@ -485,6 +501,115 @@ fn extract_functions(
             is_public,
         })
     })
+}
+
+fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -> Option<String> {
+    let mut owners: Vec<String> = Vec::new();
+    let mut current = node.parent();
+
+    while let Some(parent) = current {
+        match lang {
+            Lang::Rust => {
+                if parent.kind() == "impl_item" {
+                    if let Some(ty) = parent.child_by_field_name("type") {
+                        let text = source[ty.byte_range()].trim();
+                        if !text.is_empty() {
+                            owners.push(text.to_owned());
+                        }
+                    }
+                }
+            }
+            Lang::Python => {
+                if parent.kind() == "class_definition" {
+                    if let Some(name) = parent.child_by_field_name("name") {
+                        let text = source[name.byte_range()].trim();
+                        if !text.is_empty() {
+                            owners.push(text.to_owned());
+                        }
+                    }
+                }
+            }
+            Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
+                if parent.kind() == "class_declaration" {
+                    if let Some(name) = parent.child_by_field_name("name") {
+                        let text = source[name.byte_range()].trim();
+                        if !text.is_empty() {
+                            owners.push(text.to_owned());
+                        }
+                    }
+                }
+            }
+            Lang::Java => {
+                if matches!(
+                    parent.kind(),
+                    "class_declaration"
+                        | "interface_declaration"
+                        | "enum_declaration"
+                        | "record_declaration"
+                        | "annotation_type_declaration"
+                ) {
+                    if let Some(name) = parent.child_by_field_name("name") {
+                        let text = source[name.byte_range()].trim();
+                        if !text.is_empty() {
+                            owners.push(text.to_owned());
+                        }
+                    }
+                }
+            }
+            Lang::CSharp => {
+                if matches!(
+                    parent.kind(),
+                    "class_declaration"
+                        | "interface_declaration"
+                        | "struct_declaration"
+                        | "enum_declaration"
+                ) {
+                    if let Some(name) = parent.child_by_field_name("name") {
+                        let text = source[name.byte_range()].trim();
+                        if !text.is_empty() {
+                            owners.push(text.to_owned());
+                        }
+                    }
+                }
+            }
+            Lang::C | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html | Lang::Unknown => {}
+        }
+        current = parent.parent();
+    }
+
+    if owners.is_empty() {
+        None
+    } else {
+        owners.reverse();
+        let sep = if matches!(lang, Lang::Rust) {
+            "::"
+        } else {
+            "."
+        };
+        Some(owners.join(sep))
+    }
+}
+
+fn build_qualified_name(name: &str, owner_chain: Option<&str>, lang: &Lang) -> String {
+    if let Some(owner) = owner_chain {
+        let sep = if matches!(lang, Lang::Rust) {
+            "::"
+        } else {
+            "."
+        };
+        format!("{}{}{}", owner, sep, name)
+    } else {
+        name.to_owned()
+    }
+}
+
+fn normalize_signature(signature: &str) -> Option<String> {
+    let normalized = signature.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
 }
 
 fn extract_classes(
@@ -2002,7 +2127,10 @@ mod tests {
     fn make_fn(name: &str, is_public: bool) -> FunctionInfo {
         FunctionInfo {
             name: name.to_owned(),
+            qualified_name: name.to_owned(),
+            owner_chain: None,
             signature: format!("pub fn {}()", name),
+            normalized_signature: Some(format!("pub fn {}()", name)),
             body_source: String::new(),
             start_line: 1,
             end_line: 3,

@@ -14,7 +14,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "get_file_outline",
-            "description": "Returns a structural map of a file: class names, function signatures, and imports. Restricted files return an access-denied notice.",
+            "description": "Returns a structural map of a file: class names, canonical function/method identifiers, signatures, and imports. The canonical identifier can be passed directly to inspect_symbol with match_mode='qualified'. Restricted files return an access-denied notice.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -39,6 +39,19 @@ pub fn tool_definitions() -> Value {
                     "symbol_name": {
                         "type": "string",
                         "description": "Exact name of the function or method to inspect"
+                    },
+                    "match_mode": {
+                        "type": "string",
+                        "enum": ["auto", "simple", "qualified"],
+                        "description": "Matching strategy for symbol_name: 'auto' (default) tries simple name first, then qualified if not found. 'simple' matches only the unqualified name, while 'qualified' requires the full path (e.g., ClassName.methodName)."
+                    },
+                    "return_all_matches": {
+                        "type": "boolean",
+                        "description": "If true, returns all matching symbols instead of just the first one (default: false)."
+                    },
+                    "signature_hint": {
+                        "type": "string",
+                        "description": "Optional: a partial signature (e.g., parameter types) to help disambiguate overloaded functions. Only used when match_mode is 'auto' or 'simple'."
                     }
                 },
                 "required": ["file_path", "symbol_name"]

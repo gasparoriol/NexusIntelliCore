@@ -32,7 +32,23 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
         "inspect_symbol" => {
             let file = require_str(&args, "file_path")?;
             let symbol = require_str(&args, "symbol_name")?;
-            symbol::inspect_symbol(file, symbol).await
+            let match_mode = args
+                .get("match_mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("auto");
+            if !matches!(match_mode, "auto" | "simple" | "qualified") {
+                return Ok(error_response(format!(
+                    "Invalid match_mode '{}'. Allowed values: auto, simple, qualified",
+                    match_mode
+                )));
+            }
+            let return_all_matches = args
+                .get("return_all_matches")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let signature_hint = args.get("signature_hint").and_then(|v| v.as_str());
+            symbol::inspect_symbol(file, symbol, match_mode, return_all_matches, signature_hint)
+                .await
         }
         "get_dependencies_graph" => deps_graph::get_dependencies_graph().await,
         "search_design_patterns" => {
