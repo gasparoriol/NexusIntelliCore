@@ -1,67 +1,66 @@
-/// Integration tests for Privacy Gateway enforcement
-///
-/// Validates that all tool outputs are properly sanitized before reaching the LLM client.
-/// Tests focus on catching real privacy leaks (internal hostnames, secrets, etc.)
+#[path = "../src/privacy_gateway.rs"]
+mod privacy_gateway;
+#[path = "../src/sanitizer.rs"]
+mod sanitizer;
+
+use privacy_gateway::{
+    sanitize_dependency_graph, sanitize_function_source, sanitize_output_text, PrivacyPolicy,
+};
+use serde_json::json;
 
 #[test]
-fn privacy_gateway_integrated_with_tools() {
-    // This is a conceptual integration test framework.
-    // In production, it would:
-    // 1. Spawn the MCP server binary with a test project
-    // 2. Send tool call requests with Content-Length framing
-    // 3. Parse responses and verify no internal hostnames/secrets appear
-    // 4. Validate that redaction messages are present in output
+fn sanitize_output_text_redacts_database_uri_secret_and_internal_hostname() {
+    let policy = PrivacyPolicy::default();
+    let input = "postgres://user:secret123@db.internal:5432/app?password=hardcoded";
 
-    // Mock scenario: project with sensitive imports
-    // get_file_outline("src/services/auth.rs") should:
-    // - NOT include "db.internal" in any import statement
-    // - Return "[REDACTED: INTERNAL_HOSTNAME]" instead
-    // - Include note about privacy gateway filtering
+    let (sanitized, redactions) = sanitize_output_text(input, &policy);
 
-    // get_dependencies_graph() should:
-    // - NOT include edges labeled with "db.internal/..." paths
-    // - NOT include node IDs with sensitive module names
-    // - Return sanitized JSON
-
-    // audit_security_measures() should:
-    // - Report secret locations (file + line)
-    // - NEVER include actual secret values
-    // - Include redaction notice
-
-    println!("Privacy Gateway integration test framework defined.");
-    println!("Full integration tests require MCP framing infrastructure (TODO: Phase 6)");
+    assert_ne!(sanitized, input);
+    assert!(!sanitized.contains("db.internal"));
+    assert!(!sanitized.contains("secret123"));
+    assert!(!redactions.is_empty());
 }
 
 #[test]
-fn privacy_policy_default_configuration() {
-    // In a real test, we'd import and verify:
-    // let policy = PrivacyPolicy::default();
-    // assert!(policy.redact_secrets);
-    // assert!(policy.apply_strip_marks);
-    // assert!(!policy.omit_restricted);
+fn sanitize_function_source_strips_marked_rust_and_python_functions() {
+    let policy = PrivacyPolicy::default();
 
-    println!("Privacy policy defaults:");
-    println!("  - redact_secrets: true");
-    println!("  - apply_strip_marks: true");
-    println!("  - omit_restricted: false");
+    let rust_source = r#"fn secret_fn() {
+    // @mcp-strip
+    let token = \"sk-abcdefghijklmnopqrstuvwxyz123456\";
+    println!(\"{}\", token);
+}"#;
+    let (rust_sanitized, _) = sanitize_function_source(rust_source, "secret_fn", "rust", &policy);
+    assert!(rust_sanitized.contains("fn secret_fn()"));
+    assert!(!rust_sanitized.contains("abcdefghijklmnopqrstuvwxyz123456"));
+
+    let py_source =
+        "def secret_py():  # @mcp-strip\n    return 'postgres://u:p@db.internal:5432/app'\n";
+    let (py_sanitized, _) = sanitize_function_source(py_source, "secret_py", "python", &policy);
+    assert!(py_sanitized.contains("def secret_py"));
+    assert!(!py_sanitized.contains("db.internal"));
 }
 
 #[test]
-fn sanitization_happens_at_single_exit_point() {
-    // Architecture validation:
-    // All 6 tools must call privacy_gateway functions before returning
-    // 1. get_project_structure() -> sanitize_output_text()
-    // 2. get_file_outline() -> sanitize_import() + sanitize_file_outline()
-    // 3. inspect_symbol() -> sanitize_function_source()
-    // 4. get_dependencies_graph() -> sanitize_dependency_graph()
-    // 5. search_design_patterns() -> sanitize_output_text()
-    // 6. audit_security_measures() -> sanitize_security_report()
+fn sanitize_dependency_graph_filters_internal_hosts_and_secrets() {
+    let policy = PrivacyPolicy::default();
+    let graph = json!({
+        "nodes": [
+            { "id": "src/db/internal_client.rs", "label": "connects to db.internal" }
+        ],
+        "edges": [
+            {
+                "source": "db.internal/service.rs",
+                "target": "src/main.rs",
+                "label": "token=sk-abcdefghijklmnopqrstuvwxyz123456"
+            }
+        ]
+    });
 
-    println!("Privacy Gateway enforces single exit point:");
-    println!("  Tool 1: get_project_structure ✓");
-    println!("  Tool 2: get_file_outline ✓");
-    println!("  Tool 3: inspect_symbol ✓");
-    println!("  Tool 4: get_dependencies_graph ✓");
-    println!("  Tool 5: search_design_patterns ✓");
-    println!("  Tool 6: audit_security_measures ✓");
+    let (sanitized, redactions) = sanitize_dependency_graph(&graph, &policy);
+    let out = serde_json::to_string(&sanitized).unwrap_or_default();
+
+    assert!(!out.contains("db.internal"));
+    assert!(!out.contains("abcdefghijklmnopqrstuvwxyz123456"));
+    assert!(!redactions.is_empty());
 }

@@ -107,7 +107,7 @@ impl ServerState {
 
     pub fn authenticate(&self, token: &str) -> bool {
         if let Some(ref expected) = self.security_config.auth_token {
-            if expected == token {
+            if crate::security::constant_time_compare(expected, token) {
                 self.client_authenticated.store(true, Ordering::Release);
                 return true;
             }

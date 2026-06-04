@@ -131,14 +131,17 @@ async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
 
     let state = state::ServerState::get();
     if !state.is_authenticated() && req.method != "initialize" {
-        security::log_audit_event("auth_failure", json!({
-            "method": req.method,
-            "reason": "unauthenticated request received before initialization"
-        }));
+        security::log_audit_event(
+            "auth_failure",
+            json!({
+                "method": req.method,
+                "reason": "unauthenticated request received before initialization"
+            }),
+        );
         return Some(JsonRpcResponse::error(
             id,
             -32001,
-            "Unauthorized: client must authenticate during initialization".to_string()
+            "Unauthorized: client must authenticate during initialization".to_string(),
         ));
     }
 
@@ -175,7 +178,8 @@ fn handle_initialize(id: Value, params: Value) -> JsonRpcResponse {
     let mut token_found = None;
 
     if state.security_config().auth_token.is_some() {
-        let token_opt = params.get("auth_token")
+        let token_opt = params
+            .get("auth_token")
             .or_else(|| params.get("token"))
             .or_else(|| params.get("_meta").and_then(|m| m.get("auth_token")))
             .or_else(|| params.get("_meta").and_then(|m| m.get("token")))
@@ -188,10 +192,13 @@ fn handle_initialize(id: Value, params: Value) -> JsonRpcResponse {
         }
 
         if !state.is_authenticated() {
-            security::log_audit_event("auth_failure", json!({
-                "method": "initialize",
-                "reason": "missing or invalid authentication token"
-            }));
+            security::log_audit_event(
+                "auth_failure",
+                json!({
+                    "method": "initialize",
+                    "reason": "missing or invalid authentication token"
+                }),
+            );
             return JsonRpcResponse::error(
                 id,
                 -32001,
@@ -200,10 +207,13 @@ fn handle_initialize(id: Value, params: Value) -> JsonRpcResponse {
         }
     }
 
-    security::log_audit_event("auth_success", json!({
-        "method": "initialize",
-        "token_present": token_found.is_some()
-    }));
+    security::log_audit_event(
+        "auth_success",
+        json!({
+            "method": "initialize",
+            "token_present": token_found.is_some()
+        }),
+    );
 
     JsonRpcResponse::success(
         id,
@@ -244,9 +254,12 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
         all_tools
     };
 
-    security::log_audit_event("tools_list", json!({
-        "count": filtered_tools.as_array().map(|a| a.len()).unwrap_or(0)
-    }));
+    security::log_audit_event(
+        "tools_list",
+        json!({
+            "count": filtered_tools.as_array().map(|a| a.len()).unwrap_or(0)
+        }),
+    );
 
     JsonRpcResponse::success(id, json!({ "tools": filtered_tools }))
 }
@@ -264,10 +277,13 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
     if let Some(ref allowed) = state.security_config().allowed_tools {
         if !allowed.contains(&name) {
             warn!(tool = %name, "Access denied: tool not in allowed list");
-            security::log_audit_event("tool_denied", json!({
-                "tool": name,
-                "reason": "tool not allowed in security configuration"
-            }));
+            security::log_audit_event(
+                "tool_denied",
+                json!({
+                    "tool": name,
+                    "reason": "tool not allowed in security configuration"
+                }),
+            );
             return JsonRpcResponse::error(
                 id,
                 -32003,
@@ -281,31 +297,70 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
         .cloned()
         .unwrap_or_else(|| json!({}));
 
+    fn sanitize_json_value_for_audit(
+        value: &Value,
+        policy: &privacy_gateway::PrivacyPolicy,
+    ) -> Value {
+        match value {
+            Value::String(s) => {
+                let (clean, _) = privacy_gateway::sanitize_output_text(s, policy);
+                Value::String(clean)
+            }
+            Value::Array(items) => Value::Array(
+                items
+                    .iter()
+                    .map(|item| sanitize_json_value_for_audit(item, policy))
+                    .collect(),
+            ),
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(k, v)| {
+                        let (clean_key, _) = privacy_gateway::sanitize_output_text(k, policy);
+                        (clean_key, sanitize_json_value_for_audit(v, policy))
+                    })
+                    .collect(),
+            ),
+            _ => value.clone(),
+        }
+    }
+
+    let policy = privacy_gateway::PrivacyPolicy::default();
+    let sanitized_args = sanitize_json_value_for_audit(&args, &policy);
+
     let start = std::time::Instant::now();
     info!(tool = %name, "Tool call received");
 
-    security::log_audit_event("tool_call_start", json!({
-        "tool": name,
-        "arguments": args
-    }));
+    security::log_audit_event(
+        "tool_call_start",
+        json!({
+            "tool": name,
+            "arguments": sanitized_args
+        }),
+    );
 
     match tools::dispatch_tool(&name, args).await {
         Ok(result) => {
             let elapsed = start.elapsed().as_millis();
             info!(tool = %name, elapsed_ms = %elapsed, "Tool call completed successfully");
-            security::log_audit_event("tool_call_success", json!({
-                "tool": name,
-                "elapsed_ms": elapsed
-            }));
+            security::log_audit_event(
+                "tool_call_success",
+                json!({
+                    "tool": name,
+                    "elapsed_ms": elapsed
+                }),
+            );
             JsonRpcResponse::success(id, result)
         }
         Err(e) => {
             let error_msg = e.to_string();
             error!(tool = %name, error = %error_msg, "Tool call failed with internal error");
-            security::log_audit_event("tool_call_failure", json!({
-                "tool": name,
-                "error": error_msg
-            }));
+            security::log_audit_event(
+                "tool_call_failure",
+                json!({
+                    "tool": name,
+                    "error": error_msg
+                }),
+            );
             JsonRpcResponse::success(
                 id,
                 json!({
