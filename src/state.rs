@@ -20,8 +20,46 @@ const DEFAULT_AST_CACHE_ENTRIES: usize = 256;
 /// Environment variable to configure AST cache size.
 const ENV_AST_CACHE_LIMIT: &str = "MCP_AST_CACHE_ENTRIES";
 
+/// Default maximum number of entries in Tool cache.
+const DEFAULT_TOOL_CACHE_ENTRIES: usize = 1024;
+
+/// Environment variable to configure Tool cache size.
+const ENV_TOOL_CACHE_LIMIT: &str = "MCP_TOOL_CACHE_ENTRIES";
+
 /// Global server state, initialised once at startup.
 static STATE: OnceLock<ServerState> = OnceLock::new();
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ToolCacheKey {
+    pub root_path: PathBuf,
+    pub tool_name: String,
+    pub canonical_args: String,
+}
+
+pub fn canonicalize_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| format!("{:?}", s)),
+        serde_json::Value::Array(items) => {
+            let rendered = items.iter()
+                .map(canonicalize_json)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("[{}]", rendered)
+        }
+        serde_json::Value::Object(map) => {
+            let mut entries = map.iter().collect::<Vec<_>>();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            let rendered = entries.into_iter()
+                .map(|(k, v)| format!("{}:{}", serde_json::to_string(k).unwrap_or_else(|_| format!("{:?}", k)), canonicalize_json(v)))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{}}}", rendered)
+        }
+    }
+}
 
 pub struct CachedAnalysis {
     pub mtime: SystemTime,
@@ -37,6 +75,8 @@ pub struct ServerState {
     index_ready: AtomicBool,
     /// AST cache with LRU eviction, indexed by absolute path.
     ast_cache: RwLock<LruCache<PathBuf, CachedAnalysis>>,
+    /// Tool cache with Moka, mapping ToolCacheKey to the final sanitised serde_json::Value response.
+    tool_cache: moka::future::Cache<ToolCacheKey, serde_json::Value>,
     /// True while a watcher-triggered index refresh loop is running.
     watch_refresh_running: AtomicBool,
     /// Set when watcher events require at least one refresh pass.
@@ -45,6 +85,8 @@ pub struct ServerState {
     security_config: SecurityConfig,
     /// Whether the client connection has been authenticated.
     client_authenticated: AtomicBool,
+    /// True if the project is detected to be an Angular project.
+    is_angular_project: bool,
 }
 
 impl ServerState {
@@ -69,18 +111,50 @@ impl ServerState {
             );
         }
 
+        // Load Tool cache limit from environment or use default
+        let tool_cache_limit = std::env::var(ENV_TOOL_CACHE_LIMIT)
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_TOOL_CACHE_ENTRIES);
+
+        if let Ok(limit_str) = std::env::var(ENV_TOOL_CACHE_LIMIT) {
+            info!(
+                "Tool cache limit configured via {} = {}",
+                ENV_TOOL_CACHE_LIMIT, limit_str
+            );
+        }
+
+        let tool_cache = moka::future::Cache::builder()
+            .max_capacity(tool_cache_limit as u64)
+            .build();
+
         let security_config = SecurityConfig::load();
         let client_authenticated = AtomicBool::new(security_config.auth_token.is_none());
+
+        // Fast discovery of Angular project: check angular.json or packages.json
+        let mut is_angular_project = root.join("angular.json").exists();
+        if !is_angular_project {
+            let package_json_path = root.join("package.json");
+            if package_json_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(package_json_path) {
+                    if content.contains("@angular/") {
+                        is_angular_project = true;
+                    }
+                }
+            }
+        }
 
         let state = ServerState {
             index: RwLock::new(FileIndex::empty(&root)),
             root,
             index_ready: AtomicBool::new(false),
             ast_cache: RwLock::new(LruCache::new(cache_limit)),
+            tool_cache,
             watch_refresh_running: AtomicBool::new(false),
             watch_refresh_pending: AtomicBool::new(false),
             security_config,
             client_authenticated,
+            is_angular_project,
         };
 
         STATE
@@ -95,6 +169,11 @@ impl ServerState {
         STATE
             .get()
             .expect("ServerState not initialised — call init() first")
+    }
+
+    /// Try to get the global state reference, returning None if not initialised.
+    pub fn get_opt() -> Option<&'static ServerState> {
+        STATE.get()
     }
 
     pub fn security_config(&self) -> &SecurityConfig {
@@ -117,6 +196,10 @@ impl ServerState {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn is_angular_project(&self) -> bool {
+        self.is_angular_project
     }
 
     pub async fn index(&self) -> Result<tokio::sync::RwLockReadGuard<'_, FileIndex>> {
@@ -212,6 +295,9 @@ impl ServerState {
         let new_index = FileIndex::build(&self.root)?;
         let files_found = new_index.allowed_files.len() + new_index.restricted_files.len();
 
+        // Invalidate tool cache for this project root
+        self.invalidate_tool_cache_for_root(&self.root).await;
+
         // Replace index
         {
             let mut index = self.index.write().await;
@@ -228,6 +314,28 @@ impl ServerState {
         };
 
         Ok((files_found, cleared_count))
+    }
+
+    pub fn make_tool_cache_key(&self, tool_name: &str, args: &serde_json::Value) -> ToolCacheKey {
+        ToolCacheKey {
+            root_path: self.root.clone(),
+            tool_name: tool_name.to_string(),
+            canonical_args: canonicalize_json(args),
+        }
+    }
+
+    pub fn tool_cache(&self) -> &moka::future::Cache<ToolCacheKey, serde_json::Value> {
+        &self.tool_cache
+    }
+
+    pub async fn invalidate_tool_cache_for_root(&self, root_path: &Path) {
+        let canonical_root = match std::fs::canonicalize(root_path) {
+            Ok(p) => p,
+            Err(_) => root_path.to_path_buf(),
+        };
+        debug!(root_path = %canonical_root.display(), "Invalidating tool cache for root");
+        let _ = self.tool_cache
+            .invalidate_entries_if(move |key, _| key.root_path == canonical_root);
     }
 
     /// Rebuild index when requested by the file-system watcher.
@@ -512,5 +620,23 @@ mod tests {
 
         assert!(!reclaimed, "guard must not reclaim when nothing pending");
         assert!(!running.load(Ordering::Acquire), "running stays false");
+    }
+
+    #[test]
+    fn test_canonicalize_json() {
+        use serde_json::json;
+        let v1 = json!({
+            "a": 1,
+            "b": [2, {"d": 4, "c": 3}],
+            "x": null,
+            "y": true
+        });
+        let v2 = json!({
+            "y": true,
+            "x": null,
+            "b": [2, {"c": 3, "d": 4}],
+            "a": 1
+        });
+        assert_eq!(canonicalize_json(&v1), canonicalize_json(&v2));
     }
 }

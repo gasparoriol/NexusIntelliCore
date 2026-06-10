@@ -21,17 +21,20 @@ mod symbol;
 
 pub use definitions::tool_definitions;
 
-/// Dispatch a `tools/call` request to the appropriate handler.
-pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
+fn is_cacheable_tool(name: &str) -> bool {
+    !matches!(name, "refresh_index" | "get_server_stats")
+}
+
+async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
     match name {
         "get_project_structure" => project::get_project_structure().await,
         "get_file_outline" => {
-            let file = require_str(&args, "file_path")?;
+            let file = require_str(args, "file_path")?;
             outline::get_file_outline(file).await
         }
         "inspect_symbol" => {
-            let file = require_str(&args, "file_path")?;
-            let symbol = require_str(&args, "symbol_name")?;
+            let file = require_str(args, "file_path")?;
+            let symbol = require_str(args, "symbol_name")?;
             let match_mode = args
                 .get("match_mode")
                 .and_then(|v| v.as_str())
@@ -59,11 +62,11 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
         "refresh_index" => server::refresh_index().await,
         "get_server_stats" => server::get_server_stats().await,
         "analyze_angular_component" => {
-            let path = require_str(&args, "component_path")?;
+            let path = require_str(args, "component_path")?;
             angular::analyze_angular_component(path).await
         }
         "get_module_summary" => {
-            let file = require_str(&args, "file_path")?;
+            let file = require_str(args, "file_path")?;
             let public_only = args
                 .get("public_only")
                 .and_then(|v| v.as_bool())
@@ -105,6 +108,34 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
         }
         other => Ok(error_response(format!("Unknown tool: {}", other))),
     }
+}
+
+/// Dispatch a `tools/call` request to the appropriate handler.
+pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
+    if !is_cacheable_tool(name) {
+        return dispatch_tool_uncached(name, &args).await;
+    }
+
+    let state = crate::state::ServerState::get();
+    let key = state.make_tool_cache_key(name, &args);
+    let args_for_compute = args.clone();
+    let name_for_compute = name.to_owned();
+
+    let cache = state.tool_cache();
+    let result = cache
+        .get_with(key.clone(), async move {
+            let computed = dispatch_tool_uncached(&name_for_compute, &args_for_compute)
+                .await
+                .unwrap_or_else(|e| error_response(format!("Internal tool error: {}", e)));
+            computed
+        })
+        .await;
+
+    if result.get("isError").and_then(|v| v.as_bool()) == Some(true) {
+        cache.invalidate(&key).await;
+    }
+
+    Ok(result)
 }
 
 fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {

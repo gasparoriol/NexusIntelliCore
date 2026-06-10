@@ -104,6 +104,10 @@ impl FileWatcher {
                         match classify_event(&ev) {
                             WatchAction::InvalidateCache(paths) => {
                                 let state = ServerState::get();
+                                let root = state.root().to_owned();
+                                rt_handle.spawn(async move {
+                                    ServerState::get().invalidate_tool_cache_for_root(&root).await;
+                                });
                                 for path in &paths {
                                     debug!(path = %path.display(), "Cache invalidation triggered");
                                     // Evict single entry; errors are silently
@@ -112,6 +116,11 @@ impl FileWatcher {
                                 }
                             }
                             WatchAction::ScheduleIndexRefresh => {
+                                let state = ServerState::get();
+                                let root = state.root().to_owned();
+                                rt_handle.spawn(async move {
+                                    ServerState::get().invalidate_tool_cache_for_root(&root).await;
+                                });
                                 if refresh_debounce_active
                                     .compare_exchange(
                                         false,

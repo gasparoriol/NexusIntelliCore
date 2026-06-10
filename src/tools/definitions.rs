@@ -2,8 +2,12 @@ use serde_json::{json, Value};
 
 /// JSON Schema definitions returned by `tools/list`.
 pub fn tool_definitions() -> Value {
-    json!([
-        {
+    let is_angular = crate::state::ServerState::get_opt()
+        .map(|s| s.is_angular_project())
+        .unwrap_or(true);
+
+    let mut tools = vec![
+        json!({
             "name": "get_project_structure",
             "description": "Returns the project directory tree. Files protected by .mcpignore are labelled '(Acceso Restringido)' and their contents are never exposed.",
             "inputSchema": {
@@ -11,10 +15,10 @@ pub fn tool_definitions() -> Value {
                 "properties": {},
                 "required": []
             }
-        },
-        {
+        }),
+        json!({
             "name": "get_file_outline",
-            "description": "Returns a structural map of a file: class names, canonical function/method identifiers, signatures, and imports. The canonical identifier can be passed directly to inspect_symbol with match_mode='qualified'. Restricted files return an access-denied notice.",
+            "description": "Returns a structural map of a file: class names, canonical function/method identifiers, signatures, and imports. The canonical identifier can be passed directly to inspect_symbol with match_mode='qualified'. Restricted files return an access-denied notice. WARNING: Use to retrieve the structural map of imports and declarations. DO NOT open or read the entire file if you only need function names/signatures.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -25,10 +29,10 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": ["file_path"]
             }
-        },
-        {
+        }),
+        json!({
             "name": "inspect_symbol",
-            "description": "Returns the source of a specific function or method. The output passes through the full Phase-4 sanitization pipeline.",
+            "description": "Returns the source of a specific function or method. The output passes through the full Phase-4 sanitization pipeline. WARNING: Use ONLY to retrieve exact method/class signatures and their AST bodies in large files. DO NOT use for finding hardcoded strings or simple variable names; use standard search/grep instead.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -56,8 +60,8 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": ["file_path", "symbol_name"]
             }
-        },
-        {
+        }),
+        json!({
             "name": "get_dependencies_graph",
             "description": "Analyses import/use statements across the project and returns a JSON dependency graph (nodes = files, edges = import relationships).",
             "inputSchema": {
@@ -65,8 +69,8 @@ pub fn tool_definitions() -> Value {
                 "properties": {},
                 "required": []
             }
-        },
-        {
+        }),
+        json!({
             "name": "search_design_patterns",
             "description": "Heuristically detects common design patterns (Singleton, Builder, Factory, Observer, Repository, Strategy) across the project or in a single file.",
             "inputSchema": {
@@ -79,8 +83,8 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": []
             }
-        },
-        {
+        }),
+        json!({
             "name": "audit_security_measures",
             "description": "Scans the project for security issues: hardcoded secrets, unsafe code blocks, eval/exec calls, and SQL-injection risks. Detected secret VALUES are never returned — only their type and line number are reported.",
             "inputSchema": {
@@ -88,8 +92,8 @@ pub fn tool_definitions() -> Value {
                 "properties": {},
                 "required": []
             }
-        },
-        {
+        }),
+        json!({
             "name": "refresh_index",
             "description": "Rebuilds the project file index from disk and clears the AST cache. Use this when files are added/removed or to free memory. Returns statistics on files indexed and cache cleared.",
             "inputSchema": {
@@ -97,8 +101,8 @@ pub fn tool_definitions() -> Value {
                 "properties": {},
                 "required": []
             }
-        },
-        {
+        }),
+        json!({
             "name": "get_server_stats",
             "description": "Returns server statistics: AST cache size, index metadata, and uptime. Debug-only tool (requires RUST_LOG=debug).",
             "inputSchema": {
@@ -106,22 +110,8 @@ pub fn tool_definitions() -> Value {
                 "properties": {},
                 "required": []
             }
-        },
-        {
-            "name": "analyze_angular_component",
-            "description": "Analyses an Angular component (*.component.ts) and returns the resolved TS → HTML → CSS graph: selector, class name, template elements, Angular components used, CSS classes referenced, and style selectors.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "component_path": {
-                        "type": "string",
-                        "description": "Absolute path to the Angular *.component.ts file"
-                    }
-                },
-                "required": ["component_path"]
-            }
-        },
-        {
+        }),
+        json!({
             "name": "get_module_summary",
             "description": "Generates a functional summary of a source file: module-level documentation, public and private symbols with their doc comments, and a breakdown of external vs internal imports. Useful for understanding the purpose and API surface of a module without reading its full source.",
             "inputSchema": {
@@ -138,8 +128,8 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": ["file_path"]
             }
-        },
-        {
+        }),
+        json!({
             "name": "generate_project_docs",
             "description": "Analyses the indexed project and generates user-facing Markdown documentation: what the application does, how to use it, its public API surface, and inferred practical use cases. Designed for the end-user of the analysed application, not for the developer modifying its source code.",
             "inputSchema": {
@@ -170,6 +160,25 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": []
             }
-        }
-    ])
+        })
+    ];
+
+    if is_angular {
+        tools.push(json!({
+            "name": "analyze_angular_component",
+            "description": "Analyses an Angular component (*.component.ts) and returns the resolved TS → HTML → CSS graph: selector, class name, template elements, Angular components used, CSS classes referenced, and style selectors.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "component_path": {
+                        "type": "string",
+                        "description": "Absolute path to the Angular *.component.ts file"
+                    }
+                },
+                "required": ["component_path"]
+            }
+        }));
+    }
+
+    Value::Array(tools)
 }
