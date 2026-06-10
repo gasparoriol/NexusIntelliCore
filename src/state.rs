@@ -85,6 +85,8 @@ pub struct ServerState {
     security_config: SecurityConfig,
     /// Whether the client connection has been authenticated.
     client_authenticated: AtomicBool,
+    /// True if the project is detected to be an Angular project.
+    is_angular_project: bool,
 }
 
 impl ServerState {
@@ -129,6 +131,19 @@ impl ServerState {
         let security_config = SecurityConfig::load();
         let client_authenticated = AtomicBool::new(security_config.auth_token.is_none());
 
+        // Fast discovery of Angular project: check angular.json or packages.json
+        let mut is_angular_project = root.join("angular.json").exists();
+        if !is_angular_project {
+            let package_json_path = root.join("package.json");
+            if package_json_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(package_json_path) {
+                    if content.contains("@angular/") {
+                        is_angular_project = true;
+                    }
+                }
+            }
+        }
+
         let state = ServerState {
             index: RwLock::new(FileIndex::empty(&root)),
             root,
@@ -139,6 +154,7 @@ impl ServerState {
             watch_refresh_pending: AtomicBool::new(false),
             security_config,
             client_authenticated,
+            is_angular_project,
         };
 
         STATE
@@ -153,6 +169,11 @@ impl ServerState {
         STATE
             .get()
             .expect("ServerState not initialised — call init() first")
+    }
+
+    /// Try to get the global state reference, returning None if not initialised.
+    pub fn get_opt() -> Option<&'static ServerState> {
+        STATE.get()
     }
 
     pub fn security_config(&self) -> &SecurityConfig {
@@ -175,6 +196,10 @@ impl ServerState {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn is_angular_project(&self) -> bool {
+        self.is_angular_project
     }
 
     pub async fn index(&self) -> Result<tokio::sync::RwLockReadGuard<'_, FileIndex>> {
