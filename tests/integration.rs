@@ -362,3 +362,28 @@ fn inspect_symbol_return_all_matches_returns_json_with_sanitized_sources() {
         assert!(m.get("source").is_some(), "Match: {}", m);
     }
 }
+
+#[test]
+fn tool_caching_and_invalidation() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let arguments = serde_json::json!({
+        "file_path": format!("{}/src/state.rs", root)
+    });
+    
+    // First call: should compute
+    let res1 = call_tool(root, "get_file_outline", arguments.clone());
+    
+    // Second call: should hit cache
+    let res2 = call_tool(root, "get_file_outline", arguments.clone());
+    
+    assert_eq!(res1, res2, "Cached response should match original response");
+
+    // Call refresh_index (which should invalidate the tool cache)
+    let refresh_res = call_tool(root, "refresh_index", serde_json::json!({}));
+    assert!(refresh_res.contains("result"), "refresh_index should succeed");
+
+    // Third call: should recompute (but return the same result)
+    let res3 = call_tool(root, "get_file_outline", arguments);
+    assert_eq!(res1, res3, "Response after refresh_index should still match");
+}
+

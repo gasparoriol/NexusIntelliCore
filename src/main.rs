@@ -66,6 +66,7 @@ async fn main() {
     let mut seen_first_message = false;
 
     loop {
+        /*/
         let read_result = if !seen_first_message {
             match timeout(Duration::from_secs(5), transport.read_message()).await {
                 Ok(result) => result,
@@ -79,6 +80,8 @@ async fn main() {
         } else {
             transport.read_message().await
         };
+        */
+        let read_result = transport.read_message().await;
 
         match read_result {
             Ok(None) => {
