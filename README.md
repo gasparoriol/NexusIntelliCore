@@ -39,6 +39,11 @@ All tool outputs pass through a centralized Privacy Gateway.
 - Compatibility support for line-delimited JSON mode
 - Structured logging through `tracing`
 
+### Optimization & Caching
+
+- **Tool Query Cache**: Caches final outputs of deterministic tools using `moka::future::Cache` to avoid re-analysing files when project code is unchanged. Purgings are immediate on file watcher events and concurrent misses are deduplicated.
+- **Dynamic Tool Discovery**: Scans project root on startup; if Angular is not detected (`angular.json` or `@angular/` package dependencies), the `analyze_angular_component` tool is dynamically hidden from the client to reduce context noise and model hallucinations.
+
 ### Analysis Tools
 
 The server exposes eleven MCP tools:

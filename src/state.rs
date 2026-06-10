@@ -334,7 +334,7 @@ impl ServerState {
             Err(_) => root_path.to_path_buf(),
         };
         debug!(root_path = %canonical_root.display(), "Invalidating tool cache for root");
-        self.tool_cache
+        let _ = self.tool_cache
             .invalidate_entries_if(move |key, _| key.root_path == canonical_root);
     }
 
