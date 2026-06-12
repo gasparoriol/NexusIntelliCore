@@ -1,4 +1,4 @@
-use super::lang::{ts_language, Lang};
+use super::lang::{ts_language, EvalMode, Lang};
 use super::types::{AuditFinding, AuditFindingKind};
 use tree_sitter::{Parser, Query, QueryCursor};
 
@@ -34,6 +34,9 @@ pub fn audit_file_ast(source: &str, lang: &Lang) -> Vec<AuditFinding> {
         for query_str in &[
             crate::audit_queries::RUST_UNSAFE_BLOCK,
             crate::audit_queries::RUST_UNSAFE_FN,
+            crate::audit_queries::RUST_INLINE_ASM_QUERY,
+            crate::audit_queries::RUST_PANICS,
+            crate::audit_queries::RUST_UNSAFE_BLOCK_QUERY,
         ] {
             let query = match Query::new(ts_lang, query_str) {
                 Ok(q) => q,
@@ -60,12 +63,9 @@ pub fn audit_file_ast(source: &str, lang: &Lang) -> Vec<AuditFinding> {
     }
 
     // --- Dynamic execution (eval/exec) ---
-    let eval_query_str = match lang {
-        Lang::Python => Some(crate::audit_queries::PY_EVAL),
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx => Some(crate::audit_queries::JS_EVAL),
-        _ => None,
-    };
-
+    let eval_query_str = lang
+        .get_query(EvalMode::Exec)
+        .or_else(|| lang.get_query(EvalMode::Basic));
     if let Some(qstr) = eval_query_str {
         if let Ok(query) = Query::new(ts_lang, qstr) {
             let mut cursor = QueryCursor::new();

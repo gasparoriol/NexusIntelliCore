@@ -18,7 +18,7 @@ mod watcher;
 
 use protocol::{JsonRpcRequest, JsonRpcResponse};
 use serde_json::{json, Value};
-use tokio::time::{timeout, Duration};
+
 use tracing::{error, info, warn};
 
 // ---------------------------------------------------------------------------
@@ -63,7 +63,6 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let mut transport = transport::McpTransport::new(stdin, stdout);
-    let mut seen_first_message = false;
 
     loop {
         /*/
@@ -89,7 +88,6 @@ async fn main() {
                 break;
             }
             Ok(Some(msg)) => {
-                seen_first_message = true;
                 let response = match serde_json::from_value::<JsonRpcRequest>(msg) {
                     Ok(req) => {
                         if req.jsonrpc != "2.0" {

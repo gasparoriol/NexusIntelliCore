@@ -1,4 +1,4 @@
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct SecurityConfig {
     // Token required for authenticate cliients
     pub auth_token: Option<String>,
@@ -30,22 +30,26 @@ impl SecurityConfig {
     fn load_from_json() -> Option<Self> {
         let config_path = std::env::var("MCP_SECURITY_CONFIG_PATH").ok()?;
 
-        let file = std::fs::File::open(&config_path)
-            .unwrap_or_else(|e| panic!("Failed to open security config file at '{}': {}", config_path, e));
+        let file = std::fs::File::open(&config_path).unwrap_or_else(|e| {
+            panic!(
+                "Failed to open security config file at '{}': {}",
+                config_path, e
+            )
+        });
 
-        let config: Self = serde_json::from_reader(&file)
-            .unwrap_or_else(|e| panic!("Failed to parse security config JSON at '{}': {}", config_path, e));
+        let config: Self = serde_json::from_reader(&file).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse security config JSON at '{}': {}",
+                config_path, e
+            )
+        });
 
         Some(config)
     }
 
     pub fn load() -> Self {
         // First try to load from JSON config file, then fallback to environment variables
-        let mut config = Self::load_from_json().unwrap_or_else(|| SecurityConfig {
-            auth_token: None,
-            allowed_tools: None,
-            audit_log_path: None,
-        });
+        let mut config = SecurityConfig::load_from_json().unwrap_or_default();
 
         if config.auth_token.is_none()
             && config.allowed_tools.is_none()
@@ -76,13 +80,15 @@ pub fn constant_time_compare(a: &str, b: &str) -> bool {
     result == 0
 }
 
-
 pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
     // Try to get ServerState, but do not panic if not yet initialized
-    let state = match std::panic::catch_unwind(|| crate::state::ServerState::get()) {
+    let state = match std::panic::catch_unwind(crate::state::ServerState::get) {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => {
+            return;
+        }
     };
+
     if let Some(ref path) = state.security_config().audit_log_path {
         let timestamp = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
             Ok(d) => d.as_secs(),
@@ -151,14 +157,34 @@ mod tests {
 
         let config_vals = SecurityConfig::load();
         assert_eq!(config_vals.auth_token, Some("test_token_123".to_string()));
-        assert_eq!(config_vals.allowed_tools, Some(vec!["tool1".to_string(), "tool2".to_string()]));
-        assert_eq!(config_vals.audit_log_path, Some(std::path::PathBuf::from("/tmp/audit.log")));
+        assert_eq!(
+            config_vals.allowed_tools,
+            Some(vec!["tool1".to_string(), "tool2".to_string()])
+        );
+        assert_eq!(
+            config_vals.audit_log_path,
+            Some(std::path::PathBuf::from("/tmp/audit.log"))
+        );
 
         // Restore original env
-        if let Some(v) = orig_token { std::env::set_var("MCP_AUTH_TOKEN", v); } else { std::env::remove_var("MCP_AUTH_TOKEN"); }
-        if let Some(v) = orig_tools { std::env::set_var("MCP_ALLOWED_TOOLS", v); } else { std::env::remove_var("MCP_ALLOWED_TOOLS"); }
-        if let Some(v) = orig_path { std::env::set_var("MCP_AUDIT_LOG_PATH", v); } else { std::env::remove_var("MCP_AUDIT_LOG_PATH"); }
-        if let Some(v) = orig_config { std::env::set_var("MCP_SECURITY_CONFIG_PATH", v); }
+        if let Some(v) = orig_token {
+            std::env::set_var("MCP_AUTH_TOKEN", v);
+        } else {
+            std::env::remove_var("MCP_AUTH_TOKEN");
+        }
+        if let Some(v) = orig_tools {
+            std::env::set_var("MCP_ALLOWED_TOOLS", v);
+        } else {
+            std::env::remove_var("MCP_ALLOWED_TOOLS");
+        }
+        if let Some(v) = orig_path {
+            std::env::set_var("MCP_AUDIT_LOG_PATH", v);
+        } else {
+            std::env::remove_var("MCP_AUDIT_LOG_PATH");
+        }
+        if let Some(v) = orig_config {
+            std::env::set_var("MCP_SECURITY_CONFIG_PATH", v);
+        }
     }
 
     #[test]
@@ -179,7 +205,10 @@ mod tests {
         std::fs::write(&config_file, "{invalid_json}").unwrap();
 
         let orig_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
-        std::env::set_var("MCP_SECURITY_CONFIG_PATH", config_file.to_string_lossy().to_string());
+        std::env::set_var(
+            "MCP_SECURITY_CONFIG_PATH",
+            config_file.to_string_lossy().to_string(),
+        );
 
         let _result = std::panic::catch_unwind(|| {
             SecurityConfig::load();
@@ -197,5 +226,3 @@ mod tests {
         panic!("Failed to parse security config JSON");
     }
 }
-
-

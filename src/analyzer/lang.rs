@@ -1,6 +1,11 @@
 use std::path::Path;
 use tree_sitter::Language;
 
+pub enum EvalMode {
+    Basic,
+    Exec,
+}
+
 pub enum Lang {
     Rust,
     Python,
@@ -15,6 +20,23 @@ pub enum Lang {
     Sass,
     Html,
     Unknown,
+}
+
+impl Lang {
+    pub fn get_query(&self, mode: EvalMode) -> Option<&'static str> {
+        match (self, mode) {
+            (Lang::Python, EvalMode::Basic) => Some(crate::audit_queries::PY_EVAL),
+            (Lang::Python, EvalMode::Exec) => Some(crate::audit_queries::PYTHON_EVAL_EXEC_QUERY),
+            (Lang::Java, EvalMode::Exec) => Some(crate::audit_queries::JAVA_EXEC_QUERY),
+            (Lang::JavaScript | Lang::TypeScript | Lang::Tsx, EvalMode::Basic) => {
+                Some(crate::audit_queries::JS_EVAL)
+            }
+            (Lang::JavaScript | Lang::TypeScript | Lang::Tsx, EvalMode::Exec) => {
+                Some(crate::audit_queries::JS_EVAL_QUERY)
+            }
+            _ => None,
+        }
+    }
 }
 
 pub fn detect_language(path: &Path) -> Lang {
