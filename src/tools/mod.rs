@@ -143,3 +143,46 @@ fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Missing required argument: {}", key))
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    fn ensure_state_init() {
+        if crate::state::ServerState::get_opt().is_none() {
+            let original_security_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
+            std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
+
+            let init_result = crate::state::ServerState::init(".");
+
+            if let Some(value) = original_security_config {
+                std::env::set_var("MCP_SECURITY_CONFIG_PATH", value);
+            } else {
+                std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
+            }
+
+            init_result.expect("test should initialize ServerState with repository root");
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_generate_project_docs() {
+        ensure_state_init();
+
+        let args = json!({
+            "sections": ["overview"],
+            "max_files": 1,
+            "language": "en"
+        });
+
+        let response = super::dispatch_tool_uncached("generate_project_docs", &args)
+            .await
+            .expect("dispatcher should execute generate_project_docs route");
+
+        assert_ne!(
+            response.get("isError").and_then(|v| v.as_bool()),
+            Some(true),
+            "generate_project_docs dispatch should not return an error response"
+        );
+    }
+}
