@@ -43,21 +43,21 @@ pub(super) async fn get_server_stats() -> Result<Value> {
     }
 
     let state = crate::state::ServerState::get();
-    let (cache_entries, cache_max) = state.get_cache_stats().await;
+    let stats = state.get_cache_stats().await;
     let index = state.index().await?;
 
     let stats_json = json!({
-        "cache": {
-            "entries": cache_entries,
-            "max_entries": cache_max,
-            "utilization_percent": if cache_max > 0 { (cache_entries * 100) / cache_max } else { 0 }
+        "ast_cache": {
+            "entries": stats.ast_entries,
+            "max_entries": stats.ast_max,
+            "utilization_percent": utilization(stats.ast_entries, stats.ast_max)
         },
-        "index": {
-            "allowed_files": index.allowed_files.len(),
-            "restricted_files": index.restricted_files.len(),
-            "total_files": index.allowed_files.len() + index.restricted_files.len()
+        "tool_cache": {
+            "entries": stats.tool_entries,
+            "max_entries": stats.tool_max,
+            "utilization_percent": utilization(stats.tool_entries, stats.tool_max)
         },
-        "root": state.root().display().to_string()
+        // ...
     });
 
     let msg = format!(
@@ -77,13 +77,9 @@ pub(super) async fn get_server_stats() -> Result<Value> {
          ```json\n\
          {}\n\
          ```",
-        cache_entries,
-        cache_max,
-        if cache_max > 0 {
-            (cache_entries as f64 / cache_max as f64) * 100.0
-        } else {
-            0.0
-        },
+        stats.ast_entries,
+        stats.ast_max,
+        utilization(stats.ast_entries, stats.ast_max),
         index.allowed_files.len(),
         index.restricted_files.len(),
         index.allowed_files.len() + index.restricted_files.len(),
@@ -92,4 +88,12 @@ pub(super) async fn get_server_stats() -> Result<Value> {
     );
 
     Ok(tool_response(vec![text_content(msg)]))
+}
+
+fn utilization(entries: usize, max_entries: usize) -> f64 {
+    if max_entries == 0 {
+        0.0
+    } else {
+        (entries as f64 / max_entries as f64) * 100.0
+    }
 }

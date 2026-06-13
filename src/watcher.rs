@@ -58,7 +58,7 @@ pub struct FileWatcher {
 impl FileWatcher {
     /// Start watching `root` recursively. Returns `None` if the watcher cannot
     /// be initialised (non-fatal — the server continues without it).
-    pub fn start(root: PathBuf) -> Option<Self> {
+    pub async fn start(root: PathBuf) -> Option<Self> {
         // Notify emits events via the callback channel. We read them in a
         // blocking loop and forward actions to server state.
         let (tx, rx) = std::sync::mpsc::channel();
@@ -106,20 +106,24 @@ impl FileWatcher {
                                 let state = ServerState::get();
                                 let root = state.root().to_owned();
                                 rt_handle.spawn(async move {
-                                    ServerState::get().invalidate_tool_cache_for_root(&root).await;
+                                    ServerState::get()
+                                        .invalidate_tool_cache_for_root(&root)
+                                        .await;
                                 });
                                 for path in &paths {
                                     debug!(path = %path.display(), "Cache invalidation triggered");
                                     // Evict single entry; errors are silently
                                     // ignored (entry may not be cached yet).
-                                    let _ = state.evict_cache_entry(path);
+                                    rt_handle.block_on(state.evict_cache_entry(path));
                                 }
                             }
                             WatchAction::ScheduleIndexRefresh => {
                                 let state = ServerState::get();
                                 let root = state.root().to_owned();
                                 rt_handle.spawn(async move {
-                                    ServerState::get().invalidate_tool_cache_for_root(&root).await;
+                                    ServerState::get()
+                                        .invalidate_tool_cache_for_root(&root)
+                                        .await;
                                 });
                                 if refresh_debounce_active
                                     .compare_exchange(

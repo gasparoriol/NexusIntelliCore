@@ -29,8 +29,6 @@ ignore = "0.4"
 petgraph = "0.6"
 globset = "0.4"
 
-# Caching
-lru = "0.12"
 
 # Sanitization and Privacy
 regex = "1.10"
@@ -45,4 +43,3 @@ tree-sitter-html = "=0.20.0"
 # File watcher for cache invalidation
 notify = "6"
 moka = { version = "0.12", features = ["future"] }
-

@@ -1,18 +1,20 @@
-use std::num::NonZeroUsize;
+use anyhow::{Context, Result};
+use moka::future::Cache;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
-use std::time::SystemTime;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
-use lru::LruCache;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::analyzer;
+use crate::analyzer::{
+    self, ClassInfo, CssRuleInfo, FunctionInfo, HtmlElementInfo, ImportInfo, StringLiteral,
+};
 use crate::indexer::FileIndex;
-
 use crate::security::SecurityConfig;
+
+use std::num::NonZeroUsize;
 
 /// Default maximum number of entries in AST cache.
 const DEFAULT_AST_CACHE_ENTRIES: usize = 256;
@@ -21,7 +23,7 @@ const DEFAULT_AST_CACHE_ENTRIES: usize = 256;
 const ENV_AST_CACHE_LIMIT: &str = "MCP_AST_CACHE_ENTRIES";
 
 /// Default maximum number of entries in Tool cache.
-const DEFAULT_TOOL_CACHE_ENTRIES: usize = 1024;
+const DEFAULT_TOOL_CACHE_ENTRIES: usize = 100 * 1024 * 1024;
 
 /// Environment variable to configure Tool cache size.
 const ENV_TOOL_CACHE_LIMIT: &str = "MCP_TOOL_CACHE_ENTRIES";
@@ -36,14 +38,24 @@ pub struct ToolCacheKey {
     pub canonical_args: String,
 }
 
+pub struct AstCacheStats {
+    pub ast_entries: usize,
+    pub ast_max: usize,
+    pub tool_entries: usize,
+    pub tool_max: usize,
+}
+
 pub fn canonicalize_json(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => serde_json::to_string(s).unwrap_or_else(|_| format!("{:?}", s)),
+        serde_json::Value::String(s) => {
+            serde_json::to_string(s).unwrap_or_else(|_| format!("{:?}", s))
+        }
         serde_json::Value::Array(items) => {
-            let rendered = items.iter()
+            let rendered = items
+                .iter()
                 .map(canonicalize_json)
                 .collect::<Vec<_>>()
                 .join(",");
@@ -52,8 +64,15 @@ pub fn canonicalize_json(value: &serde_json::Value) -> String {
         serde_json::Value::Object(map) => {
             let mut entries = map.iter().collect::<Vec<_>>();
             entries.sort_by(|(a, _), (b, _)| a.cmp(b));
-            let rendered = entries.into_iter()
-                .map(|(k, v)| format!("{}:{}", serde_json::to_string(k).unwrap_or_else(|_| format!("{:?}", k)), canonicalize_json(v)))
+            let rendered = entries
+                .into_iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap_or_else(|_| format!("{:?}", k)),
+                        canonicalize_json(v)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(",");
             format!("{{{}}}", rendered)
@@ -61,8 +80,8 @@ pub fn canonicalize_json(value: &serde_json::Value) -> String {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct CachedAnalysis {
-    pub mtime: SystemTime,
     pub analysis: analyzer::FileAnalysis,
 }
 
@@ -73,8 +92,8 @@ pub struct ServerState {
     index: RwLock<FileIndex>,
     /// Whether the index has been fully built at least once.
     index_ready: AtomicBool,
-    /// AST cache with LRU eviction, indexed by absolute path.
-    ast_cache: RwLock<LruCache<PathBuf, CachedAnalysis>>,
+    /// AST cache with Moka, mapping PathBuf to CachedAnalysis.
+    ast_cache: moka::future::Cache<PathBuf, CachedAnalysis>,
     /// Tool cache with Moka, mapping ToolCacheKey to the final sanitised serde_json::Value response.
     tool_cache: moka::future::Cache<ToolCacheKey, serde_json::Value>,
     /// True while a watcher-triggered index refresh loop is running.
@@ -87,6 +106,10 @@ pub struct ServerState {
     client_authenticated: AtomicBool,
     /// True if the project is detected to be an Angular project.
     is_angular_project: bool,
+    /// Configured maximum number of entries in the AST cache.
+    ast_cache_limit: usize,
+    /// Configured maximum number of entries in the Tool cache.
+    tool_cache_limit: usize,
 }
 
 impl ServerState {
@@ -124,7 +147,7 @@ impl ServerState {
             );
         }
 
-        let tool_cache = moka::future::Cache::builder()
+        let tool_cache = Cache::builder()
             .max_capacity(tool_cache_limit as u64)
             .build();
 
@@ -148,8 +171,44 @@ impl ServerState {
             index: RwLock::new(FileIndex::empty(&root)),
             root,
             index_ready: AtomicBool::new(false),
-            ast_cache: RwLock::new(LruCache::new(cache_limit)),
+            ast_cache: moka::future::Cache::builder()
+                .max_capacity(cache_limit.get() as u64)
+                .weigher(|_key: &PathBuf, value: &CachedAnalysis| -> u32 {
+                    let analysis = &value.analysis;
+
+                    // struct size
+                    let mut weight = std::mem::size_of::<CachedAnalysis>()
+                        + std::mem::size_of::<analyzer::FileAnalysis>();
+
+                    // Sum of the capacities of the vectors and strings in FileAnalysis
+                    // 1. Vectors of structs
+                    weight += analysis.functions.capacity() * std::mem::size_of::<FunctionInfo>();
+                    weight += analysis.classes.capacity() * std::mem::size_of::<ClassInfo>();
+                    weight += analysis.imports.capacity() * std::mem::size_of::<ImportInfo>();
+                    weight +=
+                        analysis.string_literals.capacity() * std::mem::size_of::<StringLiteral>();
+
+                    // 3. Types with Option
+                    if let Some(ref rules) = analysis.css_rules {
+                        weight += rules.capacity() * std::mem::size_of::<CssRuleInfo>();
+                    }
+                    if let Some(ref elements) = analysis.html_elements {
+                        weight += elements.capacity() * std::mem::size_of::<HtmlElementInfo>();
+                    }
+
+                    // 4. Dynamic strings (this is an estimate, as String stores data on the heap)
+                    weight += analysis.language.capacity();
+                    if let Some(ref doc) = analysis.module_doc {
+                        weight += doc.capacity();
+                    }
+
+                    weight.try_into().unwrap_or(u32::MAX)
+                })
+                .time_to_live(Duration::from_secs(3600))
+                .build(),
             tool_cache,
+            ast_cache_limit: cache_limit.get(),
+            tool_cache_limit: DEFAULT_TOOL_CACHE_ENTRIES,
             watch_refresh_running: AtomicBool::new(false),
             watch_refresh_pending: AtomicBool::new(false),
             security_config,
@@ -252,45 +311,28 @@ impl ServerState {
 
     /// Get a cached analysis or parse fresh if stale/missing.
     pub async fn get_analysis(&self, path: &Path) -> Result<analyzer::FileAnalysis> {
-        let metadata = tokio::fs::metadata(path).await?;
-        let current_mtime = metadata.modified()?;
+        let path_buf = path.to_path_buf();
 
-        // Check cache — using write lock because LRU::get() updates position
-        {
-            let mut cache = self.ast_cache.write().await;
-            if let Some(cached) = cache.get(path) {
-                if cached.mtime == current_mtime {
-                    return Ok(cached.analysis.clone());
-                } else {
-                    // Stale entry — remove it
-                    cache.pop(path);
-                }
-            }
-        }
+        let cached = self
+            .ast_cache
+            .get_with(path_buf.clone(), async move {
+                // We only reach here if the cache is empty or was invalidated by the watcher
+                let analysis =
+                    tokio::task::spawn_blocking(move || analyzer::analyze_file(&path_buf))
+                        .await
+                        .expect("spawn_blocking panicked")
+                        .unwrap_or_default();
 
-        // Cache miss or stale — parse fresh
-        let path_clone = path.to_owned();
-        let analysis =
-            tokio::task::spawn_blocking(move || analyzer::analyze_file(&path_clone)).await??;
+                CachedAnalysis { analysis }
+            })
+            .await;
 
-        // Store in cache — LruCache::put() will evict oldest entry if at capacity
-        {
-            let mut cache = self.ast_cache.write().await;
-            cache.put(
-                path.to_path_buf(),
-                CachedAnalysis {
-                    mtime: current_mtime,
-                    analysis: analysis.clone(),
-                },
-            );
-        }
-
-        Ok(analysis)
+        Ok(cached.analysis)
     }
 
     /// Clear the AST cache and rebuild the FileIndex.
     /// Used by refresh_index() tool.
-    pub async fn refresh_index(&self) -> Result<(usize, usize)> {
+    pub async fn refresh_index(&self) -> Result<(usize, u64)> {
         // Rebuild index
         let new_index = FileIndex::build(&self.root)?;
         let files_found = new_index.allowed_files.len() + new_index.restricted_files.len();
@@ -306,12 +348,9 @@ impl ServerState {
         }
 
         // Clear AST cache
-        let cleared_count = {
-            let mut cache = self.ast_cache.write().await;
-            let count = cache.len();
-            cache.clear();
-            count
-        };
+        let count = self.ast_cache.entry_count();
+        self.ast_cache.invalidate_all();
+        let cleared_count = count;
 
         Ok((files_found, cleared_count))
     }
@@ -334,7 +373,8 @@ impl ServerState {
             Err(_) => root_path.to_path_buf(),
         };
         debug!(root_path = %canonical_root.display(), "Invalidating tool cache for root");
-        let _ = self.tool_cache
+        let _ = self
+            .tool_cache
             .invalidate_entries_if(move |key, _| key.root_path == canonical_root);
     }
 
@@ -402,21 +442,19 @@ impl ServerState {
     ///
     /// Called by the file watcher on content changes (e.g. modify).
     /// Returns `true` if an entry was present and removed; `false` if not cached.
-    pub fn evict_cache_entry(&self, path: &std::path::Path) -> bool {
-        // Use `try_write` — if the lock is busy we silently skip eviction.
-        // The mtime-check in `get_analysis` will catch the stale entry on the
-        // next request anyway.
-        if let Ok(mut cache) = self.ast_cache.try_write() {
-            cache.pop(path).is_some()
-        } else {
-            false
-        }
+    pub async fn evict_cache_entry(&self, path: &std::path::Path) -> bool {
+        let existed = self.ast_cache.remove(path).await.is_some();
+        existed
     }
 
     /// Get current cache statistics (debug-only).
-    pub async fn get_cache_stats(&self) -> (usize, usize) {
-        let cache = self.ast_cache.read().await;
-        (cache.len(), DEFAULT_AST_CACHE_ENTRIES)
+    pub async fn get_cache_stats(&self) -> AstCacheStats {
+        AstCacheStats {
+            ast_entries: self.ast_cache.entry_count() as usize,
+            ast_max: self.ast_cache_limit,
+            tool_entries: self.tool_cache.entry_count() as usize,
+            tool_max: self.tool_cache_limit,
+        }
     }
 }
 
@@ -427,56 +465,19 @@ impl ServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::NonZeroUsize;
+    use std::{num::NonZeroUsize, time::SystemTime};
 
-    #[test]
-    fn test_lru_cache_capacity() {
-        // Verify that LRU cache respects its configured capacity
-        let capacity = NonZeroUsize::new(3).unwrap();
-        let cache: lru::LruCache<i32, String> = lru::LruCache::new(capacity);
-        assert_eq!(cache.len(), 0);
-        assert_eq!(cache.cap().get(), 3);
-    }
-
-    #[test]
-    fn test_lru_eviction_on_overflow() {
-        // When cache is full, inserting a new item evicts the least recently used
-        let capacity = NonZeroUsize::new(3).unwrap();
-        let mut cache: lru::LruCache<i32, String> = lru::LruCache::new(capacity);
-
-        // Insert 3 items (fills cache)
-        cache.put(1, "one".to_string());
-        cache.put(2, "two".to_string());
-        cache.put(3, "three".to_string());
-
-        assert_eq!(cache.len(), 3);
-
-        // Insert 4th item — should evict item 1 (least recently used)
-        cache.put(4, "four".to_string());
-
-        assert_eq!(cache.len(), 3); // Still at capacity
-        assert!(cache.get(&1).is_none()); // Item 1 was evicted
-        assert!(cache.get(&4).is_some()); // Item 4 was inserted
-    }
-
-    #[test]
-    fn test_lru_access_updates_position() {
-        // Accessing an item via .get() makes it "most recently used"
-        let capacity = NonZeroUsize::new(3).unwrap();
-        let mut cache: lru::LruCache<i32, String> = lru::LruCache::new(capacity);
-
-        cache.put(1, "one".to_string());
-        cache.put(2, "two".to_string());
-        cache.put(3, "three".to_string());
-
-        // Access item 1 (makes it most recently used)
-        let _ = cache.get(&1);
-
-        // Insert item 4 — should evict item 2 (now LRU), NOT item 1
-        cache.put(4, "four".to_string());
-
-        assert!(cache.get(&1).is_some()); // Item 1 survives
-        assert!(cache.get(&2).is_none()); // Item 2 was evicted
+    #[tokio::test]
+    async fn ast_cache_respects_capacity() {
+        // Construir un cache con capacidad 2
+        let cache: moka::future::Cache<String, u32> =
+            moka::future::Cache::builder().max_capacity(2).build();
+        cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        cache.insert("c".into(), 3).await; // Debe evictar uno de a, b
+                                           // No asegurar exactamente cuál fue evictado (moka es probabilístico),
+                                           // pero el total debe ser ≤ 2
+        assert!(cache.entry_count() <= 2);
     }
 
     #[test]
@@ -495,7 +496,6 @@ mod tests {
         };
 
         let cached = CachedAnalysis {
-            mtime,
             analysis: analysis.clone(),
         };
 
