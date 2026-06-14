@@ -21,8 +21,13 @@ mod symbol;
 
 pub use definitions::tool_definitions;
 
-fn is_cacheable_tool(name: &str) -> bool {
-    !matches!(name, "refresh_index" | "get_server_stats")
+fn tool_is_cacheable(name: &str) -> bool {
+    use crate::tools::definitions::all_tool_definitions;
+    all_tool_definitions()
+        .iter()
+        .find(|def| def.name == name)
+        .map(|def| def.cacheable)
+        .unwrap_or(false)
 }
 
 async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
@@ -112,7 +117,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
 
 /// Dispatch a `tools/call` request to the appropriate handler.
 pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
-    if !is_cacheable_tool(name) {
+    if !tool_is_cacheable(name) {
         return dispatch_tool_uncached(name, &args).await;
     }
 
@@ -184,5 +189,55 @@ mod tests {
             Some(true),
             "generate_project_docs dispatch should not return an error response"
         );
+    }
+
+    use crate::tools::definitions::all_tool_definitions;
+
+    #[test]
+    fn all_dispatched_tools_are_registered() {
+        let known_names: std::collections::HashSet<&str> =
+            all_tool_definitions().iter().map(|d| d.name).collect();
+
+        // Lista maestra — debe mantenerse sincronizada con dispatch_tool_uncached
+        let dispatched = [
+            "get_project_structure",
+            "get_file_outline",
+            "inspect_symbol",
+            "get_dependencies_graph",
+            "search_design_patterns",
+            "audit_security_measures",
+            "refresh_index",
+            "get_server_stats",
+            "analyze_angular_component",
+            "get_module_summary",
+            "generate_project_docs",
+        ];
+
+        for name in dispatched {
+            assert!(
+                known_names.contains(name) || name == "analyze_angular_component",
+                "Tool '{}' is dispatched but not registered in all_tool_definitions()",
+                name
+            );
+        }
+    }
+
+    /// Verifica que herramientas con efectos secundarios no son cacheables.
+    #[test]
+    fn stateful_tools_are_not_cacheable() {
+        let defs = all_tool_definitions();
+        let find = |n: &str| defs.iter().find(|d| d.name == n).unwrap().cacheable;
+        assert!(!find("refresh_index"));
+        assert!(!find("get_server_stats"));
+    }
+
+    /// Verifica que herramientas de análisis son cacheables.
+    #[test]
+    fn analysis_tools_are_cacheable() {
+        let defs = all_tool_definitions();
+        let find = |n: &str| defs.iter().find(|d| d.name == n).unwrap().cacheable;
+        assert!(find("get_file_outline"));
+        assert!(find("inspect_symbol"));
+        assert!(find("get_dependencies_graph"));
     }
 }
