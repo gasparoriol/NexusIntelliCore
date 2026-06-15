@@ -298,35 +298,8 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    fn sanitize_json_value_for_audit(
-        value: &Value,
-        policy: &privacy_gateway::PrivacyPolicy,
-    ) -> Value {
-        match value {
-            Value::String(s) => {
-                let (clean, _) = privacy_gateway::sanitize_output_text(s, policy);
-                Value::String(clean)
-            }
-            Value::Array(items) => Value::Array(
-                items
-                    .iter()
-                    .map(|item| sanitize_json_value_for_audit(item, policy))
-                    .collect(),
-            ),
-            Value::Object(map) => Value::Object(
-                map.iter()
-                    .map(|(k, v)| {
-                        let (clean_key, _) = privacy_gateway::sanitize_output_text(k, policy);
-                        (clean_key, sanitize_json_value_for_audit(v, policy))
-                    })
-                    .collect(),
-            ),
-            _ => value.clone(),
-        }
-    }
-
     let policy = privacy_gateway::PrivacyPolicy::default();
-    let sanitized_args = sanitize_json_value_for_audit(&args, &policy);
+    let sanitized_args = privacy_gateway::sanitize_json_args(&args, &policy);
 
     let start = std::time::Instant::now();
     info!(tool = %name, "Tool call received");

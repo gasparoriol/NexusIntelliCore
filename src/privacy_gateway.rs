@@ -23,15 +23,36 @@ pub struct PrivacyPolicy {
     pub redact_secrets: bool,
     /// If true, apply @mcp-strip filtering
     pub apply_strip_marks: bool,
+
+    pub sensitive_keys: Vec<String>,
 }
 
-impl Default for PrivacyPolicy {
-    fn default() -> Self {
+impl PrivacyPolicy {
+    pub fn new(keys: Vec<&str>) -> Self {
         Self {
+            sensitive_keys: keys.into_iter().map(|s| s.to_string()).collect(),
             omit_restricted: false,
             redact_secrets: true,
             apply_strip_marks: true,
         }
+    }
+
+    pub fn is_sensitive(&self, key: &str) -> bool {
+        // Normalizamos a minúsculas para evitar errores por case-sensitivity
+        self.sensitive_keys.contains(&key.to_lowercase())
+    }
+}
+
+impl Default for PrivacyPolicy {
+    fn default() -> Self {
+        Self::new(vec![
+            "api_key",
+            "password",
+            "token",
+            "secret",
+            "authorization",
+            "private_key",
+        ])
     }
 }
 
@@ -203,6 +224,36 @@ pub fn get_sanitization_rules() -> Value {
     })
 }
 
+///Sanitize JSON arguments recursively, redacting any sensitive strings found in keys or values.
+/// It's used to sanitize structured data returned by tools, such as dependency graphs or audit reports.
+pub fn sanitize_json_args(value: &serde_json::Value, policy: &PrivacyPolicy) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) => {
+            let (clean, _redacted) = sanitize_output_text(s, policy);
+            serde_json::Value::String(clean)
+        }
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| sanitize_json_args(item, policy))
+                .collect(),
+        ),
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| {
+                    if policy.is_sensitive(k) {
+                        (k.clone(), serde_json::json!("[REDACTED]"))
+                    } else {
+                        (k.clone(), sanitize_json_args(v, policy))
+                    }
+                })
+                .collect(),
+        ),
+
+        _ => value.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,5 +381,46 @@ mod tests {
             "Hostname should be redacted in edge label. Got: {}",
             edge_label
         );
+    }
+
+    #[test]
+    fn sanitize_json_args_redacts_string_values() {
+        let policy = PrivacyPolicy::default();
+        let input = serde_json::json!({
+            "file_path": "/home/user/project/main.rs",
+            "api_key": "sk-openai-XXXXXXXXXXXXXXXXXXXXXXXX"
+        });
+        let result = sanitize_json_args(&input, &policy);
+        // api_key debe estar redactado
+        let key_val = result["api_key"].as_str().unwrap();
+        assert!(
+            key_val.contains("[REDACTED"),
+            "API key should be redacted, got: {}",
+            key_val
+        );
+    }
+
+    #[test]
+    fn sanitize_json_args_preserves_non_string_types() {
+        let policy = PrivacyPolicy::default();
+        let input = serde_json::json!({
+            "count": 42,
+            "enabled": true,
+            "ratio": 3.14
+        });
+        let result = sanitize_json_args(&input, &policy);
+        assert_eq!(result["count"], serde_json::json!(42));
+        assert_eq!(result["enabled"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn sanitize_json_args_handles_nested_arrays() {
+        let policy = PrivacyPolicy::default();
+        let input = serde_json::json!({
+            "sections": ["overview", "api"]
+        });
+        let result = sanitize_json_args(&input, &policy);
+        // Valores inocuos no deben ser alterados
+        assert_eq!(result["sections"][0].as_str().unwrap(), "overview");
     }
 }

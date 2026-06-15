@@ -1,4 +1,3 @@
-use notify::event::RenameMode::To;
 use serde_json::{json, Value};
 
 pub struct ToolDefinition {
