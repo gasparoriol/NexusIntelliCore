@@ -67,7 +67,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
         "refresh_index" => server::refresh_index().await,
         "get_server_stats" => server::get_server_stats().await,
         "analyze_angular_component" => {
-            let path = require_str(args, "component_path")?;
+            let path = require_str_either(args, "file_path", "component_path")?;
             angular::analyze_angular_component(path).await
         }
         "get_module_summary" => {
@@ -149,6 +149,19 @@ fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("Missing required argument: {}", key))
 }
 
+fn require_str_either<'a>(args: &'a Value, primary: &str, fallback: &str) -> Result<&'a str> {
+    args.get(primary)
+        .or_else(|| args.get(fallback))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Missing required argument: {} (or legacy {})",
+                primary,
+                fallback
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -166,7 +179,14 @@ mod tests {
                 std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
             }
 
-            init_result.expect("test should initialize ServerState with repository root");
+            if let Err(err) = init_result {
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("already initialised"),
+                    "test should initialize ServerState with repository root: {}",
+                    msg
+                );
+            }
         }
     }
 
@@ -188,6 +208,58 @@ mod tests {
             response.get("isError").and_then(|v| v.as_bool()),
             Some(true),
             "generate_project_docs dispatch should not return an error response"
+        );
+    }
+
+    #[tokio::test]
+    async fn analyze_angular_component_accepts_file_path_argument() {
+        ensure_state_init();
+
+        let args = json!({
+            "file_path": "/definitely/not/found.component.ts"
+        });
+
+        let response = super::dispatch_tool_uncached("analyze_angular_component", &args)
+            .await
+            .expect("dispatcher should execute analyze_angular_component route");
+
+        let text = response
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        assert!(
+            !text.contains("Missing required argument"),
+            "analyze_angular_component should accept file_path without argument errors"
+        );
+    }
+
+    #[tokio::test]
+    async fn analyze_angular_component_accepts_legacy_component_path_argument() {
+        ensure_state_init();
+
+        let args = json!({
+            "component_path": "/definitely/not/found.component.ts"
+        });
+
+        let response = super::dispatch_tool_uncached("analyze_angular_component", &args)
+            .await
+            .expect("dispatcher should execute analyze_angular_component route");
+
+        let text = response
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        assert!(
+            !text.contains("Missing required argument"),
+            "analyze_angular_component should keep supporting component_path for compatibility"
         );
     }
 
