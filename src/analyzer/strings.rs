@@ -20,7 +20,9 @@ pub(crate) fn extract_strings(
         Lang::Java => "(string_literal) @str",
         Lang::C => "(string_literal) @str",
         Lang::CSharp => "[(string_literal) @str (verbatim_string_literal) @str]",
-        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
+        Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
+            return Ok(vec![])
+        }
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {

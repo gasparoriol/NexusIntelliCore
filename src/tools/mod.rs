@@ -11,6 +11,7 @@ mod angular;
 mod audit;
 mod definitions;
 mod deps_graph;
+mod lint;
 mod outline;
 mod patterns;
 mod project;
@@ -57,6 +58,10 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
             let signature_hint = args.get("signature_hint").and_then(|v| v.as_str());
             symbol::inspect_symbol(file, symbol, match_mode, return_all_matches, signature_hint)
                 .await
+        }
+        "lint_file" => {
+            let file = require_str(args, "file_path")?;
+            lint::lint_file(file).await
         }
         "get_dependencies_graph" => deps_graph::get_dependencies_graph().await,
         "search_design_patterns" => {
@@ -275,6 +280,7 @@ mod tests {
             "get_project_structure",
             "get_file_outline",
             "inspect_symbol",
+            "lint_file",
             "get_dependencies_graph",
             "search_design_patterns",
             "audit_security_measures",
@@ -311,5 +317,31 @@ mod tests {
         assert!(find("get_file_outline"));
         assert!(find("inspect_symbol"));
         assert!(find("get_dependencies_graph"));
+    }
+
+    #[tokio::test]
+    async fn lint_file_route_is_dispatchable() {
+        ensure_state_init();
+
+        let args = json!({
+            "file_path": "/definitely/not/found.rs"
+        });
+
+        let response = super::dispatch_tool_uncached("lint_file", &args)
+            .await
+            .expect("dispatcher should execute lint_file route");
+
+        let text = response
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        assert!(
+            !text.contains("Missing required argument"),
+            "lint_file should accept file_path without argument errors"
+        );
     }
 }

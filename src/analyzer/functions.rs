@@ -1,7 +1,7 @@
+use super::docs::extract_preceding_comment;
 use super::lang::Lang;
 use super::query::run_named_query;
 use super::types::FunctionInfo;
-use super::docs::extract_preceding_comment;
 use anyhow::Result;
 use tree_sitter::Language;
 
@@ -40,7 +40,9 @@ pub(crate) fn extract_functions(
               (operator_declaration) @fn \
               (destructor_declaration name: (identifier) @name) @fn]"
         }
-        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
+        Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
+            return Ok(vec![])
+        }
     };
 
     let source_lines: Vec<&str> = source.lines().collect();
@@ -183,7 +185,13 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
                     }
                 }
             }
-            Lang::C | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html | Lang::Unknown => {}
+            Lang::Kotlin
+            | Lang::C
+            | Lang::Css
+            | Lang::Scss
+            | Lang::Sass
+            | Lang::Html
+            | Lang::Unknown => {}
         }
         current = parent.parent();
     }

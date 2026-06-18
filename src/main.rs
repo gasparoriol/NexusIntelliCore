@@ -6,6 +6,7 @@
 mod analyzer;
 mod audit_queries;
 mod indexer;
+mod linter;
 mod privacy_gateway;
 mod protocol;
 mod relations;

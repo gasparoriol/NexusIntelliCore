@@ -4,7 +4,7 @@ use super::docs::extract_module_doc;
 use super::functions::extract_functions;
 use super::html::parse_html_file;
 use super::imports::extract_imports;
-use super::lang::{detect_language, ts_language, lang_name, Lang};
+use super::lang::{detect_language, lang_name, ts_language, Lang};
 use super::strings::extract_strings;
 use super::types::FileAnalysis;
 use anyhow::{Context, Result};
@@ -48,7 +48,7 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
         Some(l) => l,
         None => {
             return Ok(FileAnalysis {
-                language: "unknown".to_owned(),
+                language: lang_name(&lang).to_owned(),
                 ..Default::default()
             })
         }

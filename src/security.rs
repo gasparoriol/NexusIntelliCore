@@ -115,6 +115,9 @@ pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_security_config_defaults() {
@@ -130,6 +133,8 @@ mod tests {
 
     #[test]
     fn test_load_from_env() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
+
         // Run env changes sequentially within one test to avoid thread races.
         // Save original vars to restore them
         let orig_token = std::env::var("MCP_AUTH_TOKEN").ok();
@@ -184,6 +189,8 @@ mod tests {
         }
         if let Some(v) = orig_config {
             std::env::set_var("MCP_SECURITY_CONFIG_PATH", v);
+        } else {
+            std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
         }
     }
 
@@ -197,8 +204,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Failed to parse security config JSON")]
     fn test_load_from_corrupted_json_panics() {
+        let _guard = ENV_TEST_LOCK.lock().unwrap();
+
         // Write corrupted JSON to a temp file
         let temp_dir = std::env::temp_dir();
         let config_file = temp_dir.join("corrupted_mcp_config.json");
@@ -210,7 +218,7 @@ mod tests {
             config_file.to_string_lossy().to_string(),
         );
 
-        let _result = std::panic::catch_unwind(|| {
+        let result = std::panic::catch_unwind(|| {
             SecurityConfig::load();
         });
 
@@ -222,7 +230,9 @@ mod tests {
             std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
         }
 
-        // Re-panic to satisfy #[should_panic]
-        panic!("Failed to parse security config JSON");
+        assert!(
+            result.is_err(),
+            "SecurityConfig::load should panic on corrupted JSON"
+        );
     }
 }

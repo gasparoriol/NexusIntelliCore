@@ -17,7 +17,9 @@ pub(crate) fn extract_imports(
         Lang::Java => "(import_declaration) @import",
         Lang::C => "(preproc_include) @import",
         Lang::CSharp => "(using_directive) @import",
-        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
+        Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
+            return Ok(vec![])
+        }
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
@@ -72,7 +74,9 @@ pub(crate) fn extract_imports(
                     .trim()
                     .to_owned()
             }
-            Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => raw.clone(),
+            Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
+                raw.clone()
+            }
         };
 
         Some(ImportInfo {

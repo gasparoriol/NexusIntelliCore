@@ -1,7 +1,7 @@
+use super::docs::extract_preceding_comment;
 use super::lang::Lang;
 use super::query::run_named_query;
 use super::types::ClassInfo;
-use super::docs::extract_preceding_comment;
 use anyhow::Result;
 use tree_sitter::Language;
 
@@ -19,12 +19,8 @@ pub(crate) fn extract_classes(
               (trait_item name: (type_identifier) @name) @cls]"
         }
         Lang::Python => "(class_definition name: (identifier) @name) @cls",
-        Lang::JavaScript => {
-            "(class_declaration name: (identifier) @name) @cls"
-        }
-        Lang::TypeScript | Lang::Tsx => {
-            "(class_declaration name: (type_identifier) @name) @cls"
-        }
+        Lang::JavaScript => "(class_declaration name: (identifier) @name) @cls",
+        Lang::TypeScript | Lang::Tsx => "(class_declaration name: (type_identifier) @name) @cls",
         Lang::Java => {
             "[(class_declaration name: (identifier) @name) @cls \
               (interface_declaration name: (identifier) @name) @cls \
@@ -44,7 +40,9 @@ pub(crate) fn extract_classes(
               (struct_declaration    name: (identifier) @name) @cls \
               (enum_declaration      name: (identifier) @name) @cls]"
         }
-        Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => return Ok(vec![]),
+        Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
+            return Ok(vec![])
+        }
     };
 
     let source_lines: Vec<&str> = source.lines().collect();
@@ -89,7 +87,12 @@ pub(crate) fn extract_classes(
 }
 
 /// Determine if a type definition is publicly visible (language-aware heuristic).
-pub(crate) fn is_public_class(source_lines: &[&str], start_line: usize, name: &str, lang: &Lang) -> bool {
+pub(crate) fn is_public_class(
+    source_lines: &[&str],
+    start_line: usize,
+    name: &str,
+    lang: &Lang,
+) -> bool {
     let line_text = if start_line > 0 && start_line <= source_lines.len() {
         source_lines[start_line - 1].trim()
     } else {

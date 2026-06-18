@@ -13,6 +13,7 @@ pub enum Lang {
     TypeScript,
     Tsx,
     Java,
+    Kotlin,
     C,
     CSharp,
     Css,
@@ -28,6 +29,7 @@ impl Lang {
             (Lang::Python, EvalMode::Basic) => Some(crate::audit_queries::PY_EVAL),
             (Lang::Python, EvalMode::Exec) => Some(crate::audit_queries::PYTHON_EVAL_EXEC_QUERY),
             (Lang::Java, EvalMode::Exec) => Some(crate::audit_queries::JAVA_EXEC_QUERY),
+            (Lang::Kotlin, EvalMode::Exec) => None,
             (Lang::JavaScript | Lang::TypeScript | Lang::Tsx, EvalMode::Basic) => {
                 Some(crate::audit_queries::JS_EVAL)
             }
@@ -47,6 +49,7 @@ pub fn detect_language(path: &Path) -> Lang {
         Some("ts") => Lang::TypeScript,
         Some("tsx") => Lang::Tsx,
         Some("java") => Lang::Java,
+        Some("kt") | Some("kts") => Lang::Kotlin,
         Some("c") | Some("h") => Lang::C,
         Some("cs") => Lang::CSharp,
         Some("css") => Lang::Css,
@@ -65,6 +68,7 @@ pub(crate) fn ts_language(lang: &Lang) -> Option<Language> {
         Lang::TypeScript => Some(tree_sitter_typescript::language_typescript()),
         Lang::Tsx => Some(tree_sitter_typescript::language_tsx()),
         Lang::Java => Some(tree_sitter_java::language()),
+        Lang::Kotlin => None,
         Lang::C => Some(tree_sitter_c::language()),
         Lang::CSharp => Some(tree_sitter_c_sharp::language()),
         Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => None,
@@ -80,6 +84,7 @@ pub(crate) fn lang_name(lang: &Lang) -> &'static str {
         Lang::TypeScript => "typescript",
         Lang::Tsx => "tsx",
         Lang::Java => "java",
+        Lang::Kotlin => "kotlin",
         Lang::C => "c",
         Lang::CSharp => "csharp",
         Lang::Unknown => "unknown",

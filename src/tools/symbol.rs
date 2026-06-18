@@ -3,9 +3,12 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::linter::render_lint_summary_scoped;
 use crate::privacy_gateway;
 use crate::protocol::{error_response, text_content, tool_response};
 use crate::sanitizer;
+
+const INSPECT_SYMBOL_LINT_MAX_ITEMS: usize = 5;
 
 pub(super) async fn inspect_symbol(
     file_path: &str,
@@ -198,6 +201,20 @@ pub(super) async fn inspect_symbol(
                 "\n\n// ⚠ MCP Privacy Gateway: the following were redacted: {}",
                 list
             ));
+        }
+    }
+
+    let state = crate::state::ServerState::get();
+    if state.lint_pool().enabled() {
+        let lint_result = state.lint_pool().get_or_schedule(&path, &analysis).await;
+        let selected = matches[0];
+        if let Some(summary) = render_lint_summary_scoped(
+            &lint_result,
+            selected.start_line,
+            selected.end_line,
+            INSPECT_SYMBOL_LINT_MAX_ITEMS,
+        ) {
+            out.push_str(&summary);
         }
     }
 

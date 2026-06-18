@@ -9,6 +9,7 @@ It exposes code intelligence tools over stdio JSON-RPC/MCP and sanitizes outputs
 NexusIntelliCore is a secure-by-design Model Context Protocol (MCP) server for local experimentation, workflow design, and context-compression research.
 
 It includes:
+
 - Built-in token authentication (`MCP_AUTH_TOKEN`) for client verification.
 - Tool access control (`MCP_ALLOWED_TOOLS`) to limit available capabilities.
 - Detailed audit logging (`MCP_AUDIT_LOG_PATH`) for all protocol and tool interactions.
@@ -46,7 +47,7 @@ All tool outputs pass through a centralized Privacy Gateway.
 
 ### Analysis Tools
 
-The server exposes eleven MCP tools:
+The server exposes twelve MCP tools:
 
 1. `get_project_structure` — directory tree with access-control markers
 2. `get_file_outline` — structural map of a file (signatures, types, imports, doc-comments)
@@ -59,6 +60,7 @@ The server exposes eleven MCP tools:
 9. `refresh_index` — rebuild the file index and flush the AST cache
 10. `get_server_stats` — operational stats (cache entries, indexed files, uptime)
 11. `generate_project_docs` — auto-generate structured Markdown documentation from AST analysis
+12. `lint_file` — hybrid linting for a file (tree-sitter checks always available; external linters are opt-in)
 
 ### Documentation Generation
 
@@ -72,6 +74,82 @@ The server exposes eleven MCP tools:
 | `language`    | `string`        | `"en"`                                   | Output language: `"en"`, `"es"`, `"ca"`                      |
 
 The tool infers project entry-points and use-cases from the AST (via `detect_entrypoints` / `infer_use_cases` in `src/analyzer.rs`) and all output is sanitized through the Privacy Gateway before reaching the client.
+
+### Linting
+
+`lint_file` adds a new file-level linting entry point that combines always-on tree-sitter-based checks with an optional external-linter layer.
+
+- Tree-sitter linting is always available and is used to surface lightweight diagnostics immediately.
+- External linters are enabled only when `MCP_LINT_ENABLED` is set to a truthy value.
+- `MCP_LINT_TIMEOUT_SECS` controls the timeout budget for the external pass.
+- `inspect_symbol` now appends lint summaries for the inspected symbol range when linting is enabled, capped to avoid inflating responses.
+- The lint tool is sanitized through the Privacy Gateway before returning results.
+
+#### Level 1 vs Level 2
+
+- **Level 1**: fast built-in checks with real line/column reporting and basic filtering to avoid false positives inside inline comments and string literals.
+- **Level 2**: optional external linters, selected per language, with graceful degradation when the tool is not installed.
+
+#### Supported External Linters
+
+When `MCP_LINT_ENABLED=true`, NexusIntelliCore attempts to run one external linter depending on the file language:
+
+| Language                      | External tool  | Notes                                                                           |
+| ----------------------------- | -------------- | ------------------------------------------------------------------------------- |
+| Rust                          | `cargo clippy` | Parses JSON diagnostics and filters them to the requested file                  |
+| JavaScript / TypeScript / TSX | `eslint`       | Uses local `node_modules/.bin/eslint` when available, otherwise global `eslint` |
+| Python                        | `mypy`         | Uses text diagnostics with columns and error codes                              |
+| Java                          | `javac`        | Runs with `-Xlint` and parses compiler warnings/errors                          |
+| Kotlin                        | `ktlint`       | Preferred Kotlin linter                                                         |
+| Kotlin fallback               | `kotlinc`      | Used automatically when `ktlint` is not available                               |
+| C                             | `cppcheck`     | Parses machine-friendly templated diagnostics                                   |
+| C#                            | `dotnet build` | Searches for the nearest `.csproj` or `.sln` and parses compiler diagnostics    |
+
+If the selected tool is missing from the environment, the server does not fail the request; it returns an informational diagnostic describing the missing dependency.
+
+#### Environment Variables
+
+- `MCP_LINT_ENABLED`: enables the Level 2 external-linter pass when set to a truthy value (`1`, `true`, `TRUE`, `yes`, `on`).
+- `MCP_LINT_TIMEOUT_SECS`: timeout budget for each external linter process. Default: `10` seconds.
+
+#### Practical Notes
+
+- Kotlin files (`.kt`, `.kts`) are recognized for external linting even though there is no built-in Tree-sitter AST extraction for Kotlin yet.
+- For C#, external linting requires a nearby `.csproj` or `.sln`; otherwise the server returns an informational diagnostic instead of failing.
+- For Kotlin, `ktlint` is tried first; if it is not installed, NexusIntelliCore falls back automatically to `kotlinc`.
+- External linting remains opt-in so the server can still be used in minimal environments without language-specific tooling installed.
+
+#### Practical Prompting Guide (Lint)
+
+Use linting as a context filter, not as extra output for every request. The main savings come from reducing code you send to the model, not from adding more diagnostics.
+
+Recommended flow:
+
+1. Locate first: `get_file_outline` or `get_module_summary`.
+2. Narrow to one unit: `inspect_symbol` for a specific function/class.
+3. Ask for lint summary only on that unit, then request a targeted fix.
+
+Prompt patterns that usually save tokens:
+
+- "Inspect `<symbol>` and return lint diagnostics only (no source dump)."
+- "Return only `warning` and `error` diagnostics. Ignore informational tool-availability notices."
+- "Cap output to the top N diagnostics and propose a minimal patch."
+- "Use `inspect_symbol` on the target method instead of reading the full file."
+
+Prompt patterns that usually waste tokens:
+
+- "Analyze the whole module" when you only need one function.
+- Requesting full source and full lint output in the same step.
+- Repeating external lint requests after a clear "tool not found" diagnostic.
+
+Important limitations (honest expectations):
+
+- Level 1 is intentionally lightweight; it is useful for fast signals, not deep semantic correctness.
+- Level 2 value depends on installed tooling (`eslint`, `mypy`, `javac`, `ktlint`, etc.).
+- Kotlin currently relies on external linting for deeper checks.
+- HTML/SCSS lint depth may be lower than TypeScript/Rust depending on installed tools.
+
+Rule of thumb: if lint output does not change your next action, do not request it for that step.
 
 ---
 
@@ -129,6 +207,7 @@ Create a file (e.g. `security-config.json`):
 ```
 
 Point the server to it:
+
 ```bash
 export MCP_SECURITY_CONFIG_PATH=/path/to/security-config.json
 target/release/nexusintellicore /absolute/path/to/project
@@ -137,13 +216,13 @@ target/release/nexusintellicore /absolute/path/to/project
 #### Authentication Handshake
 
 When `auth_token` is enabled, the client must pass the matching token inside the `initialize` parameters. The server checks the following paths in the parameters hierarchy:
+
 - `params.auth_token`
 - `params.token`
 - `params._meta.auth_token`
 - `params._meta.token`
 
 Requests received prior to successful initialization will be rejected with an authentication error code `-32001`. Unauthorized tool calls return `-32003`.
-
 
 ## Architecture Overview
 
@@ -167,6 +246,16 @@ High-level module responsibilities:
 - Cargo
 - Bash (for probe script)
 - Python 3 (used by the probe script parser)
+
+Optional external linting tools, depending on the languages you want to support:
+
+- Rust: `cargo clippy`
+- JavaScript / TypeScript / TSX: `eslint`
+- Python: `mypy`
+- Java: `javac`
+- Kotlin: `ktlint` or `kotlinc`
+- C: `cppcheck`
+- C#: `.NET SDK` (`dotnet`)
 
 ## Build
 
@@ -205,6 +294,8 @@ Example `.vscode/mcp.json`:
       "cwd": "${workspaceFolder}",
       "args": ["${workspaceFolder}"],
       "env": {
+        "MCP_LINT_ENABLED": "true",
+        "MCP_LINT_TIMEOUT_SECS": "10",
         "RUST_LOG": "error",
         "RUST_BACKTRACE": "0",
         "NEXUS_MCP_STDIN_TRACE": "1"

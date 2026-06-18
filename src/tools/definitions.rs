@@ -24,6 +24,11 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
             schema: schema_inspect_symbol,
         },
         ToolDefinition {
+            name: "lint_file",
+            cacheable: false,
+            schema: schema_lint_file,
+        },
+        ToolDefinition {
             name: "get_dependencies_graph",
             cacheable: true,
             schema: schema_get_dependencies_graph,
@@ -263,6 +268,23 @@ fn schema_analyze_angular_component() -> Value {
                 "file_path": {
                     "type": "string",
                     "description": "Absolute path to the Angular component file to analyze"
+                }
+            },
+            "required": ["file_path"]
+        }
+    })
+}
+
+fn schema_lint_file() -> Value {
+    json!({
+        "name": "lint_file",
+        "description": "Runs the hybrid lint pipeline for a file. Tree-sitter checks are always available; external linters are used when enabled and installed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to lint"
                 }
             },
             "required": ["file_path"]

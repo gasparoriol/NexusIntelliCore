@@ -12,6 +12,7 @@ use crate::analyzer::{
     self, ClassInfo, CssRuleInfo, FunctionInfo, HtmlElementInfo, ImportInfo, StringLiteral,
 };
 use crate::indexer::FileIndex;
+use crate::linter::LintPool;
 use crate::security::SecurityConfig;
 
 use std::num::NonZeroUsize;
@@ -96,6 +97,8 @@ pub struct ServerState {
     ast_cache: moka::future::Cache<PathBuf, CachedAnalysis>,
     /// Tool cache with Moka, mapping ToolCacheKey to the final sanitised serde_json::Value response.
     tool_cache: moka::future::Cache<ToolCacheKey, serde_json::Value>,
+    /// Hybrid linting pool used by lint_file and inspect_symbol.
+    lint_pool: LintPool,
     /// True while a watcher-triggered index refresh loop is running.
     watch_refresh_running: AtomicBool,
     /// Set when watcher events require at least one refresh pass.
@@ -167,6 +170,8 @@ impl ServerState {
             }
         }
 
+        let lint_root = root.clone();
+
         let state = ServerState {
             index: RwLock::new(FileIndex::empty(&root)),
             root,
@@ -207,8 +212,9 @@ impl ServerState {
                 .time_to_live(Duration::from_secs(3600))
                 .build(),
             tool_cache,
+            lint_pool: LintPool::init(&lint_root),
             ast_cache_limit: cache_limit.get(),
-            tool_cache_limit: DEFAULT_TOOL_CACHE_ENTRIES,
+            tool_cache_limit,
             watch_refresh_running: AtomicBool::new(false),
             watch_refresh_pending: AtomicBool::new(false),
             security_config,
@@ -365,6 +371,22 @@ impl ServerState {
 
     pub fn tool_cache(&self) -> &moka::future::Cache<ToolCacheKey, serde_json::Value> {
         &self.tool_cache
+    }
+
+    pub fn lint_pool(&self) -> &LintPool {
+        &self.lint_pool
+    }
+
+    pub async fn invalidate_tool_cache_for_file(&self, path: &Path) {
+        let canonical_path = match std::fs::canonicalize(path) {
+            Ok(p) => p,
+            Err(_) => path.to_path_buf(),
+        };
+
+        let canonical_text = canonical_path.to_string_lossy().to_string();
+        let _ = self
+            .tool_cache
+            .invalidate_entries_if(move |key, _| key.canonical_args.contains(&canonical_text));
     }
 
     pub async fn invalidate_tool_cache_for_root(&self, root_path: &Path) {
