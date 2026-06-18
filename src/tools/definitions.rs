@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 pub struct ToolDefinition {
     pub name: &'static str,
     pub cacheable: bool,
+    pub expensive: bool,
     pub schema: fn() -> Value,
 }
 
@@ -11,56 +12,67 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
         ToolDefinition {
             name: "get_project_structure",
             cacheable: true,
+            expensive: true,
             schema: schema_get_project_structure,
         },
         ToolDefinition {
             name: "get_file_outline",
             cacheable: true,
+            expensive: false,
             schema: schema_get_file_outline,
         },
         ToolDefinition {
             name: "inspect_symbol",
             cacheable: true,
+            expensive: false,
             schema: schema_inspect_symbol,
         },
         ToolDefinition {
             name: "lint_file",
             cacheable: false,
+            expensive: true,
             schema: schema_lint_file,
         },
         ToolDefinition {
             name: "get_dependencies_graph",
             cacheable: true,
+            expensive: true,
             schema: schema_get_dependencies_graph,
         },
         ToolDefinition {
             name: "search_design_patterns",
             cacheable: true,
+            expensive: true,
             schema: schema_search_design_patterns,
         },
         ToolDefinition {
             name: "audit_security_measures",
             cacheable: true,
+            expensive: true,
             schema: schema_audit_security_measures,
         },
         ToolDefinition {
             name: "refresh_index",
             cacheable: false,
+            expensive: true,
             schema: schema_refresh_index,
         },
         ToolDefinition {
             name: "get_server_stats",
             cacheable: false,
+            expensive: false,
             schema: schema_get_server_stats,
         },
         ToolDefinition {
             name: "get_module_summary",
             cacheable: true,
+            expensive: false,
             schema: schema_get_module_summary,
         },
         ToolDefinition {
             name: "generate_project_docs",
             cacheable: true,
+            expensive: true,
             schema: schema_generate_project_docs,
         },
     ]
@@ -70,6 +82,7 @@ pub fn angular_tool_definitions() -> ToolDefinition {
     ToolDefinition {
         name: "analyze_angular_component",
         cacheable: true,
+        expensive: false,
         schema: schema_analyze_angular_component,
     }
 }
@@ -304,4 +317,25 @@ pub fn tool_definitions() -> Value {
     }
 
     Value::Array(defs.iter().map(|d| (d.schema)()).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn expensive_tools_are_correctly_identified() {
+        use crate::tools::is_expensive_tool;
+        assert!(is_expensive_tool("generate_project_docs"));
+        assert!(is_expensive_tool("get_dependencies_graph"));
+        assert!(!is_expensive_tool("get_file_outline"));
+        assert!(!is_expensive_tool("inspect_symbol"));
+    }
+
+    #[tokio::test]
+    async fn semaphore_blocks_excess_concurrent_tools() {
+        let sem = tokio::sync::Semaphore::new(1);
+        let permit1 = sem.try_acquire().unwrap();
+        assert!(sem.try_acquire().is_err());
+        drop(permit1);
+        assert!(sem.try_acquire().is_ok());
+    }
 }

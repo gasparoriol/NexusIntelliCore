@@ -32,6 +32,11 @@ const ENV_TOOL_CACHE_LIMIT: &str = "MCP_TOOL_CACHE_ENTRIES";
 /// Global server state, initialised once at startup.
 static STATE: OnceLock<ServerState> = OnceLock::new();
 
+/// Environment variable to configure maximum concurrent tool executions.
+const ENV_TOOL_CONCURRENCY: &str = "NEXUS_TOOL_MAX_CONCURRENCY";
+/// Default maximum number of concurrent tool executions.
+const DEFAULT_TOOL_MAX_CONCURRENCY: usize = 4;
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ToolCacheKey {
     pub root_path: PathBuf,
@@ -113,6 +118,8 @@ pub struct ServerState {
     ast_cache_limit: usize,
     /// Configured maximum number of entries in the Tool cache.
     tool_cache_limit: usize,
+    /// Semaphore to control concurrent execution of expensive tools.
+    tool_concurrency: tokio::sync::Semaphore,
 }
 
 impl ServerState {
@@ -136,6 +143,15 @@ impl ServerState {
                 ENV_AST_CACHE_LIMIT, limit_str
             );
         }
+
+        // Load tool concurrency limit from environment or use default
+        let tool_max_concurrency = std::env::var(ENV_TOOL_CONCURRENCY)
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_TOOL_MAX_CONCURRENCY);
+
+
 
         // Load Tool cache limit from environment or use default
         let tool_cache_limit = std::env::var(ENV_TOOL_CACHE_LIMIT)
@@ -220,6 +236,7 @@ impl ServerState {
             security_config,
             client_authenticated,
             is_angular_project,
+            tool_concurrency: tokio::sync::Semaphore::new(tool_max_concurrency),
         };
 
         STATE
@@ -477,6 +494,24 @@ impl ServerState {
             tool_entries: self.tool_cache.entry_count() as usize,
             tool_max: self.tool_cache_limit,
         }
+    }
+
+    /// Acquire a permit to run a heavy tool.
+    pub fn try_acquire_tool_permit(
+        &self,
+    ) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        self.tool_concurrency.try_acquire().ok()
+    }
+
+    /// Acquire a permit to run a heavy tool, waiting if necessary (with timeout).
+    pub async fn acquire_tool_permit_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        tokio::time::timeout(timeout, self.tool_concurrency.acquire())
+            .await
+            .ok()
+            .and_then(|r| r.ok())
     }
 }
 

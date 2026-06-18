@@ -112,12 +112,16 @@ pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
     }
 }
 
+/// Serialises tests that mutate `MCP_SECURITY_CONFIG_PATH` (or any other
+/// security-related env var) so that concurrent tests cannot observe each
+/// other's temporary env-var state.  Used by both `security::tests` and
+/// `tools::tests::ensure_state_init`.
+#[cfg(test)]
+pub(crate) static SECURITY_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_security_config_defaults() {
@@ -133,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_load_from_env() {
-        let _guard = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = super::SECURITY_ENV_TEST_LOCK.lock().unwrap();
 
         // Run env changes sequentially within one test to avoid thread races.
         // Save original vars to restore them
@@ -205,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_load_from_corrupted_json_panics() {
-        let _guard = ENV_TEST_LOCK.lock().unwrap();
+        let _guard = super::SECURITY_ENV_TEST_LOCK.lock().unwrap();
 
         // Write corrupted JSON to a temp file
         let temp_dir = std::env::temp_dir();

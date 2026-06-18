@@ -122,6 +122,28 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
 
 /// Dispatch a `tools/call` request to the appropriate handler.
 pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
+    // Concurrency guard for heavy tools
+    let _permit = if is_expensive_tool(name) {
+        let state = crate::state::ServerState::get();
+        match state
+            .acquire_tool_permit_timeout(std::time::Duration::from_secs(30))
+            .await
+        {
+            Some(permit) => Some(permit),
+            None => {
+                tracing::warn!(tool = %name, "Tool rejected: concurrency limit exceeded");
+                return Ok(error_response(format!(
+                    "Tool '{}' is temporarily unavailable: server is processing too many \
+                     concurrent requests. Please retry in a few seconds.",
+                    name
+                )));
+            }
+        }
+    } else {
+        None
+    };
+    // automatically release the permit at the final of the function
+
     if !tool_is_cacheable(name) {
         return dispatch_tool_uncached(name, &args).await;
     }
@@ -167,11 +189,31 @@ fn require_str_either<'a>(args: &'a Value, primary: &str, fallback: &str) -> Res
         })
 }
 
+fn is_expensive_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "get_dependencies_graph"
+            | "search_design_patterns"
+            | "audit_security_measures"
+            | "refresh_index"
+            | "generate_project_docs"
+            | "lint_file"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     fn ensure_state_init() {
+        // Acquire the shared lock BEFORE the get_opt check to prevent a race
+        // where test_load_from_corrupted_json_panics sets MCP_SECURITY_CONFIG_PATH
+        // (and deletes the file) between ensure_state_init's remove_var and
+        // ServerState::init, causing a "No such file" panic inside SecurityConfig::load.
+        let _env_guard = crate::security::SECURITY_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
         if crate::state::ServerState::get_opt().is_none() {
             let original_security_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
             std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
