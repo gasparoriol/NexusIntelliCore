@@ -1,5 +1,5 @@
 use super::docs::extract_preceding_comment;
-use super::lang::Lang;
+use super::lang::LanguageGrammar;
 use super::query::run_named_query;
 use super::types::FunctionInfo;
 use anyhow::Result;
@@ -8,41 +8,12 @@ use tree_sitter::Language;
 pub(crate) fn extract_functions(
     root: tree_sitter::Node<'_>,
     source: &str,
-    lang: &Lang,
+    lang: &dyn LanguageGrammar,
     ts_lang: &Language,
 ) -> Result<Vec<FunctionInfo>> {
-    let query_str = match lang {
-        Lang::Rust => "(function_item name: (identifier) @name) @fn",
-        Lang::Python => "(function_definition name: (identifier) @name) @fn",
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
-            // function_declaration + class method_definition +
-            // interface method_signature + const/let arrow/function expressions
-            "[(function_declaration name: (identifier) @name) @fn \
-              (method_definition name: (property_identifier) @name) @fn \
-              (method_signature name: (property_identifier) @name) @fn \
-              (variable_declarator name: (identifier) @name \
-                value: [(arrow_function) (function_expression)]) @fn]"
-        }
-        Lang::Java => {
-            "[(method_declaration name: (identifier) @name) @fn \
-              (constructor_declaration name: (identifier) @name) @fn]"
-        }
-        Lang::C => {
-            // Captures plain functions; pointer-returning functions
-            // (ptr_declarator wrapping function_declarator) are not covered here.
-            "(function_definition \
-               declarator: (function_declarator \
-                 declarator: (identifier) @name)) @fn"
-        }
-        Lang::CSharp => {
-            "[(method_declaration name: (identifier) @name) @fn \
-              (constructor_declaration name: (identifier) @name) @fn \
-              (operator_declaration) @fn \
-              (destructor_declaration name: (identifier) @name) @fn]"
-        }
-        Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
-            return Ok(vec![])
-        }
+    let query_str = match lang.function_query() {
+        Some(q) => q,
+        None => return Ok(vec![]),
     };
 
     let source_lines: Vec<&str> = source.lines().collect();
@@ -76,27 +47,29 @@ pub(crate) fn extract_functions(
         // extremely unlikely to form a `# @mcp-strip` annotation. For all
         // C-style languages we use the AST path to avoid false positives from
         // `// @mcp-strip` appearing inside a string literal.
-        let is_strip = match lang {
-            Lang::Python => crate::sanitizer::has_mcp_strip(fn_text),
-            _ => has_mcp_strip_in_ast(fn_node_ts, source.as_bytes()),
+        let is_strip = if lang.name() == "python" {
+            crate::sanitizer::has_mcp_strip(fn_text)
+        } else {
+            has_mcp_strip_in_ast(fn_node_ts, source.as_bytes())
         };
         let start_line = fn_node_ts.start_position().row + 1;
         let doc_comment = extract_preceding_comment(&source_lines, start_line);
-        let is_public = is_public_fn(&signature, &name_text, lang);
+        let is_public = lang.is_public_fn(&signature, &name_text);
 
         // Populate body_byte_range for C-style brace-delimited bodies.
         // Python uses indentation; body_byte_range is intentionally None.
         let fn_start_byte = fn_node_ts.start_byte();
-        let body_byte_range = match lang {
-            Lang::Python => None,
-            _ => find_body_node(fn_node_ts).map(|body_node| {
+        let body_byte_range = if lang.name() == "python" {
+            None
+        } else {
+            find_body_node(fn_node_ts).map(|body_node| {
                 let inner_start = (body_node.start_byte() + 1).saturating_sub(fn_start_byte);
                 let inner_end = body_node
                     .end_byte()
                     .saturating_sub(fn_start_byte)
                     .saturating_sub(1);
                 (inner_start, inner_end)
-            }),
+            })
         };
 
         Some(FunctionInfo {
@@ -116,13 +89,13 @@ pub(crate) fn extract_functions(
     })
 }
 
-fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -> Option<String> {
+fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &dyn LanguageGrammar) -> Option<String> {
     let mut owners: Vec<String> = Vec::new();
     let mut current = node.parent();
 
     while let Some(parent) = current {
-        match lang {
-            Lang::Rust => {
+        match lang.name() {
+            "rust" => {
                 if parent.kind() == "impl_item" {
                     if let Some(ty) = parent.child_by_field_name("type") {
                         let text = source[ty.byte_range()].trim();
@@ -132,7 +105,7 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
                     }
                 }
             }
-            Lang::Python => {
+            "python" => {
                 if parent.kind() == "class_definition" {
                     if let Some(name) = parent.child_by_field_name("name") {
                         let text = source[name.byte_range()].trim();
@@ -142,7 +115,7 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
                     }
                 }
             }
-            Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
+            "javascript" | "typescript" | "tsx" => {
                 if parent.kind() == "class_declaration" {
                     if let Some(name) = parent.child_by_field_name("name") {
                         let text = source[name.byte_range()].trim();
@@ -152,7 +125,7 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
                     }
                 }
             }
-            Lang::Java => {
+            "java" => {
                 if matches!(
                     parent.kind(),
                     "class_declaration"
@@ -169,7 +142,7 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
                     }
                 }
             }
-            Lang::CSharp => {
+            "csharp" => {
                 if matches!(
                     parent.kind(),
                     "class_declaration"
@@ -185,13 +158,7 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
                     }
                 }
             }
-            Lang::Kotlin
-            | Lang::C
-            | Lang::Css
-            | Lang::Scss
-            | Lang::Sass
-            | Lang::Html
-            | Lang::Unknown => {}
+            _ => {}
         }
         current = parent.parent();
     }
@@ -200,7 +167,7 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
         None
     } else {
         owners.reverse();
-        let sep = if matches!(lang, Lang::Rust) {
+        let sep = if lang.name() == "rust" {
             "::"
         } else {
             "."
@@ -209,9 +176,9 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &Lang) -
     }
 }
 
-fn build_qualified_name(name: &str, owner_chain: Option<&str>, lang: &Lang) -> String {
+fn build_qualified_name(name: &str, owner_chain: Option<&str>, lang: &dyn LanguageGrammar) -> String {
     if let Some(owner) = owner_chain {
-        let sep = if matches!(lang, Lang::Rust) {
+        let sep = if lang.name() == "rust" {
             "::"
         } else {
             "."
@@ -301,20 +268,5 @@ pub fn extract_signature(fn_source: &str) -> String {
             }
         }
         fn_source.trim().to_owned()
-    }
-}
-
-/// Determine if a function is publicly visible (language-aware heuristic).
-pub(crate) fn is_public_fn(signature: &str, name: &str, lang: &Lang) -> bool {
-    match lang {
-        Lang::Rust => signature.starts_with("pub ") || signature.starts_with("pub("),
-        Lang::Java => signature.contains("public "),
-        Lang::Python => !name.starts_with('_'),
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
-            !name.starts_with('_') && !signature.contains("private ") && !signature.contains("#")
-        }
-        Lang::CSharp => signature.contains("public "),
-        Lang::C => true,
-        _ => true,
     }
 }

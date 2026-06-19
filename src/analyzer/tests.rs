@@ -1,35 +1,30 @@
-use super::lang::{Lang, detect_language};
-use super::css::parse_css_file;
-use super::html::{parse_html_file, is_angular_component};
-use super::docs::{extract_preceding_comment, extract_module_doc};
-use super::functions::{is_public_fn, extract_signature};
-use super::classes::is_public_class;
-use super::entrypoints::detect_entrypoints;
-use super::use_cases::infer_use_cases;
-use super::types::{FileAnalysis, FunctionInfo, ImportInfo, ImportKind, UseCaseConfidence, AuditFindingKind, EntrypointKind};
-use super::imports::classify_import_kind_from_path;
 use super::audit::audit_file_ast;
+use super::css::parse_css_file;
+use super::docs::{extract_module_doc, extract_preceding_comment};
+use super::entrypoints::detect_entrypoints;
+use super::functions::extract_signature;
+use super::html::{is_angular_component, parse_html_file};
+use super::imports::classify_import_kind_from_path;
+use super::lang::{detect_grammar, LanguageGrammar, LANGUAGE_REGISTRY};
 use super::parse::analyze_file;
+use super::types::{
+    AuditFindingKind, EntrypointKind, FileAnalysis, FunctionInfo, ImportInfo, ImportKind,
+    UseCaseConfidence,
+};
+use super::use_cases::infer_use_cases;
+use std::collections::HashSet;
+use std::path::Path;
+
+fn grammar(path: &str) -> &'static dyn LanguageGrammar {
+    detect_grammar(Path::new(path)).expect("grammar should be detected")
+}
 
 #[test]
 fn test_css_detect_language() {
-    use std::path::PathBuf;
-    assert!(matches!(
-        detect_language(&PathBuf::from("foo.css")),
-        Lang::Css
-    ));
-    assert!(matches!(
-        detect_language(&PathBuf::from("foo.scss")),
-        Lang::Scss
-    ));
-    assert!(matches!(
-        detect_language(&PathBuf::from("foo.html")),
-        Lang::Html
-    ));
-    assert!(matches!(
-        detect_language(&PathBuf::from("foo.htm")),
-        Lang::Html
-    ));
+    assert_eq!(grammar("foo.css").name(), "css");
+    assert_eq!(grammar("foo.scss").name(), "scss");
+    assert_eq!(grammar("foo.html").name(), "html");
+    assert_eq!(grammar("foo.htm").name(), "html");
 }
 
 #[test]
@@ -96,11 +91,43 @@ fn test_is_angular_component() {
 #[test]
 fn test_scss_returns_empty_analysis() {
     // SCSS files are detected but not parsed — we just record the language
-    use std::path::PathBuf;
-    assert!(matches!(
-        detect_language(&PathBuf::from("app.scss")),
-        Lang::Scss
-    ));
+    assert_eq!(grammar("app.scss").name(), "scss");
+}
+
+#[test]
+fn test_language_registry_has_unique_extensions() {
+    let mut seen = HashSet::new();
+    for grammar in LANGUAGE_REGISTRY.iter() {
+        for ext in grammar.extensions() {
+            let inserted = seen.insert(*ext);
+            assert!(
+                inserted,
+                "duplicate extension '{}' found in LANGUAGE_REGISTRY (grammar: {})",
+                ext,
+                grammar.name()
+            );
+        }
+    }
+}
+
+#[test]
+fn test_detect_grammar_resolves_each_registered_language() {
+    for grammar in LANGUAGE_REGISTRY.iter() {
+        let ext = grammar
+            .extensions()
+            .first()
+            .copied()
+            .expect("each grammar must declare at least one extension");
+        let fake_path = format!("sample.{}", ext);
+        let detected = detect_grammar(Path::new(&fake_path))
+            .expect("detect_grammar should resolve known extension");
+        assert_eq!(
+            detected.name(),
+            grammar.name(),
+            "detect_grammar mismatch for extension '{}'",
+            ext
+        );
+    }
 }
 
 // -----------------------------------------------------------------------
@@ -109,7 +136,8 @@ fn test_scss_returns_empty_analysis() {
 
 #[test]
 fn test_extract_preceding_comment_rust_triple_slash() {
-    let src = "/// Initialises the server.\n/// Returns an error if root is invalid.\npub fn init() {}";
+    let src =
+        "/// Initialises the server.\n/// Returns an error if root is invalid.\npub fn init() {}";
     let lines: Vec<&str> = src.lines().collect();
     // fn is on line 3 (1-based)
     let doc = extract_preceding_comment(&lines, 3);
@@ -160,7 +188,7 @@ fn test_extract_preceding_comment_java_block() {
 #[test]
 fn test_extract_module_doc_rust() {
     let src = "//! Top-level module doc.\n//! More info.\n\nuse std::io;";
-    let doc = extract_module_doc(src, &Lang::Rust);
+    let doc = extract_module_doc(src, grammar("lib.rs"));
     assert!(doc.is_some());
     let doc = doc.unwrap();
     assert!(doc.contains("Top-level module doc."));
@@ -170,14 +198,14 @@ fn test_extract_module_doc_rust() {
 #[test]
 fn test_extract_module_doc_rust_no_inner_doc() {
     let src = "// Regular comment\npub fn foo() {}";
-    let doc = extract_module_doc(src, &Lang::Rust);
+    let doc = extract_module_doc(src, grammar("lib.rs"));
     assert!(doc.is_none());
 }
 
 #[test]
 fn test_extract_module_doc_python_triple_quote() {
     let src = "\"\"\"\nThis module handles authentication.\n\"\"\"\n\ndef login(): pass";
-    let doc = extract_module_doc(src, &Lang::Python);
+    let doc = extract_module_doc(src, grammar("module.py"));
     assert!(doc.is_some());
     assert!(doc.unwrap().contains("authentication"));
 }
@@ -185,47 +213,43 @@ fn test_extract_module_doc_python_triple_quote() {
 #[test]
 fn test_extract_module_doc_python_single_line() {
     let src = "\"\"\"Short module doc.\"\"\"\ndef foo(): pass";
-    let doc = extract_module_doc(src, &Lang::Python);
+    let doc = extract_module_doc(src, grammar("module.py"));
     assert!(doc.is_some());
     assert!(doc.unwrap().contains("Short module doc."));
 }
 
 #[test]
 fn test_is_public_fn_rust() {
-    assert!(is_public_fn("pub fn dispatch()", "dispatch", &Lang::Rust));
-    assert!(!is_public_fn("fn internal()", "internal", &Lang::Rust));
-    assert!(is_public_fn("pub(crate) fn semi()", "semi", &Lang::Rust));
+    let lang = grammar("main.rs");
+    assert!(lang.is_public_fn("pub fn dispatch()", "dispatch"));
+    assert!(!lang.is_public_fn("fn internal()", "internal"));
+    assert!(lang.is_public_fn("pub(crate) fn semi()", "semi"));
 }
 
 #[test]
 fn test_is_public_fn_python_underscore() {
-    assert!(is_public_fn("def process(data):", "process", &Lang::Python));
-    assert!(!is_public_fn("def _helper():", "_helper", &Lang::Python));
-    assert!(!is_public_fn(
-        "def __init__(self):",
-        "__init__",
-        &Lang::Python
-    ));
+    let lang = grammar("module.py");
+    assert!(lang.is_public_fn("def process(data):", "process"));
+    assert!(!lang.is_public_fn("def _helper():", "_helper"));
+    assert!(!lang.is_public_fn("def __init__(self):", "__init__"));
 }
 
 #[test]
 fn test_is_public_fn_java() {
-    assert!(is_public_fn("public void serve()", "serve", &Lang::Java));
-    assert!(!is_public_fn("private void serve()", "serve", &Lang::Java));
-    assert!(!is_public_fn(
-        "protected void serve()",
-        "serve",
-        &Lang::Java
-    ));
+    let lang = grammar("Service.java");
+    assert!(lang.is_public_fn("public void serve()", "serve"));
+    assert!(!lang.is_public_fn("private void serve()", "serve"));
+    assert!(!lang.is_public_fn("protected void serve()", "serve"));
 }
 
 #[test]
 fn test_is_public_class_rust() {
+    let lang = grammar("lib.rs");
     let lines = vec!["pub struct Config {", "    field: u32,", "}"];
-    assert!(is_public_class(&lines, 1, "Config", &Lang::Rust));
+    assert!(lang.is_public_class(lines[0], "Config"));
 
     let lines2 = vec!["struct Internal {", "}"];
-    assert!(!is_public_class(&lines2, 1, "Internal", &Lang::Rust));
+    assert!(!lang.is_public_class(lines2[0], "Internal"));
 }
 
 #[test]
@@ -550,11 +574,11 @@ fn pr2_rust_crate_self_super_are_internal_local() {
 #[test]
 fn pr2_js_relative_imports_are_internal_local() {
     assert_eq!(
-        classify_import_kind_from_path("./utils", &Lang::JavaScript),
+        classify_import_kind_from_path("./utils", "javascript"),
         ImportKind::InternalLocal
     );
     assert_eq!(
-        classify_import_kind_from_path("../lib/helper", &Lang::JavaScript),
+        classify_import_kind_from_path("../lib/helper", "javascript"),
         ImportKind::InternalLocal
     );
 }
@@ -562,11 +586,11 @@ fn pr2_js_relative_imports_are_internal_local() {
 #[test]
 fn pr2_angular_package_import_is_external_library() {
     assert_eq!(
-        classify_import_kind_from_path("@angular/core", &Lang::JavaScript),
+        classify_import_kind_from_path("@angular/core", "javascript"),
         ImportKind::ExternalLibrary
     );
     assert_eq!(
-        classify_import_kind_from_path("@angular/common/http", &Lang::JavaScript),
+        classify_import_kind_from_path("@angular/common/http", "javascript"),
         ImportKind::ExternalLibrary
     );
 }
@@ -582,7 +606,7 @@ fn safe_function() {
     let _ = x;
 }
 "#;
-    let findings = audit_file_ast(source, &Lang::Rust);
+    let findings = audit_file_ast(source, grammar("lib.rs"));
     let unsafe_findings: Vec<_> = findings
         .iter()
         .filter(|f| f.kind == AuditFindingKind::UnsafeCode)
@@ -604,7 +628,7 @@ fn raw_write(ptr: *mut u8, val: u8) {
     }
 }
 "#;
-    let findings = audit_file_ast(source, &Lang::Rust);
+    let findings = audit_file_ast(source, grammar("lib.rs"));
     let unsafe_findings: Vec<_> = findings
         .iter()
         .filter(|f| f.kind == AuditFindingKind::UnsafeCode)
@@ -622,7 +646,7 @@ def run_user_code(user_input):
     result = eval(user_input)
     return result
 "#;
-    let findings = audit_file_ast(source, &Lang::Python);
+    let findings = audit_file_ast(source, grammar("module.py"));
     let eval_findings: Vec<_> = findings
         .iter()
         .filter(|f| f.kind == AuditFindingKind::DynamicExecution)

@@ -23,9 +23,10 @@ mod symbol;
 pub use definitions::tool_definitions;
 
 fn tool_is_cacheable(name: &str) -> bool {
-    use crate::tools::definitions::all_tool_definitions;
+    use crate::tools::definitions::{all_tool_definitions, angular_tool_definitions};
     all_tool_definitions()
-        .iter()
+        .into_iter()
+        .chain(std::iter::once(angular_tool_definitions()))
         .find(|def| def.name == name)
         .map(|def| def.cacheable)
         .unwrap_or(false)
@@ -193,15 +194,13 @@ fn require_str_either<'a>(args: &'a Value, primary: &str, fallback: &str) -> Res
 }
 
 fn is_expensive_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "get_dependencies_graph"
-            | "search_design_patterns"
-            | "audit_security_measures"
-            | "refresh_index"
-            | "generate_project_docs"
-            | "lint_file"
-    )
+    use crate::tools::definitions::{all_tool_definitions, angular_tool_definitions};
+    all_tool_definitions()
+        .into_iter()
+        .chain(std::iter::once(angular_tool_definitions()))
+        .find(|def| def.name == name)
+        .map(|def| def.expensive)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

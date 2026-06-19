@@ -4,7 +4,7 @@ use super::docs::extract_module_doc;
 use super::functions::extract_functions;
 use super::html::parse_html_file;
 use super::imports::extract_imports;
-use super::lang::{detect_language, lang_name, ts_language, Lang};
+use super::lang::{detect_grammar, LanguageGrammar};
 use super::strings::extract_strings;
 use super::types::FileAnalysis;
 use anyhow::{Context, Result};
@@ -29,26 +29,36 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
     let source =
         std::fs::read_to_string(path).with_context(|| format!("Cannot read {:?}", path))?;
 
-    let lang = detect_language(path);
-
-    // CSS / SCSS / HTML: dedicated parsers with a different data model — return early
-    match &lang {
-        Lang::Css => return parse_css_file(&source),
-        Lang::Html => return parse_html_file(&source),
-        Lang::Scss | Lang::Sass => {
+    let grammar = match detect_grammar(path) {
+        Some(g) => g,
+        None => {
             return Ok(FileAnalysis {
-                language: "scss".to_owned(),
+                language: "unknown".to_owned(),
                 ..Default::default()
             })
         }
-        _ => {}
+    };
+
+    // CSS / SCSS / HTML: dedicated parsers with a different data model — return early
+    if grammar.uses_custom_parser() {
+        match grammar.name() {
+            "css" => return parse_css_file(&source),
+            "html" => return parse_html_file(&source),
+            "scss" => {
+                return Ok(FileAnalysis {
+                    language: "scss".to_owned(),
+                    ..Default::default()
+                })
+            }
+            _ => {}
+        }
     }
 
-    let ts_lang = match ts_language(&lang) {
+    let ts_lang = match grammar.tree_sitter_language() {
         Some(l) => l,
         None => {
             return Ok(FileAnalysis {
-                language: lang_name(&lang).to_owned(),
+                language: grammar.name().to_owned(),
                 ..Default::default()
             })
         }
@@ -65,19 +75,19 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
 
     let root = tree.root_node();
 
-    let functions = extract_functions(root, &source, &lang, &ts_lang)?;
-    let classes = extract_classes(root, &source, &lang, &ts_lang)?;
-    let imports = extract_imports(root, &source, &lang, &ts_lang)?;
-    let string_literals = extract_strings(root, &source, &lang, &ts_lang)?;
+    let functions = extract_functions(root, &source, grammar, &ts_lang)?;
+    let classes = extract_classes(root, &source, grammar, &ts_lang)?;
+    let imports = extract_imports(root, &source, grammar, &ts_lang)?;
+    let string_literals = extract_strings(root, &source, grammar, &ts_lang)?;
 
-    let module_doc = extract_module_doc(&source, &lang);
+    let module_doc = extract_module_doc(&source, grammar);
 
     Ok(FileAnalysis {
         functions,
         classes,
         imports,
         string_literals,
-        language: lang_name(&lang).to_owned(),
+        language: grammar.name().to_owned(),
         css_rules: None,
         html_elements: None,
         module_doc,

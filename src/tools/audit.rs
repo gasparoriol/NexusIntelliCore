@@ -53,8 +53,10 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
         // 4.2 — AST-based structural analysis for unsafe code and eval calls.
         // Using tree-sitter queries prevents false positives from occurrences
         // inside comments or string literals.
-        let lang = analyzer::detect_language(&path);
-        for finding in analyzer::audit_file_ast(&source, &lang) {
+        let Some(grammar) = analyzer::detect_grammar(&path) else {
+            continue;
+        };
+        for finding in analyzer::audit_file_ast(&source, grammar) {
             match finding.kind {
                 analyzer::AuditFindingKind::UnsafeCode => {
                     report.unsafe_blocks.push(format!(

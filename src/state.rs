@@ -156,8 +156,6 @@ impl ServerState {
             .filter(|&n| n > 0)
             .unwrap_or(DEFAULT_TOOL_MAX_CONCURRENCY);
 
-
-
         // Load Tool cache limit from environment or use default
         let tool_cache_limit = std::env::var(ENV_TOOL_CACHE_LIMIT)
             .ok()
@@ -501,13 +499,6 @@ impl ServerState {
             tool_entries: self.tool_cache.entry_count() as usize,
             tool_max: self.tool_cache_limit,
         }
-    }
-
-    /// Acquire a permit to run a heavy tool.
-    pub fn try_acquire_tool_permit(
-        &self,
-    ) -> Option<tokio::sync::SemaphorePermit<'_>> {
-        self.tool_concurrency.try_acquire().ok()
     }
 
     /// Acquire a permit to run a heavy tool, waiting if necessary (with timeout).

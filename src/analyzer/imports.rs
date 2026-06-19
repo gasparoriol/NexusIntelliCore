@@ -1,4 +1,4 @@
-use super::lang::Lang;
+use super::lang::LanguageGrammar;
 use super::query::run_named_query;
 use super::types::{ImportInfo, ImportKind};
 use anyhow::Result;
@@ -7,19 +7,12 @@ use tree_sitter::Language;
 pub(crate) fn extract_imports(
     root: tree_sitter::Node<'_>,
     source: &str,
-    lang: &Lang,
+    lang: &dyn LanguageGrammar,
     ts_lang: &Language,
 ) -> Result<Vec<ImportInfo>> {
-    let query_str = match lang {
-        Lang::Rust => "(use_declaration) @import",
-        Lang::Python => "[(import_statement) @import (import_from_statement) @import]",
-        Lang::JavaScript | Lang::TypeScript | Lang::Tsx => "(import_statement) @import",
-        Lang::Java => "(import_declaration) @import",
-        Lang::C => "(preproc_include) @import",
-        Lang::CSharp => "(using_directive) @import",
-        Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
-            return Ok(vec![])
-        }
+    let query_str = match lang.import_query() {
+        Some(q) => q,
+        None => return Ok(vec![]),
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {
@@ -27,19 +20,19 @@ pub(crate) fn extract_imports(
         let raw = source[imp.1.byte_range()].trim().to_owned();
 
         // Extract the module/package path, specialized by language
-        let path = match lang {
-            Lang::Rust => {
-                // For Rust: `use foo::bar::baz;` → path is `foo::bar::baz`
+        let path = match lang.name() {
+            "rust" => {
+                // For Rust: `use foo::bar::baz;` → path is `use foo::bar::baz;` trimmed
                 raw.trim_start_matches("use ")
                     .trim_end_matches(';')
                     .to_owned()
             }
-            Lang::Python => {
+            "python" => {
                 // For Python: `from pkg.mod import name` → extract `pkg.mod`
                 // or `import pkg.mod` → extract `pkg.mod`
                 extract_python_import_path(&raw)
             }
-            Lang::JavaScript | Lang::TypeScript | Lang::Tsx => {
+            "javascript" | "typescript" | "tsx" => {
                 // Prefer AST source field over brittle text parsing of 'from ...'
                 if let Some(src_node) = imp.1.child_by_field_name("source") {
                     let quoted = source[src_node.byte_range()].trim();
@@ -50,20 +43,20 @@ pub(crate) fn extract_imports(
                     extract_js_import_path(&raw)
                 }
             }
-            Lang::Java => {
+            "java" => {
                 // For Java: `import com.example.Service;` → path is `com.example.Service`
                 raw.trim_start_matches("import ")
                     .trim_end_matches(';')
                     .to_owned()
             }
-            Lang::C => {
+            "c" => {
                 // `#include <stdio.h>` → `stdio.h`, `#include "foo.h"` → `foo.h`
                 raw.trim_start_matches("#include")
                     .trim()
                     .trim_matches(|c: char| c == '<' || c == '>' || c == '"')
                     .to_owned()
             }
-            Lang::CSharp => {
+            "csharp" => {
                 // `using System.Collections.Generic;` → `System.Collections.Generic`
                 // `using static System.Math;`         → `System.Math`
                 raw.trim_start_matches("using")
@@ -74,14 +67,12 @@ pub(crate) fn extract_imports(
                     .trim()
                     .to_owned()
             }
-            Lang::Kotlin | Lang::Unknown | Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => {
-                raw.clone()
-            }
+            _ => raw.clone(),
         };
 
         Some(ImportInfo {
             raw,
-            kind: classify_import_kind_from_path(&path, lang),
+            kind: classify_import_kind_from_path(&path, lang.name()),
             path,
             resolved_path: None,
         })
@@ -91,7 +82,7 @@ pub(crate) fn extract_imports(
 /// Classify an import path into a `ImportKind` using only the path string and
 /// language heuristics (no file system access). The result may be refined
 /// later when the file index is available.
-pub fn classify_import_kind_from_path(path: &str, lang: &Lang) -> ImportKind {
+pub fn classify_import_kind_from_path(path: &str, lang_name: &str) -> ImportKind {
     // Relative paths → likely a project-local file
     if path.starts_with("./") || path.starts_with("../") {
         return ImportKind::InternalLocal;
@@ -101,7 +92,7 @@ pub fn classify_import_kind_from_path(path: &str, lang: &Lang) -> ImportKind {
         return ImportKind::InternalLocal;
     }
     // Rust project-local references
-    if let Lang::Rust = lang {
+    if lang_name == "rust" {
         if path.starts_with("crate::") || path.starts_with("self::") || path.starts_with("super::")
         {
             return ImportKind::InternalLocal;

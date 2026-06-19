@@ -1,4 +1,3 @@
-use super::lang::Lang;
 
 /// Extract the doc-comment block immediately preceding the given 1-based line.
 ///
@@ -48,10 +47,10 @@ pub fn extract_preceding_comment(lines: &[&str], before_line: usize) -> Option<S
 /// - **JS/TS/Java**: first block-comment block (`/** ... */`) at the top, preceding any
 ///   non-comment token.
 /// - All other languages: `None`.
-pub fn extract_module_doc(source: &str, lang: &Lang) -> Option<String> {
+pub fn extract_module_doc(source: &str, lang: &dyn super::lang::LanguageGrammar) -> Option<String> {
     let lines: Vec<&str> = source.lines().collect();
-    match lang {
-        Lang::Rust => {
+    match lang.name() {
+        "rust" => {
             let doc_lines: Vec<&str> = lines
                 .iter()
                 .take_while(|l| {
@@ -67,7 +66,7 @@ pub fn extract_module_doc(source: &str, lang: &Lang) -> Option<String> {
                 Some(doc_lines.join("\n"))
             }
         }
-        Lang::Python => {
+        "python" => {
             let first = lines.iter().position(|l| !l.trim().is_empty())?;
             let trimmed = lines[first].trim();
             let quote = if trimmed.starts_with("\"\"\"") {
@@ -91,7 +90,7 @@ pub fn extract_module_doc(source: &str, lang: &Lang) -> Option<String> {
             }
             Some(doc.join("\n"))
         }
-        Lang::Java | Lang::TypeScript | Lang::Tsx | Lang::JavaScript => {
+        "java" | "typescript" | "tsx" | "javascript" => {
             let first = lines.iter().position(|l| !l.trim().is_empty())?;
             let trimmed = lines[first].trim();
             if !trimmed.starts_with("/**") && !trimmed.starts_with("/*") {

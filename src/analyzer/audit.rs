@@ -1,4 +1,4 @@
-use super::lang::{ts_language, EvalMode, Lang};
+use super::lang::{EvalMode, LanguageGrammar};
 use super::types::{AuditFinding, AuditFindingKind};
 use tree_sitter::{Parser, Query, QueryCursor};
 
@@ -10,8 +10,8 @@ use tree_sitter::{Parser, Query, QueryCursor};
 /// queries).
 ///
 /// Falls back to an empty vector for languages without tree-sitter support.
-pub fn audit_file_ast(source: &str, lang: &Lang) -> Vec<AuditFinding> {
-    let ts_lang = match ts_language(lang) {
+pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFinding> {
+    let ts_lang = match lang.tree_sitter_language() {
         Some(l) => l,
         None => return Vec::new(),
     };
@@ -30,7 +30,7 @@ pub fn audit_file_ast(source: &str, lang: &Lang) -> Vec<AuditFinding> {
     let mut findings: Vec<AuditFinding> = Vec::new();
 
     // --- Unsafe code (Rust only) ---
-    if let Lang::Rust = lang {
+    if lang.name() == "rust" {
         for query_str in &[
             crate::audit_queries::RUST_UNSAFE_BLOCK,
             crate::audit_queries::RUST_UNSAFE_FN,

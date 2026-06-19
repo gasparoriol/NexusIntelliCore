@@ -1,96 +1,73 @@
 use std::path::Path;
 use tree_sitter::Language;
 
+use super::grammars::{
+    CGrammar, CSharpGrammar, CssGrammar, HtmlGrammar, JavaGrammar, JavaScriptGrammar,
+    KotlinGrammar, PythonGrammar, RustGrammar, ScssGrammar, TsxGrammar, TypeScriptGrammar,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalMode {
     Basic,
     Exec,
 }
 
-pub enum Lang {
-    Rust,
-    Python,
-    JavaScript,
-    TypeScript,
-    Tsx,
-    Java,
-    Kotlin,
-    C,
-    CSharp,
-    Css,
-    Scss,
-    Sass,
-    Html,
-    Unknown,
-}
+pub trait LanguageGrammar: Send + Sync + 'static {
+    fn name(&self) -> &'static str;
+    fn extensions(&self) -> &'static [&'static str];
+    fn tree_sitter_language(&self) -> Option<Language>;
 
-impl Lang {
-    pub fn get_query(&self, mode: EvalMode) -> Option<&'static str> {
-        match (self, mode) {
-            (Lang::Python, EvalMode::Basic) => Some(crate::audit_queries::PY_EVAL),
-            (Lang::Python, EvalMode::Exec) => Some(crate::audit_queries::PYTHON_EVAL_EXEC_QUERY),
-            (Lang::Java, EvalMode::Exec) => Some(crate::audit_queries::JAVA_EXEC_QUERY),
-            (Lang::Kotlin, EvalMode::Exec) => None,
-            (Lang::JavaScript | Lang::TypeScript | Lang::Tsx, EvalMode::Basic) => {
-                Some(crate::audit_queries::JS_EVAL)
-            }
-            (Lang::JavaScript | Lang::TypeScript | Lang::Tsx, EvalMode::Exec) => {
-                Some(crate::audit_queries::JS_EVAL_QUERY)
-            }
-            _ => None,
-        }
+    fn function_query(&self) -> Option<&'static str> {
+        None
+    }
+    fn class_query(&self) -> Option<&'static str> {
+        None
+    }
+    fn import_query(&self) -> Option<&'static str> {
+        None
+    }
+    fn string_query(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn is_public_fn(&self, _signature: &str, _name: &str) -> bool {
+        true
+    }
+    fn is_public_class(&self, _line_text: &str, _name: &str) -> bool {
+        true
+    }
+    fn uses_custom_parser(&self) -> bool {
+        false
+    }
+    fn get_query(&self, _mode: EvalMode) -> Option<&'static str> {
+        None
     }
 }
 
-pub fn detect_language(path: &Path) -> Lang {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("rs") => Lang::Rust,
-        Some("py") => Lang::Python,
-        Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => Lang::JavaScript,
-        Some("ts") => Lang::TypeScript,
-        Some("tsx") => Lang::Tsx,
-        Some("java") => Lang::Java,
-        Some("kt") | Some("kts") => Lang::Kotlin,
-        Some("c") | Some("h") => Lang::C,
-        Some("cs") => Lang::CSharp,
-        Some("css") => Lang::Css,
-        Some("scss") => Lang::Scss,
-        Some("sass") => Lang::Sass,
-        Some("html") | Some("htm") => Lang::Html,
-        _ => Lang::Unknown,
-    }
-}
+pub static LANGUAGE_REGISTRY: std::sync::LazyLock<Vec<Box<dyn LanguageGrammar>>> =
+    std::sync::LazyLock::new(|| {
+        // Keep this list sorted by grammar name to make additions (for example, Go)
+        // straightforward and easy to review.
+        vec![
+            Box::new(CGrammar),
+            Box::new(CSharpGrammar),
+            Box::new(CssGrammar),
+            Box::new(HtmlGrammar),
+            Box::new(JavaGrammar),
+            Box::new(JavaScriptGrammar),
+            Box::new(KotlinGrammar),
+            Box::new(PythonGrammar),
+            Box::new(RustGrammar),
+            Box::new(ScssGrammar),
+            Box::new(TsxGrammar),
+            Box::new(TypeScriptGrammar),
+        ]
+    });
 
-pub(crate) fn ts_language(lang: &Lang) -> Option<Language> {
-    match lang {
-        Lang::Rust => Some(tree_sitter_rust::language()),
-        Lang::Python => Some(tree_sitter_python::language()),
-        Lang::JavaScript => Some(tree_sitter_javascript::language()),
-        Lang::TypeScript => Some(tree_sitter_typescript::language_typescript()),
-        Lang::Tsx => Some(tree_sitter_typescript::language_tsx()),
-        Lang::Java => Some(tree_sitter_java::language()),
-        Lang::Kotlin => None,
-        Lang::C => Some(tree_sitter_c::language()),
-        Lang::CSharp => Some(tree_sitter_c_sharp::language()),
-        Lang::Css | Lang::Scss | Lang::Sass | Lang::Html => None,
-        Lang::Unknown => None,
-    }
-}
-
-pub(crate) fn lang_name(lang: &Lang) -> &'static str {
-    match lang {
-        Lang::Rust => "rust",
-        Lang::Python => "python",
-        Lang::JavaScript => "javascript",
-        Lang::TypeScript => "typescript",
-        Lang::Tsx => "tsx",
-        Lang::Java => "java",
-        Lang::Kotlin => "kotlin",
-        Lang::C => "c",
-        Lang::CSharp => "csharp",
-        Lang::Unknown => "unknown",
-        // Handled by early returns above — these branches are unreachable at runtime
-        Lang::Css => "css",
-        Lang::Scss | Lang::Sass => "scss",
-        Lang::Html => "html",
-    }
+pub fn detect_grammar(path: &Path) -> Option<&'static dyn LanguageGrammar> {
+    let ext = path.extension()?.to_str()?;
+    LANGUAGE_REGISTRY
+        .iter()
+        .find(|g| g.extensions().contains(&ext))
+        .map(|g| g.as_ref())
 }
