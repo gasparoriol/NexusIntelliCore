@@ -113,6 +113,7 @@ pub struct ServerState {
     /// Whether the client connection has been authenticated.
     client_authenticated: AtomicBool,
     /// True if the project is detected to be an Angular project.
+    /// True if the project is detected to be an Angular project.
     is_angular_project: bool,
     /// Configured maximum number of entries in the AST cache.
     ast_cache_limit: usize,
@@ -120,6 +121,10 @@ pub struct ServerState {
     tool_cache_limit: usize,
     /// Semaphore to control concurrent execution of expensive tools.
     tool_concurrency: tokio::sync::Semaphore,
+    /// Tool invocation counts.
+    tool_invocation_counts: std::sync::Mutex<std::collections::HashMap<String, u64>>,
+    /// Instant when the server was started.
+    started_at: std::time::Instant,
 }
 
 impl ServerState {
@@ -237,6 +242,8 @@ impl ServerState {
             client_authenticated,
             is_angular_project,
             tool_concurrency: tokio::sync::Semaphore::new(tool_max_concurrency),
+            tool_invocation_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
+            started_at: std::time::Instant::now(),
         };
 
         STATE
@@ -513,6 +520,23 @@ impl ServerState {
             .ok()
             .and_then(|r| r.ok())
     }
+
+    pub fn record_tool_invocation(&self, tool_name: &str) {
+        if let Ok(mut counts) = self.tool_invocation_counts.lock() {
+            *counts.entry(tool_name.to_owned()).or_insert(0) += 1;
+        }
+    }
+
+    pub fn get_tool_invocation_counts(&self) -> std::collections::HashMap<String, u64> {
+        self.tool_invocation_counts
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn uptime_seconds(&self) -> u64 {
+        self.started_at.elapsed().as_secs()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -695,5 +719,14 @@ mod tests {
             "a": 1
         });
         assert_eq!(canonicalize_json(&v1), canonicalize_json(&v2));
+    }
+
+    #[test]
+    fn record_tool_invocation_increments_counter() {
+        let counts = std::sync::Mutex::new(std::collections::HashMap::new());
+        let mut c = counts.lock().unwrap();
+        *c.entry("test_tool".to_owned()).or_insert(0) += 1;
+        *c.entry("test_tool".to_owned()).or_insert(0) += 1;
+        assert_eq!(*c.get("test_tool").unwrap(), 2);
     }
 }

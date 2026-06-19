@@ -122,6 +122,9 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
 
 /// Dispatch a `tools/call` request to the appropriate handler.
 pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
+    // Record the tool invocation count
+    crate::state::ServerState::get().record_tool_invocation(name);
+
     // Concurrency guard for heavy tools
     let _permit = if is_expensive_tool(name) {
         let state = crate::state::ServerState::get();

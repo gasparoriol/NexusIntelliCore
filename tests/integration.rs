@@ -387,3 +387,37 @@ fn tool_caching_and_invalidation() {
     assert_eq!(res1, res3, "Response after refresh_index should still match");
 }
 
+#[test]
+fn get_server_stats_is_always_available_and_returns_stats() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = call_tool(root, "get_server_stats", serde_json::json!({}));
+    let text = extract_tool_text(&response);
+
+    assert!(
+        text.contains("Server Statistics"),
+        "Stats response should contain heading. Got: {}",
+        text
+    );
+    assert!(
+        text.contains("Uptime"),
+        "Stats response should contain Uptime. Got: {}",
+        text
+    );
+    assert!(
+        text.contains("AST Cache"),
+        "Stats response should contain AST Cache. Got: {}",
+        text
+    );
+    assert!(
+        text.contains("Tool Cache"),
+        "Stats response should contain Tool Cache. Got: {}",
+        text
+    );
+    assert!(
+        text.contains("Tool Invocations"),
+        "Stats response should contain Tool Invocations. Got: {}",
+        text
+    );
+}
+
+

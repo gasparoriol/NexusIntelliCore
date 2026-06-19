@@ -206,7 +206,7 @@ fn schema_refresh_index() -> Value {
 fn schema_get_server_stats() -> Value {
     json!({
         "name": "get_server_stats",
-        "description": "Returns server statistics: AST cache size, index metadata, and uptime. Debug-only tool (requires RUST_LOG=debug).",
+        "description": "Returns server statistics: AST and tool cache utilization, file index metadata, and runtime configuration. Always available.",
         "inputSchema": {
             "type": "object",
             "properties": {},
