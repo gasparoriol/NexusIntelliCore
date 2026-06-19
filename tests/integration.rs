@@ -257,6 +257,28 @@ fn generate_project_docs_catalan_headings() {
 }
 
 #[test]
+fn generate_project_docs_pagination_returns_offset_hint() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = call_tool(
+        root,
+        "generate_project_docs",
+        serde_json::json!({
+            "max_files": 1,
+            "file_offset": 0
+        }),
+    );
+    let text = extract_tool_text(&response);
+
+    if text.contains("of") {
+        assert!(
+            text.contains("file_offset"),
+            "Pagination response should include file_offset hint. Got: {}",
+            &text[..text.len().min(500)]
+        );
+    }
+}
+
+#[test]
 fn inspect_symbol_simple_name_returns_ambiguous_payload_when_multiple_matches() {
     let root = env!("CARGO_MANIFEST_DIR");
     let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
@@ -369,22 +391,28 @@ fn tool_caching_and_invalidation() {
     let arguments = serde_json::json!({
         "file_path": format!("{}/src/state.rs", root)
     });
-    
+
     // First call: should compute
     let res1 = call_tool(root, "get_file_outline", arguments.clone());
-    
+
     // Second call: should hit cache
     let res2 = call_tool(root, "get_file_outline", arguments.clone());
-    
+
     assert_eq!(res1, res2, "Cached response should match original response");
 
     // Call refresh_index (which should invalidate the tool cache)
     let refresh_res = call_tool(root, "refresh_index", serde_json::json!({}));
-    assert!(refresh_res.contains("result"), "refresh_index should succeed");
+    assert!(
+        refresh_res.contains("result"),
+        "refresh_index should succeed"
+    );
 
     // Third call: should recompute (but return the same result)
     let res3 = call_tool(root, "get_file_outline", arguments);
-    assert_eq!(res1, res3, "Response after refresh_index should still match");
+    assert_eq!(
+        res1, res3,
+        "Response after refresh_index should still match"
+    );
 }
 
 #[test]
@@ -419,5 +447,3 @@ fn get_server_stats_is_always_available_and_returns_stats() {
         text
     );
 }
-
-

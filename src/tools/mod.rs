@@ -110,12 +110,24 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
                 .and_then(|v| v.as_u64())
                 .map(|n| (n as usize).min(150))
                 .unwrap_or(50);
+            let file_offset = args
+                .get("file_offset")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(0);
             let language = args
                 .get("language")
                 .and_then(|v| v.as_str())
                 .unwrap_or("en")
                 .to_owned();
-            project_docs::generate_project_docs(sections, public_only, max_files, &language).await
+            project_docs::generate_project_docs(
+                sections,
+                public_only,
+                max_files,
+                file_offset,
+                &language,
+            )
+            .await
         }
         other => Ok(error_response(format!("Unknown tool: {}", other))),
     }

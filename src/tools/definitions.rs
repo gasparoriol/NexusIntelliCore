@@ -239,7 +239,7 @@ fn schema_get_module_summary() -> Value {
 fn schema_generate_project_docs() -> Value {
     json!({
         "name": "generate_project_docs",
-        "description": "Analyses the indexed project and generates user-facing Markdown documentation: what the application does, how to use it, its public API surface, and inferred practical use cases. Designed for the end-user of the analysed application, not for the developer modifying its source code.",
+        "description": "Analyses the indexed project and generates user-facing Markdown documentation: what the application does, how to use it, its public API surface, and inferred practical use cases. Designed for the end-user of the analysed application, not for the developer modifying its source code. Supports pagination via file_offset for large projects.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -257,8 +257,14 @@ fn schema_generate_project_docs() -> Value {
                 },
                 "max_files": {
                     "type": "integer",
-                    "description": "Maximum number of source files to analyse. Default: 50. Server-side ceiling: 150.",
+                    "description": "Files per page (default: 50, max: 150).",
                     "minimum": 1
+                },
+                "file_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Zero-based index of the first file to analyse. Use together with max_files to paginate over large projects."
                 },
                 "language": {
                     "type": "string",

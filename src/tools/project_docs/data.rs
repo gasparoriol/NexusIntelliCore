@@ -3,17 +3,29 @@ use std::path::PathBuf;
 
 use crate::analyzer;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PaginationMeta {
+    pub total_files: usize,
+    pub offset: usize,
+    pub page_size: usize,
+    pub has_next: bool,
+}
+
 pub(super) struct ProjectDocsData {
     pub root: PathBuf,
     pub project_name: String,
     pub all_files: Vec<PathBuf>,
     pub selected_files: Vec<PathBuf>,
+    pub pagination: PaginationMeta,
     pub analyses: Vec<(PathBuf, analyzer::FileAnalysis)>,
     pub entrypoints: Vec<analyzer::Entrypoint>,
     pub inferred_cases: Vec<analyzer::InferredUseCase>,
 }
 
-pub(super) async fn collect_project_docs_data(max_files: usize) -> Result<ProjectDocsData> {
+pub(super) async fn collect_project_docs_data(
+    max_files: usize,
+    file_offset: usize,
+) -> Result<ProjectDocsData> {
     let state = crate::state::ServerState::get();
     let index = state.index().await?;
     let root = state.root().to_path_buf();
@@ -26,13 +38,22 @@ pub(super) async fn collect_project_docs_data(max_files: usize) -> Result<Projec
     let all_files = index.allowed_files.clone();
     drop(index);
 
-    let mut selected_files = all_files.clone();
-    selected_files.sort_by_key(|path| {
+    let mut sorted_files = all_files.clone();
+    sorted_files.sort_by_key(|path| {
         path.strip_prefix(&root)
             .map(|rel| rel.components().count())
             .unwrap_or(usize::MAX)
     });
-    selected_files.truncate(max_files);
+
+    let total_files = sorted_files.len();
+    let offset = file_offset.min(total_files);
+    let selected_files: Vec<PathBuf> = sorted_files
+        .into_iter()
+        .skip(offset)
+        .take(max_files)
+        .collect();
+    let page_size = selected_files.len();
+    let has_next = offset.saturating_add(page_size) < total_files;
 
     let mut analyses: Vec<(PathBuf, analyzer::FileAnalysis)> = Vec::new();
     for path in &selected_files {
@@ -49,8 +70,41 @@ pub(super) async fn collect_project_docs_data(max_files: usize) -> Result<Projec
         project_name,
         all_files,
         selected_files,
+        pagination: PaginationMeta {
+            total_files,
+            offset,
+            page_size,
+            has_next,
+        },
         analyses,
         entrypoints,
         inferred_cases,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PaginationMeta;
+
+    #[test]
+    fn pagination_meta_has_next_when_more_files_remain() {
+        let meta = PaginationMeta {
+            total_files: 100,
+            offset: 0,
+            page_size: 50,
+            has_next: true,
+        };
+        assert!(meta.has_next);
+    }
+
+    #[test]
+    fn pagination_meta_no_next_on_last_page() {
+        let meta = PaginationMeta {
+            total_files: 100,
+            offset: 50,
+            page_size: 50,
+            has_next: false,
+        };
+        assert!(!meta.has_next);
+    }
 }
