@@ -3,6 +3,7 @@
 /// Each tool handler lives in its own submodule. This file contains only
 /// the public dispatch entry-point and the JSON schema registry.
 use anyhow::Result;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::protocol::error_response;
@@ -22,6 +23,18 @@ mod symbol;
 
 pub use definitions::tool_definitions;
 
+#[derive(Deserialize, Debug)]
+struct FilePathArgs {
+    #[serde(alias = "FilePath", alias = "filepath", alias = "file-path")]
+    file_path: Option<String>,
+    #[serde(
+        alias = "ComponentPath",
+        alias = "componentPath",
+        alias = "component-path"
+    )]
+    component_path: Option<String>,
+}
+
 fn tool_is_cacheable(name: &str) -> bool {
     use crate::tools::definitions::{all_tool_definitions, angular_tool_definitions};
     all_tool_definitions()
@@ -36,11 +49,11 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
     match name {
         "get_project_structure" => project::get_project_structure().await,
         "get_file_outline" => {
-            let file = require_str(args, "file_path")?;
-            outline::get_file_outline(file).await
+            let file = require_file_path(args)?;
+            outline::get_file_outline(&file).await
         }
         "inspect_symbol" => {
-            let file = require_str(args, "file_path")?;
+            let file = require_file_path(args)?;
             let symbol = require_str(args, "symbol_name")?;
             let match_mode = args
                 .get("match_mode")
@@ -57,32 +70,38 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             let signature_hint = args.get("signature_hint").and_then(|v| v.as_str());
-            symbol::inspect_symbol(file, symbol, match_mode, return_all_matches, signature_hint)
-                .await
+            symbol::inspect_symbol(
+                &file,
+                symbol,
+                match_mode,
+                return_all_matches,
+                signature_hint,
+            )
+            .await
         }
         "lint_file" => {
-            let file = require_str(args, "file_path")?;
-            lint::lint_file(file).await
+            let file = require_file_path(args)?;
+            lint::lint_file(&file).await
         }
         "get_dependencies_graph" => deps_graph::get_dependencies_graph().await,
         "search_design_patterns" => {
-            let file = args.get("file_path").and_then(|v| v.as_str());
-            patterns::search_design_patterns(file).await
+            let file = optional_file_path(args);
+            patterns::search_design_patterns(file.as_deref()).await
         }
         "audit_security_measures" => audit::audit_security_measures().await,
         "refresh_index" => server::refresh_index().await,
         "get_server_stats" => server::get_server_stats().await,
         "analyze_angular_component" => {
-            let path = require_str_either(args, "file_path", "component_path")?;
-            angular::analyze_angular_component(path).await
+            let path = require_file_path_or_component_path(args)?;
+            angular::analyze_angular_component(&path).await
         }
         "get_module_summary" => {
-            let file = require_str(args, "file_path")?;
+            let file = require_file_path(args)?;
             let public_only = args
                 .get("public_only")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            summary::get_module_summary(file, public_only).await
+            summary::get_module_summary(&file, public_only).await
         }
         "generate_project_docs" => {
             let sections: Vec<String> = args
@@ -192,17 +211,34 @@ fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("Missing required argument: {}", key))
 }
 
-fn require_str_either<'a>(args: &'a Value, primary: &str, fallback: &str) -> Result<&'a str> {
-    args.get(primary)
-        .or_else(|| args.get(fallback))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Missing required argument: {} (or legacy {})",
-                primary,
-                fallback
-            )
-        })
+fn optional_file_path(args: &Value) -> Option<String> {
+    serde_json::from_value::<FilePathArgs>(args.clone())
+        .ok()
+        .and_then(|v| v.file_path)
+}
+
+fn require_file_path(args: &Value) -> Result<String> {
+    let parsed: FilePathArgs = serde_json::from_value(args.clone())
+        .map_err(|e| anyhow::anyhow!("Invalid argument format for file_path: {}", e))?;
+    parsed.file_path.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Missing required argument: file_path (aliases: FilePath, filepath, file-path)"
+        )
+    })
+}
+
+fn require_file_path_or_component_path(args: &Value) -> Result<String> {
+    let parsed: FilePathArgs = serde_json::from_value(args.clone()).map_err(|e| {
+        anyhow::anyhow!(
+            "Invalid argument format for file_path/component_path: {}",
+            e
+        )
+    })?;
+    parsed.file_path.or(parsed.component_path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Missing required argument: file_path (aliases: FilePath, filepath, file-path) or legacy component_path"
+        )
+    })
 }
 
 fn is_expensive_tool(name: &str) -> bool {
@@ -398,6 +434,58 @@ mod tests {
         assert!(
             !text.contains("Missing required argument"),
             "lint_file should accept file_path without argument errors"
+        );
+    }
+
+    #[tokio::test]
+    async fn lint_file_accepts_filepath_alias() {
+        ensure_state_init();
+
+        let args = json!({
+            "file-path": "/definitely/not/found.rs"
+        });
+
+        let response = super::dispatch_tool_uncached("lint_file", &args)
+            .await
+            .expect("dispatcher should execute lint_file route");
+
+        let text = response
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        assert!(
+            !text.contains("Missing required argument"),
+            "lint_file should accept file-path alias without argument errors"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_file_outline_accepts_filepath_alias() {
+        ensure_state_init();
+
+        let args = json!({
+            "FilePath": "/definitely/not/found.rs"
+        });
+
+        let response = super::dispatch_tool_uncached("get_file_outline", &args)
+            .await
+            .expect("dispatcher should execute get_file_outline route");
+
+        let text = response
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        assert!(
+            !text.contains("Missing required argument"),
+            "get_file_outline should accept FilePath alias without argument errors"
         );
     }
 }
