@@ -65,9 +65,12 @@ pub(super) async fn get_dependencies_graph() -> Result<Value> {
     let (sanitized_graph, _redactions) =
         privacy_gateway::sanitize_dependency_graph(&result, &policy);
 
-    Ok(tool_response(vec![text_content(
-        serde_json::to_string_pretty(&sanitized_graph).unwrap_or_default(),
-    )]))
+    let sanitized_graph = format!(
+        "[Think like a dependency architect: reason about coupling, cycles, and transitive impact.]\n{}",
+        serde_json::to_string_pretty(&sanitized_graph).unwrap_or_default()
+    );
+
+    Ok(tool_response(vec![text_content(sanitized_graph)]))
 }
 
 /// Resolve an import to a project-relative path and classify its kind.
@@ -200,12 +203,8 @@ mod tests {
             resolved_path: None,
         };
 
-        let (resolved, kind, path_opt) = resolve_import_path(
-            &imp,
-            Path::new("src/main.rs"),
-            &allowed,
-            &restricted,
-        );
+        let (resolved, kind, path_opt) =
+            resolve_import_path(&imp, Path::new("src/main.rs"), &allowed, &restricted);
 
         assert_eq!(kind, ImportKind::InternalLocal);
         assert_eq!(resolved, "src/analyzer.rs");
@@ -252,16 +251,11 @@ mod tests {
             resolved_path: None,
         };
 
-        let (resolved, kind, path_opt) = resolve_import_path(
-            &imp,
-            Path::new("src/main.rs"),
-            &allowed,
-            &restricted,
-        );
+        let (resolved, kind, path_opt) =
+            resolve_import_path(&imp, Path::new("src/main.rs"), &allowed, &restricted);
 
         assert_eq!(kind, ImportKind::ExternalLibrary);
         assert_eq!(resolved, "serde_json::Value");
         assert!(path_opt.is_none());
     }
 }
-

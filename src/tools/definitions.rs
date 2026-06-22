@@ -90,7 +90,7 @@ pub fn angular_tool_definitions() -> ToolDefinition {
 pub fn schema_get_project_structure() -> Value {
     json!({
         "name": "get_project_structure",
-        "description": "Returns a compact project tree summary with counts per directory. Deep subtrees are truncated and files protected by .mcpignore are labelled '(Acceso Restringido)' without exposing contents.",
+        "description": "Returns a compact project tree summary with counts per directory. Deep subtrees are truncated and files protected by .mcpignore are labelled '(Acceso Restringido)' without exposing contents. The response includes a short architectural hint about layers and module seams.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -102,7 +102,7 @@ pub fn schema_get_project_structure() -> Value {
 fn schema_get_file_outline() -> Value {
     json!({
         "name": "get_file_outline",
-        "description": "Returns a structural map of a file: class names, canonical function/method identifiers, signatures, and imports. The canonical identifier can be passed directly to inspect_symbol with match_mode='qualified'. Restricted files return an access-denied notice. WARNING: Use to retrieve the structural map of imports and declarations. DO NOT open or read the entire file if you only need function names/signatures.",
+        "description": "Returns a structural map of a file: class names, canonical function/method identifiers, signatures, and imports. The canonical identifier can be passed directly to inspect_symbol with match_mode='qualified'. Restricted files return an access-denied notice. The response includes a short architectural hint about control flow and contracts. WARNING: Use to retrieve the structural map of imports and declarations. DO NOT open or read the entire file if you only need function names/signatures.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -119,7 +119,7 @@ fn schema_get_file_outline() -> Value {
 fn schema_inspect_symbol() -> Value {
     json!({
         "name": "inspect_symbol",
-        "description": "Returns the source of a specific function or method. The output passes through the full Phase-4 sanitization pipeline. WARNING: Use ONLY to retrieve exact method/class signatures and their AST bodies in large files. DO NOT use for finding hardcoded strings or simple variable names; use standard search/grep instead.",
+        "description": "Returns the source of a specific function or method. The output passes through the full Phase-4 sanitization pipeline and includes a short architectural hint about control flow and pre/postconditions. WARNING: Use ONLY to retrieve exact method/class signatures and their AST bodies in large files. DO NOT use for finding hardcoded strings or simple variable names; use standard search/grep instead.",
         "inputSchema": {
             "type": "object",
             "properties": {

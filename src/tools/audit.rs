@@ -160,5 +160,10 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
     let policy = privacy_gateway::PrivacyPolicy::default();
     let (sanitized_report, _redactions) = privacy_gateway::sanitize_security_report(&out, &policy);
 
+    let sanitized_report = format!(
+        "[Think like a security auditor: reason about risk, trust boundaries, and attack surface.]\n{}",
+        sanitized_report
+    );
+
     Ok(tool_response(vec![text_content(sanitized_report)]))
 }

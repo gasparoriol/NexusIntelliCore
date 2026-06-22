@@ -9,6 +9,11 @@ pub(super) async fn get_project_structure() -> Result<Value> {
     let index = state.index().await?;
     let summary = index.render_tree();
 
+    let summary = format!(
+        "[Think like a project architect: reason about layers, module seams, and cross-cutting boundaries.]\n{}",
+        summary
+    );
+
     // Sanitize structure output through Privacy Gateway
     let policy = privacy_gateway::PrivacyPolicy::default();
     let (sanitized_summary, _redactions) = privacy_gateway::sanitize_output_text(&summary, &policy);

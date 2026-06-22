@@ -142,5 +142,19 @@ pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
     let policy = privacy_gateway::PrivacyPolicy::default();
     let (sanitized_outline, _redactions) = privacy_gateway::sanitize_file_outline(&out, &policy);
 
+    let role_hint = match analysis.language.as_str() {
+        "rust" => {
+            "[Think like a Rust architect: map module seams, ownership boundaries, and AST shape.]"
+        }
+        "javascript" | "typescript" | "tsx" => {
+            "[Think like a TypeScript/JavaScript architect: map module seams, data flow, and AST shape.]"
+        }
+        "python" => "[Think like a Python architect: map module seams, intent, and AST shape.]",
+        "java" => "[Think like a Java architect: map service seams, contracts, and AST shape.]",
+        "c" | "csharp" => "[Think like a systems architect: map coupling points, boundaries, and AST shape.]",
+        _ => "[Think like an architect: map boundaries, intent, and AST shape.]",
+    };
+    let sanitized_outline = format!("{}\n{}", role_hint, sanitized_outline);
+
     Ok(tool_response(vec![text_content(sanitized_outline)]))
 }

@@ -204,6 +204,18 @@ pub(super) async fn inspect_symbol(
         }
     }
 
+    let role_hint = match analysis.language.as_str() {
+        "rust" => "\n\n[Think like a Rust architect: explain control flow, ownership, and pre/postconditions.]",
+        "javascript" | "typescript" | "tsx" => {
+            "\n\n[Think like a TypeScript/JavaScript architect: explain control flow, module contracts, and pre/postconditions.]"
+        }
+        "python" => "\n\n[Think like a Python architect: explain control flow, intent, and pre/postconditions.]",
+        "java" => "\n\n[Think like a Java architect: explain control flow, service contracts, and pre/postconditions.]",
+        "c" | "csharp" => "\n\n[Think like a systems architect: explain control flow, coupling, and pre/postconditions.]",
+        _ => "\n\n[Think like an architect: explain control flow, contracts, and pre/postconditions.]",
+    };
+    out.push_str(role_hint);
+
     let state = crate::state::ServerState::get();
     if state.lint_pool().enabled() {
         let lint_result = state.lint_pool().get_or_schedule(&path, &analysis).await;
