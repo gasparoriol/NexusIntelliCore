@@ -7,15 +7,7 @@ use crate::protocol::{text_content, tool_response};
 pub(super) async fn get_project_structure() -> Result<Value> {
     let state = crate::state::ServerState::get();
     let index = state.index().await?;
-    let tree = index.render_tree();
-
-    let summary = format!(
-        "Project root: {}\nAllowed files: {}\nRestricted files: {}\n\n{}",
-        state.root().display(),
-        index.allowed_files.len(),
-        index.restricted_files.len(),
-        tree
-    );
+    let summary = index.render_tree();
 
     // Sanitize structure output through Privacy Gateway
     let policy = privacy_gateway::PrivacyPolicy::default();

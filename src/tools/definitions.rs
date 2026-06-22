@@ -90,7 +90,7 @@ pub fn angular_tool_definitions() -> ToolDefinition {
 pub fn schema_get_project_structure() -> Value {
     json!({
         "name": "get_project_structure",
-        "description": "Returns the project directory tree. Files protected by .mcpignore are labelled '(Acceso Restringido)' and their contents are never exposed.",
+        "description": "Returns a compact project tree summary with counts per directory. Deep subtrees are truncated and files protected by .mcpignore are labelled '(Acceso Restringido)' without exposing contents.",
         "inputSchema": {
             "type": "object",
             "properties": {},

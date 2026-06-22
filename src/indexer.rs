@@ -10,6 +10,10 @@ use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
+const MAX_RENDER_DEPTH: usize = 2;
+const MAX_RENDER_FILES: usize = 8;
+const MAX_RENDER_DIRS: usize = 8;
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -71,9 +75,8 @@ impl FileIndex {
     ///
     /// Restricted files are annotated with `(Acceso Restringido)`.
     pub fn render_tree(&self) -> String {
-        use std::collections::BTreeMap;
+        let mut root = TreeNode::default();
 
-        // Collect all paths (allowed + restricted) with their restriction flag
         let mut all: Vec<(PathBuf, bool)> = self
             .allowed_files
             .iter()
@@ -84,42 +87,115 @@ impl FileIndex {
                     .map(|p| (self.relative(p), true)),
             )
             .collect();
-
         all.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // Build a nested BTreeMap: dir → list of (filename, restricted)
-        let mut dirs: BTreeMap<PathBuf, Vec<(String, bool)>> = BTreeMap::new();
-
-        for (rel, restricted) in &all {
-            let parent = rel.parent().unwrap_or(Path::new("")).to_path_buf();
-            let filename = rel
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            dirs.entry(parent)
-                .or_default()
-                .push((filename, *restricted));
+        for (rel, restricted) in all {
+            root.insert(&rel, restricted);
         }
 
-        let mut lines = vec![format!("{}/", self.root.display())];
-
-        for (dir, files) in &dirs {
-            let depth = dir.components().count();
-            let indent = "  ".repeat(depth);
-            if depth > 0 {
-                lines.push(format!("{}{}/ ", indent, dir.display()));
-            }
-            let file_indent = "  ".repeat(depth + 1);
-            for (name, restricted) in files {
-                if *restricted {
-                    lines.push(format!("{}{}  (Acceso Restringido)", file_indent, name));
-                } else {
-                    lines.push(format!("{}{}", file_indent, name));
-                }
-            }
-        }
+        let stats = root.stats();
+        let mut lines = vec![format!(
+            "{}/ [files: {}, dirs: {}, restricted: {}]",
+            self.root.display(),
+            stats.files,
+            stats.dirs,
+            stats.restricted
+        )];
+        root.render_into(&mut lines, 0);
 
         lines.join("\n")
+    }
+}
+
+#[derive(Default)]
+struct TreeNode {
+    files: Vec<(String, bool)>,
+    dirs: std::collections::BTreeMap<String, TreeNode>,
+}
+
+#[derive(Default)]
+struct TreeStats {
+    files: usize,
+    dirs: usize,
+    restricted: usize,
+}
+
+impl TreeNode {
+    fn insert(&mut self, path: &Path, restricted: bool) {
+        let mut node = self;
+        let mut parts = path.components().peekable();
+
+        while let Some(part) = parts.next() {
+            let name = part.as_os_str().to_string_lossy().into_owned();
+            if parts.peek().is_none() {
+                node.files.push((name, restricted));
+            } else {
+                node = node.dirs.entry(name).or_default();
+            }
+        }
+    }
+
+    fn stats(&self) -> TreeStats {
+        let mut stats = TreeStats {
+            files: self.files.len(),
+            dirs: self.dirs.len(),
+            restricted: self
+                .files
+                .iter()
+                .filter(|(_, restricted)| *restricted)
+                .count(),
+        };
+
+        for child in self.dirs.values() {
+            let child_stats = child.stats();
+            stats.files += child_stats.files;
+            stats.dirs += child_stats.dirs;
+            stats.restricted += child_stats.restricted;
+        }
+
+        stats
+    }
+
+    fn render_into(&self, lines: &mut Vec<String>, depth: usize) {
+        let indent = "  ".repeat(depth + 1);
+
+        for (idx, (name, restricted)) in self.files.iter().enumerate() {
+            if idx >= MAX_RENDER_FILES {
+                lines.push(format!(
+                    "{}... (+{} more files)",
+                    indent,
+                    self.files.len() - MAX_RENDER_FILES
+                ));
+                break;
+            }
+
+            if *restricted {
+                lines.push(format!("{}{}  (Acceso Restringido)", indent, name));
+            } else {
+                lines.push(format!("{}{}", indent, name));
+            }
+        }
+
+        for (idx, (name, child)) in self.dirs.iter().enumerate() {
+            if idx >= MAX_RENDER_DIRS {
+                lines.push(format!(
+                    "{}... (+{} more directories)",
+                    indent,
+                    self.dirs.len() - MAX_RENDER_DIRS
+                ));
+                break;
+            }
+
+            let stats = child.stats();
+            lines.push(format!(
+                "{}{}/ [files: {}, dirs: {}, restricted: {}]",
+                indent, name, stats.files, stats.dirs, stats.restricted
+            ));
+
+            if depth + 1 < MAX_RENDER_DEPTH {
+                child.render_into(lines, depth + 1);
+            }
+        }
     }
 }
 
