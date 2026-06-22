@@ -66,7 +66,7 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
 
     let mut parser = Parser::new();
     parser
-        .set_language(ts_lang)
+        .set_language(&ts_lang)
         .context("Failed to set tree-sitter language")?;
 
     let tree = parser

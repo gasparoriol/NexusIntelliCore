@@ -14,15 +14,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1"
 
-# Static Analysis Core — pin to 0.20 so all language crates share one ABI
-tree-sitter = "0.20"
-tree-sitter-rust = "0.20"
-tree-sitter-java = "0.20"
-tree-sitter-javascript = "0.20"
-tree-sitter-typescript = "0.20"
-tree-sitter-python = "0.20"
-tree-sitter-c = "0.20"
-tree-sitter-c-sharp = "0.20"
+# Static Analysis Core — use one tree-sitter ABI shared by all grammar crates
+tree-sitter = "0.22"
+tree-sitter-rust = "0.21.2"
+tree-sitter-java = "0.21.0"
+tree-sitter-javascript = "0.21.4"
+tree-sitter-typescript = "0.21.2"
+tree-sitter-python = "0.21.0"
+tree-sitter-c = "0.21.4"
+tree-sitter-c-sharp = "0.21.3"
+tree-sitter-kotlin = "0.3.8"
 
 # File System and Graph Utilities
 ignore = "0.4"
@@ -37,8 +38,8 @@ lazy_static = "1.5"
 # Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tree-sitter-css = "=0.20"
-tree-sitter-html = "=0.20.0"
+tree-sitter-css = "0.21.1"
+tree-sitter-html = "0.20.4"
 
 # File watcher for cache invalidation
 notify = "6"

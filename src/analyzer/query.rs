@@ -10,7 +10,7 @@ pub(crate) fn run_named_query<T>(
     source: &str,
     mut f: impl FnMut(usize, Vec<(String, tree_sitter::Node<'_>, String)>) -> Option<T>,
 ) -> Result<Vec<T>> {
-    let query = Query::new(*language, query_str)
+    let query = Query::new(language, query_str)
         .with_context(|| format!("Failed to compile tree-sitter query: {}", query_str))?;
 
     let mut cursor = QueryCursor::new();
@@ -22,7 +22,7 @@ pub(crate) fn run_named_query<T>(
         let mut caps = Vec::new();
         for cap in m.captures {
             let node = cap.node;
-            let name = query.capture_names()[cap.index as usize].clone();
+            let name = query.capture_names()[cap.index as usize].to_owned();
             let text = source[node.byte_range()].to_owned();
             caps.push((name, node, text));
         }

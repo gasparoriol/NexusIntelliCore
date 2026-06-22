@@ -85,6 +85,32 @@ pub const PYTHON_EVAL_EXEC_QUERY: &str = r#"
   @dangerous_call
 "#;
 
+// ---------------------------------------------------------------------------
+// Kotlin
+// ---------------------------------------------------------------------------
+
+/// Kotlin — `eval(...)` and `exec(...)` calls.
+pub const KOTLIN_EVAL: &str = r#"
+(call_expression
+  (simple_identifier) @fn_name
+  (#match? @fn_name "^(eval|exec)$"))
+(call_expression
+  (navigation_expression
+    (simple_identifier) @fn_name)
+  (#match? @fn_name "^(eval|exec)$"))
+"#;
+
+/// Detects `eval(...)` and `exec(...)` calls in Kotlin.
+pub const KOTLIN_EVAL_QUERY: &str = r#"
+(call_expression
+  (simple_identifier) @fn_name
+  (#match? @fn_name "^(eval|exec)$"))
+(call_expression
+  (navigation_expression
+    (simple_identifier) @fn_name)
+  (#match? @fn_name "^(eval|exec)$"))
+"#;
+
 // ─── Java ────────────────────────────────────────────────────────────────────
 
 /// Detects `Runtime.exec(...)` and `ProcessBuilder` calls in Java.
@@ -104,30 +130,30 @@ mod tests {
     #[test]
     fn rust_unsafe_query_is_valid() {
         let lang = tree_sitter_rust::language();
-        assert!(Query::new(lang, RUST_UNSAFE_BLOCK_QUERY).is_ok());
+        assert!(Query::new(&lang, RUST_UNSAFE_BLOCK_QUERY).is_ok());
     }
 
     #[test]
     fn python_eval_exec_query_is_valid() {
         let lang = tree_sitter_python::language();
-        assert!(Query::new(lang, PYTHON_EVAL_EXEC_QUERY).is_ok());
+        assert!(Query::new(&lang, PYTHON_EVAL_EXEC_QUERY).is_ok());
     }
 
     #[test]
     fn js_eval_query_is_valid() {
         let lang = tree_sitter_javascript::language();
-        assert!(Query::new(lang, JS_EVAL_QUERY).is_ok());
+        assert!(Query::new(&lang, JS_EVAL_QUERY).is_ok());
     }
 
     #[test]
     fn ts_eval_query_is_valid() {
         let lang = tree_sitter_typescript::language_typescript();
-        assert!(Query::new(lang, JS_EVAL_QUERY).is_ok());
+        assert!(Query::new(&lang, JS_EVAL_QUERY).is_ok());
     }
 
     #[test]
     fn tsx_eval_query_is_valid() {
         let lang = tree_sitter_typescript::language_tsx();
-        assert!(Query::new(lang, JS_EVAL_QUERY).is_ok());
+        assert!(Query::new(&lang, JS_EVAL_QUERY).is_ok());
     }
 }

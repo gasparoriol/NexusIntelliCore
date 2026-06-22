@@ -5,7 +5,7 @@ use tree_sitter::Parser;
 pub(crate) fn parse_css_file(source: &str) -> Result<FileAnalysis> {
     let mut parser = Parser::new();
     parser
-        .set_language(tree_sitter_css::language())
+        .set_language(&tree_sitter_css::language())
         .context("Failed to set tree-sitter CSS language")?;
     let tree = parser
         .parse(source, None)

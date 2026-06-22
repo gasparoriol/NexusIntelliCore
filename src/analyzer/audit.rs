@@ -17,7 +17,7 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
     };
 
     let mut parser = Parser::new();
-    if parser.set_language(ts_lang).is_err() {
+    if parser.set_language(&ts_lang).is_err() {
         return Vec::new();
     }
 
@@ -38,7 +38,7 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
             crate::audit_queries::RUST_PANICS,
             crate::audit_queries::RUST_UNSAFE_BLOCK_QUERY,
         ] {
-            let query = match Query::new(ts_lang, query_str) {
+            let query = match Query::new(&ts_lang, query_str) {
                 Ok(q) => q,
                 Err(_) => continue,
             };
@@ -67,7 +67,7 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
         .get_query(EvalMode::Exec)
         .or_else(|| lang.get_query(EvalMode::Basic));
     if let Some(qstr) = eval_query_str {
-        if let Ok(query) = Query::new(ts_lang, qstr) {
+        if let Ok(query) = Query::new(&ts_lang, qstr) {
             let mut cursor = QueryCursor::new();
             for m in cursor.matches(&query, tree.root_node(), source_bytes) {
                 if let Some(cap) = m.captures.first() {

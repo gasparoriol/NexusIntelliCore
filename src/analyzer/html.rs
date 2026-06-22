@@ -5,7 +5,7 @@ use tree_sitter::Parser;
 pub(crate) fn parse_html_file(source: &str) -> Result<FileAnalysis> {
     let mut parser = Parser::new();
     parser
-        .set_language(tree_sitter_html::language())
+        .set_language(&tree_sitter_html::language())
         .context("Failed to set tree-sitter HTML language")?;
     let tree = parser
         .parse(source, None)
