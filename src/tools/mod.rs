@@ -83,7 +83,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
             let file = require_file_path(args)?;
             lint::lint_file(&file).await
         }
-        "get_dependencies_graph" => deps_graph::get_dependencies_graph().await,
+        "get_dependencies_graph" => deps_graph::get_dependencies_graph(args).await,
         "search_design_patterns" => {
             let file = optional_file_path(args);
             patterns::search_design_patterns(file.as_deref()).await

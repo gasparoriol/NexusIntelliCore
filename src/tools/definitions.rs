@@ -153,10 +153,28 @@ fn schema_inspect_symbol() -> Value {
 fn schema_get_dependencies_graph() -> Value {
     json!({
         "name": "get_dependencies_graph",
-        "description": "Analyses import/use statements across the project and returns a JSON dependency graph (nodes = files, edges = import relationships).",
+        "description": "Analyzes import/use statements across the project and returns a dependency graph. By default returns a summary (hotspots + metrics) to conserve context; use mode='full' to get the complete graph per file.",
         "inputSchema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["summary", "full"],
+                    "description": "Output mode: 'summary' (default, compact metrics + top hotspots) or 'full' (complete per-file dependencies). Summary mode is strongly recommended for large projects."
+                },
+                "max_nodes": {
+                    "type": "integer",
+                    "description": "Maximum number of files to analyze (default: 100, max: 200). Affects both summary and full modes.",
+                    "minimum": 1,
+                    "maximum": 200
+                },
+                "max_edges_per_node": {
+                    "type": "integer",
+                    "description": "Maximum dependencies to show per file (default: 50, max: 100). Applies to each dependency type (internal, external, etc).",
+                    "minimum": 1,
+                    "maximum": 100
+                }
+            },
             "required": []
         }
     })
