@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
+use std::time::Instant;
 
 use crate::analyzer;
 use crate::privacy_gateway;
@@ -10,28 +12,68 @@ use crate::protocol::{text_content, tool_response};
 const DEFAULT_MAX_NODES: usize = 100;
 const MAX_EDGES_PER_NODE: usize = 50;
 const MAX_RESPONSE_BYTES: usize = 25 * 1024; // 25 KB for summary mode
+const MAX_GRAPH_RESPONSE_BYTES: usize = 50 * 1024; // 50 KB for graph mode
 
 /// Extract parameters from tool arguments with sensible defaults
-fn extract_params(args: &Value) -> (String, usize, usize) {
-    let mode = args
-        .get("mode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("summary")
-        .to_string();
+#[derive(Debug, Clone)]
+struct QueryParams {
+    mode: String,
+    scope_path: Option<String>,
+    depth: Option<usize>,
+    direction: String,
+    include_external: bool,
+    include_unresolved: bool,
+    max_nodes: usize,
+    max_edges_per_node: usize,
+    sort_by: String,
+}
 
-    let max_nodes = args
-        .get("max_nodes")
-        .and_then(|v| v.as_u64())
-        .map(|n| (n as usize).min(200))
-        .unwrap_or(DEFAULT_MAX_NODES);
-
-    let max_edges = args
-        .get("max_edges_per_node")
-        .and_then(|v| v.as_u64())
-        .map(|n| (n as usize).min(100))
-        .unwrap_or(MAX_EDGES_PER_NODE);
-
-    (mode, max_nodes, max_edges)
+impl QueryParams {
+    fn from_args(args: &Value) -> Self {
+        Self {
+            mode: args
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("summary")
+                .to_string(),
+            scope_path: args
+                .get("scope_path")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            depth: args
+                .get("depth")
+                .and_then(|v| v.as_u64())
+                .map(|n| (n as usize).min(5)),
+            direction: args
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("outbound")
+                .to_string(),
+            include_external: args
+                .get("include_external")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            include_unresolved: args
+                .get("include_unresolved")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            max_nodes: args
+                .get("max_nodes")
+                .and_then(|v| v.as_u64())
+                .map(|n| (n as usize).min(200))
+                .unwrap_or(DEFAULT_MAX_NODES),
+            max_edges_per_node: args
+                .get("max_edges_per_node")
+                .and_then(|v| v.as_u64())
+                .map(|n| (n as usize).min(100))
+                .unwrap_or(MAX_EDGES_PER_NODE),
+            sort_by: args
+                .get("sort_by")
+                .and_then(|v| v.as_str())
+                .unwrap_or("fanout")
+                .to_string(),
+        }
+    }
 }
 
 /// Deduplicate dependency vectors, converting to sets and back
@@ -43,14 +85,14 @@ fn deduplicate_deps(deps: Vec<String>) -> Vec<String> {
 }
 
 /// Generate a summary of the full dependency graph
-fn generate_summary(file_deps: &serde_json::Map<String, Value>, max_nodes: usize) -> Value {
+fn generate_summary(file_deps: &serde_json::Map<String, Value>, params: &QueryParams) -> Value {
     let mut total_internal = 0;
     let mut total_restricted = 0;
     let mut total_external: HashSet<String> = HashSet::new();
     let mut total_unresolved = 0;
-    let mut fanout_counts: Vec<(String, usize)> = Vec::new();
+    let mut hotspot_counts: Vec<(String, usize, usize)> = Vec::new();
 
-    for (file, deps_obj) in file_deps.iter().take(max_nodes) {
+    for (file, deps_obj) in file_deps.iter().take(params.max_nodes) {
         if let Some(obj) = deps_obj.as_object() {
             let internal_count = obj
                 .get("internal")
@@ -72,14 +114,19 @@ fn generate_summary(file_deps: &serde_json::Map<String, Value>, max_nodes: usize
                 .and_then(|v| v.as_array())
                 .map(|a| a.len())
                 .unwrap_or(0);
+            let dependents_count = obj
+                .get("dependents")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
 
             total_internal += internal_count;
             total_restricted += restricted_count;
             total_unresolved += unresolved_count;
 
             let fanout = internal_count + restricted_count + external_count + unresolved_count;
-            if fanout > 0 {
-                fanout_counts.push((file.clone(), fanout));
+            if fanout > 0 || dependents_count > 0 {
+                hotspot_counts.push((file.clone(), fanout, dependents_count));
             }
 
             // Collect unique external libraries
@@ -93,9 +140,20 @@ fn generate_summary(file_deps: &serde_json::Map<String, Value>, max_nodes: usize
         }
     }
 
-    // Sort by fanout (descending) to find hotspots
-    fanout_counts.sort_by(|a, b| b.1.cmp(&a.1));
-    let top_hotspots: Vec<_> = fanout_counts.iter().take(10).collect();
+    // Sort hotspots using selected strategy. For inbound mode, `fanout`
+    // effectively maps to `fanin` to keep useful defaults.
+    let effective_sort = if params.direction == "inbound" && params.sort_by == "fanout" {
+        "fanin"
+    } else {
+        params.sort_by.as_str()
+    };
+
+    match effective_sort {
+        "name" => hotspot_counts.sort_by(|a, b| a.0.cmp(&b.0)),
+        "fanin" => hotspot_counts.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0))),
+        _ => hotspot_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0))),
+    }
+    let top_hotspots: Vec<_> = hotspot_counts.iter().take(params.max_nodes).collect();
 
     json!({
         "type": "summary",
@@ -108,31 +166,294 @@ fn generate_summary(file_deps: &serde_json::Map<String, Value>, max_nodes: usize
         },
         "top_hotspots": top_hotspots
             .iter()
-            .map(|(f, c)| json!({ "file": f, "fanout": c }))
+            .map(|(f, fanout, fanin)| json!({ "file": f, "fanout": fanout, "fanin": fanin }))
             .collect::<Vec<_>>(),
+        "applied_filters": {
+            "mode": &params.mode,
+            "scope_path": &params.scope_path,
+            "depth": params.depth,
+            "direction": &params.direction,
+            "include_external": params.include_external,
+            "include_unresolved": params.include_unresolved,
+            "sort_by": &params.sort_by,
+        },
         "applied_limits": {
             "mode": "summary",
-            "max_nodes": max_nodes,
-            "files_shown": file_deps.len().min(max_nodes),
+            "max_nodes": params.max_nodes,
+            "files_shown": file_deps.len().min(params.max_nodes),
         },
-        "truncated": file_deps.len() > max_nodes,
+        "truncated": file_deps.len() > params.max_nodes,
     })
 }
 
+fn compact_external_namespace(dep: &str) -> String {
+    let mut split = dep
+        .split([':', '/', '.'])
+        .filter(|s| !s.is_empty() && *s != "crate" && *s != "self" && *s != "super");
+    split.next().unwrap_or(dep).to_string()
+}
+
+fn collect_neighbors(
+    node: &str,
+    file_deps: &serde_json::Map<String, Value>,
+    params: &QueryParams,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(obj) = file_deps.get(node).and_then(|v| v.as_object()) {
+        let mut push_from = |key: &str| {
+            if let Some(arr) = obj.get(key).and_then(|v| v.as_array()) {
+                for v in arr {
+                    if let Some(s) = v.as_str() {
+                        out.push(s.to_string());
+                    }
+                }
+            }
+        };
+
+        match params.direction.as_str() {
+            "inbound" => {
+                push_from("dependents");
+            }
+            "both" => {
+                push_from("internal");
+                push_from("restricted");
+                if params.include_external {
+                    push_from("external");
+                }
+                if params.include_unresolved {
+                    push_from("unresolved");
+                }
+                push_from("dependents");
+            }
+            _ => {
+                push_from("internal");
+                push_from("restricted");
+                if params.include_external {
+                    push_from("external");
+                }
+                if params.include_unresolved {
+                    push_from("unresolved");
+                }
+            }
+        }
+    }
+    out
+}
+
+fn apply_depth_limit(
+    file_deps: &serde_json::Map<String, Value>,
+    params: &QueryParams,
+) -> serde_json::Map<String, Value> {
+    let Some(max_depth) = params.depth else {
+        return file_deps.clone();
+    };
+
+    let mut roots: Vec<String> = if let Some(scope) = params.scope_path.as_deref() {
+        file_deps
+            .keys()
+            .filter(|k| k.contains(scope))
+            .cloned()
+            .collect()
+    } else {
+        file_deps.keys().cloned().collect()
+    };
+
+    if roots.is_empty() {
+        roots = file_deps.keys().cloned().collect();
+    }
+
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut q: VecDeque<(String, usize)> = VecDeque::new();
+    for root in roots {
+        if visited.insert(root.clone()) {
+            q.push_back((root, 0));
+        }
+    }
+
+    while let Some((node, d)) = q.pop_front() {
+        if d >= max_depth {
+            continue;
+        }
+        for neigh in collect_neighbors(&node, file_deps, params) {
+            if file_deps.contains_key(&neigh) && visited.insert(neigh.clone()) {
+                q.push_back((neigh, d + 1));
+            }
+        }
+    }
+
+    file_deps
+        .iter()
+        .filter_map(|(k, v)| {
+            if visited.contains(k) {
+                Some((k.clone(), v.clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn graph_to_nodes_edges(
+    file_deps: &serde_json::Map<String, Value>,
+    summary_mode: bool,
+) -> (Vec<Value>, Vec<Value>) {
+    let mut node_kinds: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut edge_seen: HashSet<(String, String, String)> = HashSet::new();
+    let mut edges: Vec<Value> = Vec::new();
+
+    for (source, deps_obj) in file_deps {
+        node_kinds.insert(source.clone(), Value::String("file".to_string()));
+
+        if let Some(obj) = deps_obj.as_object() {
+            let mut push_edges = |key: &str, kind: &str| {
+                if let Some(arr) = obj.get(key).and_then(|v| v.as_array()) {
+                    for dep in arr {
+                        if let Some(dep_str) = dep.as_str() {
+                            let target = if kind == "external" && summary_mode {
+                                compact_external_namespace(dep_str)
+                            } else {
+                                dep_str.to_string()
+                            };
+                            if edge_seen.insert((source.clone(), target.clone(), kind.to_string()))
+                            {
+                                edges.push(json!({
+                                    "source": source,
+                                    "target": target,
+                                    "label": kind,
+                                }));
+                            }
+                            let node_kind = if file_deps.contains_key(dep_str) {
+                                "file"
+                            } else {
+                                kind
+                            };
+                            node_kinds
+                                .entry(if kind == "external" && summary_mode {
+                                    compact_external_namespace(dep_str)
+                                } else {
+                                    dep_str.to_string()
+                                })
+                                .or_insert_with(|| Value::String(node_kind.to_string()));
+                        }
+                    }
+                }
+            };
+
+            push_edges("internal", "internal");
+            push_edges("restricted", "restricted");
+            push_edges("external", "external");
+            push_edges("unresolved", "unresolved");
+
+            if let Some(arr) = obj.get("dependents").and_then(|v| v.as_array()) {
+                for dep in arr {
+                    if let Some(dep_str) = dep.as_str() {
+                        if edge_seen.insert((
+                            dep_str.to_string(),
+                            source.clone(),
+                            "inbound".to_string(),
+                        )) {
+                            edges.push(json!({
+                                "source": dep_str,
+                                "target": source,
+                                "label": "inbound",
+                            }));
+                        }
+                        node_kinds
+                            .entry(dep_str.to_string())
+                            .or_insert_with(|| Value::String("file".to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut nodes: Vec<Value> = node_kinds
+        .into_iter()
+        .map(|(id, kind)| {
+            json!({
+                "id": id,
+                "label": id,
+                "kind": kind,
+            })
+        })
+        .collect();
+
+    nodes.sort_by(|a, b| {
+        a.get("id")
+            .and_then(|v| v.as_str())
+            .cmp(&b.get("id").and_then(|v| v.as_str()))
+    });
+    edges.sort_by(|a, b| {
+        let a_key = (
+            a.get("source").and_then(|v| v.as_str()).unwrap_or(""),
+            a.get("target").and_then(|v| v.as_str()).unwrap_or(""),
+            a.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+        );
+        let b_key = (
+            b.get("source").and_then(|v| v.as_str()).unwrap_or(""),
+            b.get("target").and_then(|v| v.as_str()).unwrap_or(""),
+            b.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+        );
+        a_key.cmp(&b_key)
+    });
+
+    (nodes, edges)
+}
+
+fn ensure_budget(mut graph: Value, max_bytes: usize) -> (Value, usize, bool, Option<String>) {
+    let mut bytes = serde_json::to_string(&graph).map(|s| s.len()).unwrap_or(0);
+    if bytes <= max_bytes {
+        return (graph, bytes, false, None);
+    }
+
+    let mut reason = "response_bytes_limit".to_string();
+
+    loop {
+        bytes = serde_json::to_string(&graph).map(|s| s.len()).unwrap_or(0);
+        if bytes <= max_bytes {
+            return (graph, bytes, true, Some(reason));
+        }
+
+        let removed_edge = graph
+            .get_mut("edges")
+            .and_then(|v| v.as_array_mut())
+            .and_then(|edges| edges.pop())
+            .is_some();
+        if removed_edge {
+            continue;
+        }
+
+        reason = "response_nodes_trimmed".to_string();
+        let removed_node = graph
+            .get_mut("nodes")
+            .and_then(|v| v.as_array_mut())
+            .and_then(|nodes| nodes.pop())
+            .is_some();
+        if removed_node {
+            continue;
+        }
+
+        bytes = serde_json::to_string(&graph).map(|s| s.len()).unwrap_or(0);
+        return (graph, bytes, true, Some(reason));
+    }
+}
+
 pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
-    let (mode, max_nodes, max_edges) = extract_params(args);
+    let start = Instant::now();
+    let params = QueryParams::from_args(args);
 
     let state = crate::state::ServerState::get();
     let index = state.index().await?;
-    let allowed_files = index.allowed_files.clone();
-    let restricted_files = index.restricted_files.clone();
+    let allowed_files = filter_by_scope(index.allowed_files.clone(), params.scope_path.as_deref());
+    let restricted_files =
+        filter_by_scope(index.restricted_files.clone(), params.scope_path.as_deref());
     drop(index);
 
     // Build a per-file classified dependency map:
     // relative_path → { internal, restricted, external, unresolved }
     let mut file_deps: serde_json::Map<String, Value> = serde_json::Map::new();
 
-    for file in allowed_files.iter().take(max_nodes * 2) {
+    for file in allowed_files.iter().take(params.max_nodes * 2) {
         let path = match state.validate_path(file) {
             Ok(p) => p,
             Err(_) => continue,
@@ -170,10 +491,10 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
         unresolved_list = deduplicate_deps(unresolved_list);
 
         // Truncate edges per node if needed
-        internal.truncate(max_edges);
-        restricted.truncate(max_edges);
-        external.truncate(max_edges);
-        unresolved_list.truncate(max_edges);
+        internal.truncate(params.max_edges_per_node);
+        restricted.truncate(params.max_edges_per_node);
+        external.truncate(params.max_edges_per_node);
+        unresolved_list.truncate(params.max_edges_per_node);
 
         file_deps.insert(
             rel,
@@ -185,28 +506,102 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
             }),
         );
 
-        if file_deps.len() >= max_nodes {
+        if file_deps.len() >= params.max_nodes {
             break;
         }
     }
 
-    // Generate output based on mode
-    let output = if mode == "full" {
-        Value::Object(file_deps)
-    } else {
-        generate_summary(&file_deps, max_nodes)
+    apply_dependency_type_filters(&mut file_deps, &params);
+
+    // Apply direction to the graph (outbound, inbound, both).
+    let file_deps = match params.direction.as_str() {
+        "inbound" => reverse_dependencies(&file_deps),
+        "both" => merge_with_reverse_dependencies(file_deps),
+        _ => file_deps,
     };
+
+    let file_deps = apply_depth_limit(&file_deps, &params);
+
+    let summary = generate_summary(&file_deps, &params);
+    let summary_mode = params.mode == "summary";
+    let (nodes, edges) = graph_to_nodes_edges(&file_deps, summary_mode);
+
+    let output = json!({
+        "nodes": nodes,
+        "edges": edges,
+        "meta": {
+            "format": "nodes_edges_meta",
+            "applied_filters": {
+                "mode": &params.mode,
+                "scope_path": &params.scope_path,
+                "depth": params.depth,
+                "direction": &params.direction,
+                "include_external": params.include_external,
+                "include_unresolved": params.include_unresolved,
+                "sort_by": &params.sort_by,
+            },
+            "applied_limits": {
+                "max_nodes": params.max_nodes,
+                "max_edges_per_node": params.max_edges_per_node,
+                "response_budget_bytes": if summary_mode { MAX_RESPONSE_BYTES } else { MAX_GRAPH_RESPONSE_BYTES },
+            },
+            "summary": summary,
+            "truncated": false,
+            "truncation_reason": Value::Null,
+        }
+    });
 
     // Sanitize through Privacy Gateway
     let policy = privacy_gateway::PrivacyPolicy::default();
     let (sanitized_graph, _redactions) =
         privacy_gateway::sanitize_dependency_graph(&output, &policy);
 
+    let budget = if summary_mode {
+        MAX_RESPONSE_BYTES
+    } else {
+        MAX_GRAPH_RESPONSE_BYTES
+    };
+    let (mut budgeted_graph, response_bytes, was_truncated, truncation_reason) =
+        ensure_budget(sanitized_graph, budget);
+
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let nodes_returned = budgeted_graph
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let edges_returned = budgeted_graph
+        .get("edges")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+
+    if let Some(meta) = budgeted_graph
+        .get_mut("meta")
+        .and_then(|v| v.as_object_mut())
+    {
+        meta.insert("truncated".to_string(), Value::Bool(was_truncated));
+        meta.insert(
+            "truncation_reason".to_string(),
+            truncation_reason.map(Value::String).unwrap_or(Value::Null),
+        );
+        meta.insert(
+            "metrics".to_string(),
+            json!({
+                "graph_nodes_returned": nodes_returned,
+                "graph_edges_returned": edges_returned,
+                "response_bytes": response_bytes,
+                "truncated": was_truncated,
+                "duration_ms": duration_ms,
+            }),
+        );
+    }
+
     // Serialize in compact form (not pretty-print) to reduce output size
     let graph_json_compact =
-        serde_json::to_string(&sanitized_graph).unwrap_or_else(|_| "{}".to_string());
+        serde_json::to_string(&budgeted_graph).unwrap_or_else(|_| "{}".to_string());
 
-    let response_text = if mode == "summary" {
+    let response_text = if params.mode == "summary" {
         format!(
             "[Dependency analysis in summary mode (focused on hotspots and metrics)]\n{}",
             graph_json_compact
@@ -329,6 +724,92 @@ fn resolve_import_path(
     (normalised, ImportKind::Unresolved, None)
 }
 
+/// Filter files based on scope_path
+fn filter_by_scope(files: Vec<PathBuf>, scope: Option<&str>) -> Vec<PathBuf> {
+    if let Some(scope_path) = scope {
+        files
+            .into_iter()
+            .filter(|f| f.to_string_lossy().contains(scope_path))
+            .collect()
+    } else {
+        files
+    }
+}
+
+/// Apply dependency-type flags to graph entries.
+fn apply_dependency_type_filters(
+    file_deps: &mut serde_json::Map<String, Value>,
+    params: &QueryParams,
+) {
+    for deps_obj in file_deps.values_mut() {
+        if let Some(obj) = deps_obj.as_object_mut() {
+            if !params.include_external {
+                obj.insert("external".to_string(), Value::Array(Vec::new()));
+            }
+            if !params.include_unresolved {
+                obj.insert("unresolved".to_string(), Value::Array(Vec::new()));
+            }
+        }
+    }
+}
+
+/// Merge outbound dependencies with computed inbound dependents.
+fn merge_with_reverse_dependencies(
+    mut graph: serde_json::Map<String, Value>,
+) -> serde_json::Map<String, Value> {
+    let reversed = reverse_dependencies(&graph);
+    for (dep, dependents_obj) in reversed {
+        let dependents = dependents_obj
+            .get("dependents")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        graph
+            .entry(dep)
+            .or_insert_with(|| {
+                json!({
+                    "internal": [],
+                    "restricted": [],
+                    "external": [],
+                    "unresolved": []
+                })
+            })
+            .as_object_mut()
+            .map(|m| {
+                m.insert("dependents".to_string(), Value::Array(dependents));
+            });
+    }
+    graph
+}
+
+/// Reverse a dependency graph (for inbound queries)
+fn reverse_dependencies(graph: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    let mut reversed = serde_json::Map::new();
+
+    for (file, deps_obj) in graph.iter() {
+        if let Some(obj) = deps_obj.as_object() {
+            // For each dependency of this file, add this file as dependent
+            for key in &["internal", "restricted"] {
+                if let Some(arr) = obj.get(*key).and_then(|v| v.as_array()) {
+                    for dep in arr {
+                        if let Some(dep_str) = dep.as_str() {
+                            reversed
+                                .entry(dep_str.to_string())
+                                .or_insert_with(|| json!({"dependents": []}))
+                                .as_object_mut()
+                                .and_then(|m| m.get_mut("dependents"))
+                                .and_then(|v| v.as_array_mut())
+                                .map(|arr| arr.push(Value::String(file.clone())));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    reversed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,11 +892,11 @@ mod tests {
     #[test]
     fn test_extract_params_defaults() {
         let args = serde_json::json!({});
-        let (mode, max_nodes, max_edges) = extract_params(&args);
+        let params = QueryParams::from_args(&args);
 
-        assert_eq!(mode, "summary");
-        assert_eq!(max_nodes, DEFAULT_MAX_NODES);
-        assert_eq!(max_edges, MAX_EDGES_PER_NODE);
+        assert_eq!(params.mode, "summary");
+        assert_eq!(params.max_nodes, DEFAULT_MAX_NODES);
+        assert_eq!(params.max_edges_per_node, MAX_EDGES_PER_NODE);
     }
 
     #[test]
@@ -425,11 +906,11 @@ mod tests {
             "max_nodes": 50,
             "max_edges_per_node": 30
         });
-        let (mode, max_nodes, max_edges) = extract_params(&args);
+        let params = QueryParams::from_args(&args);
 
-        assert_eq!(mode, "full");
-        assert_eq!(max_nodes, 50);
-        assert_eq!(max_edges, 30);
+        assert_eq!(params.mode, "full");
+        assert_eq!(params.max_nodes, 50);
+        assert_eq!(params.max_edges_per_node, 30);
     }
 
     #[test]
@@ -438,10 +919,16 @@ mod tests {
             "max_nodes": 1000,
             "max_edges_per_node": 500
         });
-        let (_mode, max_nodes, max_edges) = extract_params(&args);
+        let params = QueryParams::from_args(&args);
 
-        assert!(max_nodes <= 200, "max_nodes should be clamped to 200");
-        assert!(max_edges <= 100, "max_edges should be clamped to 100");
+        assert!(
+            params.max_nodes <= 200,
+            "max_nodes should be clamped to 200"
+        );
+        assert!(
+            params.max_edges_per_node <= 100,
+            "max_edges should be clamped to 100"
+        );
     }
 
     #[test]
@@ -498,7 +985,20 @@ mod tests {
             }),
         );
 
-        let summary = generate_summary(&file_deps, 10);
+        let summary = generate_summary(
+            &file_deps,
+            &QueryParams {
+                mode: "summary".to_string(),
+                scope_path: None,
+                depth: None,
+                direction: "outbound".to_string(),
+                include_external: true,
+                include_unresolved: true,
+                max_nodes: 10,
+                max_edges_per_node: 5,
+                sort_by: "fanout".to_string(),
+            },
+        );
 
         // Verify summary has required fields
         assert_eq!(
@@ -549,7 +1049,20 @@ mod tests {
             );
         }
 
-        let summary = generate_summary(&file_deps, 3);
+        let summary = generate_summary(
+            &file_deps,
+            &QueryParams {
+                mode: "summary".to_string(),
+                scope_path: None,
+                depth: None,
+                direction: "outbound".to_string(),
+                include_external: true,
+                include_unresolved: true,
+                max_nodes: 3,
+                max_edges_per_node: 5,
+                sort_by: "fanout".to_string(),
+            },
+        );
         let truncated = summary.get("truncated").and_then(|v| v.as_bool());
 
         assert_eq!(
@@ -557,5 +1070,122 @@ mod tests {
             Some(true),
             "Should mark as truncated when files > max_nodes"
         );
+    }
+
+    #[test]
+    fn test_reverse_dependencies_is_used_for_inbound_shape() {
+        let mut file_deps: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        file_deps.insert(
+            "a.rs".to_string(),
+            json!({
+                "internal": ["b.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+
+        let reversed = reverse_dependencies(&file_deps);
+        let dependents = reversed
+            .get("b.rs")
+            .and_then(|v| v.get("dependents"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(dependents, vec![Value::String("a.rs".to_string())]);
+    }
+
+    #[test]
+    fn test_merge_with_reverse_dependencies_adds_dependents_field() {
+        let mut file_deps: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        file_deps.insert(
+            "a.rs".to_string(),
+            json!({
+                "internal": ["b.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+
+        let merged = merge_with_reverse_dependencies(file_deps);
+        let dependents = merged
+            .get("b.rs")
+            .and_then(|v| v.get("dependents"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        assert_eq!(dependents, vec![Value::String("a.rs".to_string())]);
+    }
+
+    #[test]
+    fn test_apply_depth_limit_reduces_transitive_scope() {
+        let mut file_deps: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        file_deps.insert(
+            "a.rs".to_string(),
+            json!({
+                "internal": ["b.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+        file_deps.insert(
+            "b.rs".to_string(),
+            json!({
+                "internal": ["c.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+        file_deps.insert(
+            "c.rs".to_string(),
+            json!({
+                "internal": [],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+
+        let params = QueryParams {
+            mode: "graph".to_string(),
+            scope_path: Some("a.rs".to_string()),
+            depth: Some(1),
+            direction: "outbound".to_string(),
+            include_external: false,
+            include_unresolved: false,
+            max_nodes: 100,
+            max_edges_per_node: 50,
+            sort_by: "fanout".to_string(),
+        };
+
+        let limited = apply_depth_limit(&file_deps, &params);
+        assert!(limited.contains_key("a.rs"));
+        assert!(limited.contains_key("b.rs"));
+        assert!(!limited.contains_key("c.rs"));
+    }
+
+    #[test]
+    fn test_ensure_budget_truncates_when_too_large() {
+        let graph = json!({
+            "nodes": [
+                {"id": "a", "label": "a", "kind": "file"},
+                {"id": "b", "label": "b", "kind": "file"}
+            ],
+            "edges": [
+                {"source": "a", "target": "b", "label": "internal"},
+                {"source": "b", "target": "a", "label": "internal"}
+            ],
+            "meta": {}
+        });
+
+        let (_trimmed, bytes, truncated, reason) = ensure_budget(graph, 120);
+        assert!(truncated);
+        assert!(bytes <= 120);
+        assert!(reason.is_some());
     }
 }

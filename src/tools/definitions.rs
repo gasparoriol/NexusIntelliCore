@@ -153,26 +153,54 @@ fn schema_inspect_symbol() -> Value {
 fn schema_get_dependencies_graph() -> Value {
     json!({
         "name": "get_dependencies_graph",
-        "description": "Analyzes import/use statements across the project and returns a dependency graph. By default returns a summary (hotspots + metrics) to conserve context; use mode='full' to get the complete graph per file.",
+        "description": "Analyzes import/use statements with optional filtering by scope, depth, direction, and dependency type. Supports incremental exploration of coupling and dependencies.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
-                    "enum": ["summary", "full"],
-                    "description": "Output mode: 'summary' (default, compact metrics + top hotspots) or 'full' (complete per-file dependencies). Summary mode is strongly recommended for large projects."
+                    "enum": ["summary", "graph"],
+                    "description": "Output mode: 'summary' (default, compact metrics) or 'graph' (detailed per-node dependencies)"
+                },
+                "scope_path": {
+                    "type": "string",
+                    "description": "Optional: restrict analysis to a single file or directory. Relative to project root."
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "BFS depth limit (default: unlimited). Restricts transitive dependency traversal.",
+                    "minimum": 1,
+                    "maximum": 5
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["outbound", "inbound", "both"],
+                    "description": "Dependency direction (default: outbound). Outbound: what this file imports. Inbound: what imports this file."
+                },
+                "include_external": {
+                    "type": "boolean",
+                    "description": "Include external library dependencies (default: false)"
+                },
+                "include_unresolved": {
+                    "type": "boolean",
+                    "description": "Include unresolved imports (default: false)"
                 },
                 "max_nodes": {
                     "type": "integer",
-                    "description": "Maximum number of files to analyze (default: 100, max: 200). Affects both summary and full modes.",
+                    "description": "Maximum files to analyze (default: 100, max: 200)",
                     "minimum": 1,
                     "maximum": 200
                 },
                 "max_edges_per_node": {
                     "type": "integer",
-                    "description": "Maximum dependencies to show per file (default: 50, max: 100). Applies to each dependency type (internal, external, etc).",
+                    "description": "Maximum dependencies per file (default: 50, max: 100)",
                     "minimum": 1,
                     "maximum": 100
+                },
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["fanout", "fanin", "name"],
+                    "description": "Sort hotspots by fanout (dependencies from), fanin (dependencies to), or name (default: fanout)"
                 }
             },
             "required": []
