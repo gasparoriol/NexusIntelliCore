@@ -84,10 +84,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
             lint::lint_file(&file).await
         }
         "get_dependencies_graph" => deps_graph::get_dependencies_graph(args).await,
-        "search_design_patterns" => {
-            let file = optional_file_path(args);
-            patterns::search_design_patterns(file.as_deref()).await
-        }
+        "search_design_patterns" => patterns::search_design_patterns(args).await,
         "audit_security_measures" => audit::audit_security_measures().await,
         "refresh_index" => server::refresh_index().await,
         "get_server_stats" => server::get_server_stats().await,
@@ -209,12 +206,6 @@ fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Missing required argument: {}", key))
-}
-
-fn optional_file_path(args: &Value) -> Option<String> {
-    serde_json::from_value::<FilePathArgs>(args.clone())
-        .ok()
-        .and_then(|v| v.file_path)
 }
 
 fn require_file_path(args: &Value) -> Result<String> {

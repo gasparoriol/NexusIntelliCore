@@ -215,9 +215,35 @@ fn schema_search_design_patterns() -> Value {
         "inputSchema": {
             "type": "object",
             "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["summary", "full"],
+                    "description": "summary returns compact results, full returns up to max_matches (default: summary)"
+                },
                 "file_path": {
                     "type": "string",
                     "description": "Optional: restrict analysis to a single file"
+                },
+                "scope_path": {
+                    "type": "string",
+                    "description": "Optional relative path fragment to restrict files analyzed"
+                },
+                "max_files": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "description": "Maximum files to scan (default: 100)"
+                },
+                "max_matches": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2000,
+                    "description": "Maximum pattern matches returned before response-size trimming (default: 200)"
+                },
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["pattern", "file", "line"],
+                    "description": "Sort matches by pattern, file, or line (default: pattern)"
                 }
             },
             "required": []
