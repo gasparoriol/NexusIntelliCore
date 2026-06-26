@@ -27,39 +27,38 @@ impl SecurityConfig {
         }
     }
 
-    fn load_from_json() -> Option<Self> {
-        let config_path = std::env::var("MCP_SECURITY_CONFIG_PATH").ok()?;
+    /// Load security configuration from JSON file or environment variables.
+    /// Returns a Result to allow callers to handle missing/invalid config gracefully.
+    fn load_from_json() -> Result<Self, String> {
+        let config_path = std::env::var("MCP_SECURITY_CONFIG_PATH")
+            .map_err(|_| "MCP_SECURITY_CONFIG_PATH not set".to_string())?;
 
-        let file = std::fs::File::open(&config_path).unwrap_or_else(|e| {
-            panic!(
-                "Failed to open security config file at '{}': {}",
+        let file = std::fs::File::open(&config_path).map_err(|e| {
+            format!(
+                "Cannot open security config file at '{}': {}",
                 config_path, e
             )
-        });
+        })?;
 
-        let config: Self = serde_json::from_reader(&file).unwrap_or_else(|e| {
-            panic!(
-                "Failed to parse security config JSON at '{}': {}",
+        let config: Self = serde_json::from_reader(&file).map_err(|e| {
+            format!(
+                "Invalid JSON in security config at '{}': {}",
                 config_path, e
             )
-        });
+        })?;
 
-        Some(config)
+        Ok(config)
     }
 
     pub fn load() -> Self {
         // First try to load from JSON config file, then fallback to environment variables
-        let mut config = SecurityConfig::load_from_json().unwrap_or_default();
-
-        if config.auth_token.is_none()
-            && config.allowed_tools.is_none()
-            && config.audit_log_path.is_none()
-        {
-            // If no config was loaded from JSON, try to load from environment variables
-            config = Self::load_from_env();
+        match Self::load_from_json() {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!("[WARN] SecurityConfig: {}", e);
+                Self::load_from_env()
+            }
         }
-
-        config
     }
 }
 
@@ -208,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn test_load_from_corrupted_json_panics() {
+    fn test_load_from_corrupted_json_falls_back_to_env() {
         let _guard = super::SECURITY_ENV_TEST_LOCK.lock().unwrap();
 
         // Write corrupted JSON to a temp file
@@ -217,14 +216,23 @@ mod tests {
         std::fs::write(&config_file, "{invalid_json}").unwrap();
 
         let orig_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
+        let orig_token = std::env::var("MCP_AUTH_TOKEN").ok();
+
         std::env::set_var(
             "MCP_SECURITY_CONFIG_PATH",
             config_file.to_string_lossy().to_string(),
         );
+        // Set a fallback env var to verify it loads from env when JSON fails
+        std::env::set_var("MCP_AUTH_TOKEN", "fallback_token_from_env");
+        std::env::remove_var("MCP_ALLOWED_TOOLS");
+        std::env::remove_var("MCP_AUDIT_LOG_PATH");
 
-        let result = std::panic::catch_unwind(|| {
-            SecurityConfig::load();
-        });
+        // Should NOT panic; should fallback to env vars gracefully
+        let config = SecurityConfig::load();
+        assert_eq!(
+            config.auth_token,
+            Some("fallback_token_from_env".to_string())
+        );
 
         // Cleanup
         let _ = std::fs::remove_file(&config_file);
@@ -233,10 +241,10 @@ mod tests {
         } else {
             std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
         }
-
-        assert!(
-            result.is_err(),
-            "SecurityConfig::load should panic on corrupted JSON"
-        );
+        if let Some(v) = orig_token {
+            std::env::set_var("MCP_AUTH_TOKEN", v);
+        } else {
+            std::env::remove_var("MCP_AUTH_TOKEN");
+        }
     }
 }
