@@ -1,0 +1,143 @@
+name: Security Hardening & Audit
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  # Job 1: Detect hardcoded secrets with gitleaks
+  secrets-scan:
+    name: Scan for hardcoded secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: true
+
+  # Job 2: Audit Rust dependencies for known vulnerabilities
+  dependency-audit:
+    name: Audit Rust dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Run cargo audit
+        run: cargo audit --json
+        continue-on-error: false
+
+  # Job 3: Static security analysis with Clippy
+  security-linting:
+    name: Security analysis with Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run Clippy with security lints
+        run: |
+          cargo clippy --all-targets --all-features -- \
+            -W clippy::undocumented_unsafe_blocks \
+            -W clippy::panic \
+            -W unsafe_code \
+            -D warnings
+
+  # Job 4: Run comprehensive test suite
+  test-suite:
+    name: Run test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run all tests
+        run: cargo test --all --verbose
+
+  # Job 5: Check code formatting
+  format-check:
+    name: Check code formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+  # Job 6: Report security status
+  security-summary:
+    name: Security Audit Summary
+    runs-on: ubuntu-latest
+    needs: [secrets-scan, dependency-audit, security-linting, test-suite, format-check]
+    if: always()
+    steps:
+      - name: Check job status
+        run: |
+          echo "🔐 Security Audit Results:"
+          echo "  ✓ Secrets scan: ${{ needs.secrets-scan.result }}"
+          echo "  ✓ Dependency audit: ${{ needs.dependency-audit.result }}"
+          echo "  ✓ Security linting: ${{ needs.security-linting.result }}"
+          echo "  ✓ Test suite: ${{ needs.test-suite.result }}"
+          echo "  ✓ Format check: ${{ needs.format-check.result }}"
+          
+          if [[ "${{ needs.secrets-scan.result }}" != "success" || \
+                "${{ needs.dependency-audit.result }}" != "success" || \
+                "${{ needs.security-linting.result }}" != "success" || \
+                "${{ needs.test-suite.result }}" != "success" || \
+                "${{ needs.format-check.result }}" != "success" ]]; then
+            echo "❌ Security audit FAILED"
+            exit 1
+          fi
+          
+          echo "✅ All security checks PASSED"

@@ -245,10 +245,10 @@ fn test_is_public_fn_java() {
 #[test]
 fn test_is_public_class_rust() {
     let lang = grammar("lib.rs");
-    let lines = vec!["pub struct Config {", "    field: u32,", "}"];
+    let lines = ["pub struct Config {", "    field: u32,", "}"];
     assert!(lang.is_public_class(lines[0], "Config"));
 
-    let lines2 = vec!["struct Internal {", "}"];
+    let lines2 = ["struct Internal {", "}"];
     assert!(!lang.is_public_class(lines2[0], "Internal"));
 }
 

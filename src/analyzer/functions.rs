@@ -89,7 +89,11 @@ pub(crate) fn extract_functions(
     })
 }
 
-fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &dyn LanguageGrammar) -> Option<String> {
+fn extract_owner_chain(
+    node: tree_sitter::Node<'_>,
+    source: &str,
+    lang: &dyn LanguageGrammar,
+) -> Option<String> {
     let mut owners: Vec<String> = Vec::new();
     let mut current = node.parent();
 
@@ -167,22 +171,18 @@ fn extract_owner_chain(node: tree_sitter::Node<'_>, source: &str, lang: &dyn Lan
         None
     } else {
         owners.reverse();
-        let sep = if lang.name() == "rust" {
-            "::"
-        } else {
-            "."
-        };
+        let sep = if lang.name() == "rust" { "::" } else { "." };
         Some(owners.join(sep))
     }
 }
 
-fn build_qualified_name(name: &str, owner_chain: Option<&str>, lang: &dyn LanguageGrammar) -> String {
+fn build_qualified_name(
+    name: &str,
+    owner_chain: Option<&str>,
+    lang: &dyn LanguageGrammar,
+) -> String {
     if let Some(owner) = owner_chain {
-        let sep = if lang.name() == "rust" {
-            "::"
-        } else {
-            "."
-        };
+        let sep = if lang.name() == "rust" { "::" } else { "." };
         format!("{}{}{}", owner, sep, name)
     } else {
         name.to_owned()

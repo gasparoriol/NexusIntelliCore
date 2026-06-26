@@ -48,6 +48,7 @@ moka = { version = "0.12", features = ["future"] }
 # Security lints — enforced at package level
 [lints.clippy]
 undocumented_unsafe_blocks = "warn"
+panic = "warn"
 
 [lints.rust]
 unsafe_code = "warn"

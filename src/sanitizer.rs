@@ -84,6 +84,26 @@ lazy_static! {
 }
 
 // ---------------------------------------------------------------------------
+// Language Support — Comment Styles and Detection
+// ---------------------------------------------------------------------------
+
+/// Return the comment style for a given programming language.
+/// This ensures language-aware detection of `@mcp-strip` annotations.
+///
+/// # Examples
+/// - Python, Ruby, Shell, YAML → `"#"`
+/// - Rust, Go, Java, JS, TS, C, C++, Kotlin, Swift → `"//"`
+/// - Unknown languages → default to `"//"` (safe fallback)
+pub fn comment_style(lang: &str) -> &'static str {
+    match lang.to_lowercase().as_str() {
+        "python" | "ruby" | "shell" | "bash" | "yaml" | "yml" => "#",
+        "rust" | "go" | "golang" | "java" | "javascript" | "js" | "typescript" | "ts" | "c"
+        | "cpp" | "c++" | "kotlin" | "swift" => "//",
+        _ => "//", // fallback for unknown languages
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -406,6 +426,152 @@ mod tests {
     fn handles_unicode_without_panic() {
         let (out, _) = sanitize_text("// コメント: password = \"日本語テスト12345678\"");
         assert!(out.contains("[REDACTED_BY_MCP]"));
+    }
+
+    #[test]
+    fn comment_style_python_uses_hash() {
+        assert_eq!(comment_style("python"), "#");
+        assert_eq!(comment_style("PYTHON"), "#");
+        assert_eq!(comment_style("ruby"), "#");
+        assert_eq!(comment_style("shell"), "#");
+        assert_eq!(comment_style("yaml"), "#");
+    }
+
+    #[test]
+    fn comment_style_c_style_langs_use_slash() {
+        assert_eq!(comment_style("rust"), "//");
+        assert_eq!(comment_style("go"), "//");
+        assert_eq!(comment_style("golang"), "//");
+        assert_eq!(comment_style("java"), "//");
+        assert_eq!(comment_style("javascript"), "//");
+        assert_eq!(comment_style("typescript"), "//");
+        assert_eq!(comment_style("c"), "//");
+        assert_eq!(comment_style("cpp"), "//");
+        assert_eq!(comment_style("c++"), "//");
+        assert_eq!(comment_style("kotlin"), "//");
+        assert_eq!(comment_style("swift"), "//");
+    }
+
+    #[test]
+    fn comment_style_unknown_defaults_to_slash() {
+        assert_eq!(comment_style("unknown"), "//");
+        assert_eq!(comment_style("cobol"), "//");
+    }
+
+    #[test]
+    fn detects_mcp_strip_in_go() {
+        // Go function with @mcp-strip
+        let go_code = "func secretFunc() { // @mcp-strip\n    // logic\n}";
+        assert!(
+            has_mcp_strip(go_code),
+            "should detect Go @mcp-strip annotation"
+        );
+
+        let go_no_strip = "func publicFunc() {\n    // logic\n}";
+        assert!(
+            !has_mcp_strip(go_no_strip),
+            "should not detect @mcp-strip when absent"
+        );
+    }
+
+    #[test]
+    fn detects_mcp_strip_in_java() {
+        // Java method with @mcp-strip
+        let java_code = "public void secretMethod() { // @mcp-strip\n    doStuff();\n}";
+        assert!(
+            has_mcp_strip(java_code),
+            "should detect Java @mcp-strip annotation"
+        );
+
+        let java_no_strip = "public void publicMethod() {\n    doStuff();\n}";
+        assert!(
+            !has_mcp_strip(java_no_strip),
+            "should not detect @mcp-strip when absent"
+        );
+    }
+
+    #[test]
+    fn detects_mcp_strip_in_typescript() {
+        // TypeScript function with @mcp-strip
+        let ts_code = "function secretFn(): void { // @mcp-strip\n    secretLogic();\n}";
+        assert!(
+            has_mcp_strip(ts_code),
+            "should detect TypeScript @mcp-strip annotation"
+        );
+
+        let ts_no_strip = "function publicFn(): void {\n    secretLogic();\n}";
+        assert!(
+            !has_mcp_strip(ts_no_strip),
+            "should not detect @mcp-strip when absent"
+        );
+    }
+
+    #[test]
+    fn detects_mcp_strip_in_c() {
+        // C function with @mcp-strip
+        let c_code = "void secretFunc() { // @mcp-strip\n    internal_logic();\n}";
+        assert!(
+            has_mcp_strip(c_code),
+            "should detect C @mcp-strip annotation"
+        );
+
+        let c_no_strip = "void publicFunc() {\n    internal_logic();\n}";
+        assert!(
+            !has_mcp_strip(c_no_strip),
+            "should not detect @mcp-strip when absent"
+        );
+    }
+
+    #[test]
+    fn detects_mcp_strip_in_cpp() {
+        // C++ method with @mcp-strip
+        let cpp_code = "void MyClass::secretMethod() { // @mcp-strip\n    internalState = 42;\n}";
+        assert!(
+            has_mcp_strip(cpp_code),
+            "should detect C++ @mcp-strip annotation"
+        );
+
+        let cpp_no_strip = "void MyClass::publicMethod() {\n    state = 42;\n}";
+        assert!(
+            !has_mcp_strip(cpp_no_strip),
+            "should not detect @mcp-strip when absent"
+        );
+    }
+
+    #[test]
+    fn strips_go_function_body() {
+        let go_code = "func secretFunc() { // @mcp-strip\n    internalCall()\n}";
+        let stripped = strip_function_body(go_code, "go");
+        assert!(stripped.contains("func secretFunc()"));
+        assert!(stripped.contains("/* Lógica de negocio ofuscada por seguridad */"));
+        assert!(!stripped.contains("internalCall"));
+    }
+
+    #[test]
+    fn strips_java_method_body() {
+        let java_code = "public void secretMethod() { // @mcp-strip\n    dbQuery();\n}";
+        let stripped = strip_function_body(java_code, "java");
+        assert!(stripped.contains("public void secretMethod()"));
+        assert!(stripped.contains("/* Lógica de negocio ofuscada por seguridad */"));
+        assert!(!stripped.contains("dbQuery"));
+    }
+
+    #[test]
+    fn strips_typescript_function_body() {
+        let ts_code = "function secretFn(): void { // @mcp-strip\n    apiCall();\n}";
+        let stripped = strip_function_body(ts_code, "typescript");
+        assert!(stripped.contains("function secretFn(): void {"));
+        assert!(stripped.contains("/* Lógica de negocio ofuscada por seguridad */"));
+        assert!(!stripped.contains("apiCall"));
+    }
+
+    #[test]
+    fn strips_c_function_body() {
+        let c_code = "void secretFunc() { // @mcp-strip\n    internal_op();\n}";
+        let stripped = strip_function_body(c_code, "c");
+        assert!(stripped.contains("void secretFunc()"));
+        assert!(stripped.contains("/* Lógica de negocio ofuscada por seguridad */"));
+        assert!(!stripped.contains("internal_op"));
     }
 
     #[test]

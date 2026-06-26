@@ -26,6 +26,7 @@ use crate::state::ServerState;
 /// Debounce window for topological file-system changes.
 const INDEX_REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
 
+#[derive(Debug)]
 pub(crate) enum WatchAction {
     Ignore,
     InvalidateCache(Vec<PathBuf>),
@@ -245,9 +246,13 @@ mod tests {
             EventKind::Modify(ModifyKind::Data(DataChange::Content)),
             vec![path.clone()],
         );
-        match classify_event(&ev) {
-            WatchAction::InvalidateCache(paths) => assert_eq!(paths, vec![path]),
-            _ => panic!("expected InvalidateCache, but got a different action"),
+        let result = classify_event(&ev);
+        assert!(
+            matches!(result, WatchAction::InvalidateCache(_)),
+            "expected InvalidateCache, but got: {result:?}"
+        );
+        if let WatchAction::InvalidateCache(paths) = result {
+            assert_eq!(paths, vec![path]);
         }
     }
 

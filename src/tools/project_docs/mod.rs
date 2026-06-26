@@ -1,6 +1,7 @@
 mod data;
 mod format;
 mod i18n;
+#[allow(clippy::module_inception)]
 mod project_docs;
 mod render;
 

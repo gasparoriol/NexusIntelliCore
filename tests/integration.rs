@@ -101,7 +101,10 @@ fn send_single_mcp_request(root: &str, request: &str) -> String {
 
     let stdout = child.stdout.take().unwrap();
     let responses = read_framed_responses(stdout, 1);
-    responses.first().cloned().unwrap_or_default()
+    let result = responses.first().cloned().unwrap_or_default();
+
+    let _ = child.wait(); // Ensure the child process is waited on
+    result
 }
 
 #[test]

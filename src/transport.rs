@@ -354,9 +354,8 @@ mod tests {
                 .read_message()
                 .await
                 .expect("read_message should not fail");
-            let Some(msg) = msg else {
-                panic!("Expected message {expected_id} but got EOF");
-            };
+            assert!(msg.is_some(), "Expected message {expected_id} but got EOF");
+            let msg = msg.unwrap();
             assert_eq!(
                 msg["id"], expected_id,
                 "Message {expected_id} id mismatch (pipelining broken)"

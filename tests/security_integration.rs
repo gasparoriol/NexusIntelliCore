@@ -99,7 +99,10 @@ fn send_single_mcp_request_with_env(
     drop(child.stdin.take());
 
     let stdout = child.stdout.take().unwrap();
-    read_single_framed_response(stdout)
+    let response = read_single_framed_response(stdout);
+
+    let _ = child.wait(); // Ensure the child process is waited on
+    response
 }
 
 fn unique_temp_log_path() -> PathBuf {

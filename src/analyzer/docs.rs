@@ -1,4 +1,3 @@
-
 /// Extract the doc-comment block immediately preceding the given 1-based line.
 ///
 /// Walks backwards from `before_line - 1`, collecting contiguous comment lines.
