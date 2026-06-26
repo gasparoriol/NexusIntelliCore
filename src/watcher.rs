@@ -247,7 +247,7 @@ mod tests {
         );
         match classify_event(&ev) {
             WatchAction::InvalidateCache(paths) => assert_eq!(paths, vec![path]),
-            _ => panic!("expected InvalidateCache"),
+            _ => panic!("expected InvalidateCache, but got a different action"),
         }
     }
 

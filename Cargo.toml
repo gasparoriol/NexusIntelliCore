@@ -44,3 +44,10 @@ tree-sitter-html = "0.20.4"
 # File watcher for cache invalidation
 notify = "6"
 moka = { version = "0.12", features = ["future"] }
+
+# Security lints — enforced at package level
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+
+[lints.rust]
+unsafe_code = "warn"

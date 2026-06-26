@@ -406,7 +406,7 @@ mod tests {
         let input = serde_json::json!({
             "count": 42,
             "enabled": true,
-            "ratio": 3.14
+            "ratio": 0.5
         });
         let result = sanitize_json_args(&input, &policy);
         assert_eq!(result["count"], serde_json::json!(42));
