@@ -93,6 +93,7 @@ pub fn sanitize_file_outline(outline: &str, policy: &PrivacyPolicy) -> (String, 
 /// intentionally skipped here because doc comments are, by definition, meant
 /// to be read; stripping them on keyword matches would destroy the output.
 /// Secrets in doc comments (e.g. example tokens) are still redacted.
+#[allow(dead_code)]
 pub fn sanitize_doc_comment(comment: &str, policy: &PrivacyPolicy) -> (String, Vec<String>) {
     if !policy.redact_secrets {
         return (comment.to_string(), Vec::new());
@@ -196,6 +197,7 @@ pub fn sanitize_dependency_graph(
 /// The audit scanner reports secret *types* and *locations*, not values — but
 /// a bug in evidence formatting could accidentally include a raw value. This
 /// second-layer pass ensures nothing slips through.
+#[allow(dead_code)]
 pub fn sanitize_security_report(report: &str, policy: &PrivacyPolicy) -> (String, Vec<String>) {
     sanitize_output_text(report, policy)
 }

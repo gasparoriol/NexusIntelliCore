@@ -97,11 +97,10 @@ fn format_invocation_table(counts: &std::collections::HashMap<String, u64>) -> S
 }
 
 fn utilization(entries: usize, max_entries: usize) -> usize {
-    if max_entries == 0 {
-        0
-    } else {
-        (entries * 100) / max_entries
-    }
+    entries
+        .checked_mul(100)
+        .and_then(|v| v.checked_div(max_entries))
+        .unwrap_or(0)
 }
 
 fn utilization_f64(entries: usize, max_entries: usize) -> f64 {

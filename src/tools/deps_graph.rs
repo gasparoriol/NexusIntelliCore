@@ -765,7 +765,7 @@ fn merge_with_reverse_dependencies(
             .cloned()
             .unwrap_or_default();
 
-        graph
+        if let Some(m) = graph
             .entry(dep)
             .or_insert_with(|| {
                 json!({
@@ -776,9 +776,9 @@ fn merge_with_reverse_dependencies(
                 })
             })
             .as_object_mut()
-            .map(|m| {
-                m.insert("dependents".to_string(), Value::Array(dependents));
-            });
+        {
+            m.insert("dependents".to_string(), Value::Array(dependents));
+        }
     }
     graph
 }
@@ -794,13 +794,15 @@ fn reverse_dependencies(graph: &serde_json::Map<String, Value>) -> serde_json::M
                 if let Some(arr) = obj.get(*key).and_then(|v| v.as_array()) {
                     for dep in arr {
                         if let Some(dep_str) = dep.as_str() {
-                            reversed
+                            if let Some(arr) = reversed
                                 .entry(dep_str.to_string())
                                 .or_insert_with(|| json!({"dependents": []}))
                                 .as_object_mut()
                                 .and_then(|m| m.get_mut("dependents"))
                                 .and_then(|v| v.as_array_mut())
-                                .map(|arr| arr.push(Value::String(file.clone())));
+                            {
+                                arr.push(Value::String(file.clone()));
+                            }
                         }
                     }
                 }

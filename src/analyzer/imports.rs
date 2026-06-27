@@ -92,11 +92,12 @@ pub fn classify_import_kind_from_path(path: &str, lang_name: &str) -> ImportKind
         return ImportKind::InternalLocal;
     }
     // Rust project-local references
-    if lang_name == "rust" {
-        if path.starts_with("crate::") || path.starts_with("self::") || path.starts_with("super::")
-        {
-            return ImportKind::InternalLocal;
-        }
+    if lang_name == "rust"
+        && (path.starts_with("crate::")
+            || path.starts_with("self::")
+            || path.starts_with("super::"))
+    {
+        return ImportKind::InternalLocal;
     }
     // Everything else is treated as an external library (crate, npm, PyPI, …)
     ImportKind::ExternalLibrary

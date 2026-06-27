@@ -94,6 +94,7 @@ lazy_static! {
 /// - Python, Ruby, Shell, YAML → `"#"`
 /// - Rust, Go, Java, JS, TS, C, C++, Kotlin, Swift → `"//"`
 /// - Unknown languages → default to `"//"` (safe fallback)
+#[allow(dead_code)]
 pub fn comment_style(lang: &str) -> &'static str {
     match lang.to_lowercase().as_str() {
         "python" | "ruby" | "shell" | "bash" | "yaml" | "yml" => "#",
@@ -278,6 +279,7 @@ pub fn strip_function_body(code: &str, language: &str) -> String {
 /// - `inner_end` is the byte offset of the closing `}`
 ///
 /// Returns `source` unchanged if the offsets are out of bounds.
+#[allow(dead_code)]
 pub fn strip_body_by_range(source: &str, body_range: (usize, usize)) -> String {
     let bytes = source.as_bytes();
     let (start, end) = body_range;

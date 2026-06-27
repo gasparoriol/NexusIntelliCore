@@ -52,7 +52,7 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
     let component_lint = if state.lint_pool().enabled() {
         match ts_analysis.as_ref() {
             Some(analysis) => {
-                Some(build_lint_section(&state, &ts_path, analysis, ANGULAR_LINT_MAX_ITEMS).await)
+                Some(build_lint_section(state, &ts_path, analysis, ANGULAR_LINT_MAX_ITEMS).await)
             }
             None => None,
         }
@@ -163,7 +163,7 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
         if state.lint_pool().enabled() {
             template_section.insert(
                 "lint".to_string(),
-                build_lint_section(&state, template_path, tmpl, ANGULAR_LINT_MAX_ITEMS).await,
+                build_lint_section(state, template_path, tmpl, ANGULAR_LINT_MAX_ITEMS).await,
             );
         }
         Some(Value::Object(template_section))
@@ -194,7 +194,7 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
         if state.lint_pool().enabled() {
             style_section.insert(
                 "lint".to_string(),
-                build_lint_section(&state, path_buf, analysis, ANGULAR_LINT_MAX_ITEMS).await,
+                build_lint_section(state, path_buf, analysis, ANGULAR_LINT_MAX_ITEMS).await,
             );
         }
         styles_section.push(Value::Object(style_section));

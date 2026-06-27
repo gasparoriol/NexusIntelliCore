@@ -33,13 +33,3 @@ impl Severity {
         }
     }
 }
-
-impl LintResult {
-    pub fn empty() -> Self {
-        Self {
-            diagnostics: Vec::new(),
-            sources: Vec::new(),
-            error: None,
-        }
-    }
-}

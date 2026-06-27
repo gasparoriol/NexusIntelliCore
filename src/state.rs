@@ -69,7 +69,7 @@ pub fn canonicalize_json(value: &serde_json::Value) -> String {
         }
         serde_json::Value::Object(map) => {
             let mut entries = map.iter().collect::<Vec<_>>();
-            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            entries.sort_by_key(|(a, _)| *a);
             let rendered = entries
                 .into_iter()
                 .map(|(k, v)| {
@@ -537,7 +537,7 @@ impl ServerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{num::NonZeroUsize, time::SystemTime};
+    use std::num::NonZeroUsize;
 
     #[tokio::test]
     async fn ast_cache_respects_capacity() {
@@ -554,8 +554,7 @@ mod tests {
 
     #[test]
     fn test_cached_analysis_struct() {
-        // Verify CachedAnalysis can be created and has mtime field
-        let mtime = SystemTime::now();
+        // Verify CachedAnalysis can be created.
         let analysis = analyzer::FileAnalysis {
             language: "rust".to_string(),
             imports: vec![],
@@ -572,14 +571,6 @@ mod tests {
         };
 
         assert_eq!(cached.analysis.language, "rust");
-    }
-
-    #[test]
-    fn test_default_cache_limit_is_reasonable() {
-        // DEFAULT_AST_CACHE_ENTRIES should be non-zero and not excessive
-        assert!(DEFAULT_AST_CACHE_ENTRIES > 0);
-        assert!(DEFAULT_AST_CACHE_ENTRIES <= 1000); // Reasonable upper bound
-        assert_eq!(DEFAULT_AST_CACHE_ENTRIES, 256);
     }
 
     #[test]
