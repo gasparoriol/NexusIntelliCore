@@ -22,9 +22,10 @@ pub struct FunctionInfo {
     pub end_line: usize,
     /// `true` when `@mcp-strip` is detected via AST comment nodes (not string literals).
     pub is_strip_marked: bool,
-    /// Byte range of the body interior relative to `body_source` start,
-    /// excluding the outer `{` and `}`. `None` for Python and unsupported
-    /// body shapes. Used by `strip_body_by_range` for precise stripping.
+    /// Byte range of the function body relative to `body_source` start.
+    /// For brace languages, the range excludes outer `{` and `}`.
+    /// For Python, it spans the full indented block.
+    /// `None` only for unsupported body shapes.
     pub body_byte_range: Option<(usize, usize)>,
     /// Doc comment block immediately preceding the function definition.
     pub doc_comment: Option<String>,

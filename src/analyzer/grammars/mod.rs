@@ -1,6 +1,7 @@
 mod c_grammar;
 mod csharp_grammar;
 mod css_grammar;
+mod go_grammar;
 mod html_grammar;
 mod java_grammar;
 mod javascript_grammar;
@@ -13,6 +14,7 @@ mod typescript_grammar;
 pub use c_grammar::CGrammar;
 pub use csharp_grammar::CSharpGrammar;
 pub use css_grammar::{CssGrammar, ScssGrammar};
+pub use go_grammar::GoGrammar;
 pub use html_grammar::HtmlGrammar;
 pub use java_grammar::JavaGrammar;
 pub use javascript_grammar::JavaScriptGrammar;

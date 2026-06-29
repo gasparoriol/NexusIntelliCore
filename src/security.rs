@@ -8,6 +8,13 @@ pub struct SecurityConfig {
 
     // If detailed auditory is required in an specific file
     pub audit_log_path: Option<std::path::PathBuf>,
+
+    // Additional redaction regex patterns applied by Privacy Gateway.
+    #[allow(dead_code)]
+    pub custom_redaction_patterns: Option<Vec<String>>,
+
+    // Placeholder used when @mcp-strip hides function implementations.
+    pub custom_strip_placeholder: Option<String>,
 }
 
 impl SecurityConfig {
@@ -19,11 +26,26 @@ impl SecurityConfig {
         let audit_log_path = std::env::var("MCP_AUDIT_LOG_PATH")
             .ok()
             .map(std::path::PathBuf::from);
+        let custom_redaction_patterns = std::env::var("MCP_CUSTOM_REDACTION_PATTERNS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v| !v.is_empty());
+        let custom_strip_placeholder = std::env::var("MCP_CUSTOM_STRIP_PLACEHOLDER")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         SecurityConfig {
             auth_token,
             allowed_tools,
             audit_log_path,
+            custom_redaction_patterns,
+            custom_strip_placeholder,
         }
     }
 
@@ -128,10 +150,14 @@ mod tests {
             auth_token: None,
             allowed_tools: None,
             audit_log_path: None,
+            custom_redaction_patterns: None,
+            custom_strip_placeholder: None,
         };
         assert!(config.auth_token.is_none());
         assert!(config.allowed_tools.is_none());
         assert!(config.audit_log_path.is_none());
+        assert!(config.custom_redaction_patterns.is_none());
+        assert!(config.custom_strip_placeholder.is_none());
     }
 
     #[test]
@@ -143,6 +169,8 @@ mod tests {
         let orig_token = std::env::var("MCP_AUTH_TOKEN").ok();
         let orig_tools = std::env::var("MCP_ALLOWED_TOOLS").ok();
         let orig_path = std::env::var("MCP_AUDIT_LOG_PATH").ok();
+        let orig_custom_patterns = std::env::var("MCP_CUSTOM_REDACTION_PATTERNS").ok();
+        let orig_custom_placeholder = std::env::var("MCP_CUSTOM_STRIP_PLACEHOLDER").ok();
         let orig_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
 
         // Ensure clean state for config path
@@ -152,16 +180,28 @@ mod tests {
         std::env::remove_var("MCP_AUTH_TOKEN");
         std::env::remove_var("MCP_ALLOWED_TOOLS");
         std::env::remove_var("MCP_AUDIT_LOG_PATH");
+        std::env::remove_var("MCP_CUSTOM_REDACTION_PATTERNS");
+        std::env::remove_var("MCP_CUSTOM_STRIP_PLACEHOLDER");
 
         let config_empty = SecurityConfig::load();
         assert!(config_empty.auth_token.is_none());
         assert!(config_empty.allowed_tools.is_none());
         assert!(config_empty.audit_log_path.is_none());
+        assert!(config_empty.custom_redaction_patterns.is_none());
+        assert!(config_empty.custom_strip_placeholder.is_none());
 
         // 2. Test values env loading
         std::env::set_var("MCP_AUTH_TOKEN", "test_token_123");
         std::env::set_var("MCP_ALLOWED_TOOLS", "tool1, tool2");
         std::env::set_var("MCP_AUDIT_LOG_PATH", "/tmp/audit.log");
+        std::env::set_var(
+            "MCP_CUSTOM_REDACTION_PATTERNS",
+            "ACME-[0-9]{4},corp-secret-[A-Za-z0-9]+",
+        );
+        std::env::set_var(
+            "MCP_CUSTOM_STRIP_PLACEHOLDER",
+            "Implementation hidden by policy",
+        );
 
         let config_vals = SecurityConfig::load();
         assert_eq!(config_vals.auth_token, Some("test_token_123".to_string()));
@@ -172,6 +212,17 @@ mod tests {
         assert_eq!(
             config_vals.audit_log_path,
             Some(std::path::PathBuf::from("/tmp/audit.log"))
+        );
+        assert_eq!(
+            config_vals.custom_redaction_patterns,
+            Some(vec![
+                "ACME-[0-9]{4}".to_string(),
+                "corp-secret-[A-Za-z0-9]+".to_string()
+            ])
+        );
+        assert_eq!(
+            config_vals.custom_strip_placeholder,
+            Some("Implementation hidden by policy".to_string())
         );
 
         // Restore original env
@@ -189,6 +240,16 @@ mod tests {
             std::env::set_var("MCP_AUDIT_LOG_PATH", v);
         } else {
             std::env::remove_var("MCP_AUDIT_LOG_PATH");
+        }
+        if let Some(v) = orig_custom_patterns {
+            std::env::set_var("MCP_CUSTOM_REDACTION_PATTERNS", v);
+        } else {
+            std::env::remove_var("MCP_CUSTOM_REDACTION_PATTERNS");
+        }
+        if let Some(v) = orig_custom_placeholder {
+            std::env::set_var("MCP_CUSTOM_STRIP_PLACEHOLDER", v);
+        } else {
+            std::env::remove_var("MCP_CUSTOM_STRIP_PLACEHOLDER");
         }
         if let Some(v) = orig_config {
             std::env::set_var("MCP_SECURITY_CONFIG_PATH", v);
@@ -226,6 +287,8 @@ mod tests {
         std::env::set_var("MCP_AUTH_TOKEN", "fallback_token_from_env");
         std::env::remove_var("MCP_ALLOWED_TOOLS");
         std::env::remove_var("MCP_AUDIT_LOG_PATH");
+        std::env::remove_var("MCP_CUSTOM_REDACTION_PATTERNS");
+        std::env::remove_var("MCP_CUSTOM_STRIP_PLACEHOLDER");
 
         // Should NOT panic; should fallback to env vars gracefully
         let config = SecurityConfig::load();

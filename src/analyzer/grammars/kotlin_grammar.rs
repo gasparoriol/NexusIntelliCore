@@ -17,18 +17,14 @@ impl LanguageGrammar for KotlinGrammar {
     }
 
     fn function_query(&self) -> Option<&'static str> {
-        Some(
-            "[(function_declaration name: (identifier) @name) @fn \
-              (method_declaration name: (identifier) @name) @fn \
-              (lambda_expression) @fn]",
-        )
+        Some("(function_declaration (simple_identifier) @name) @fn")
     }
     fn class_query(&self) -> Option<&'static str> {
-        Some("(class_declaration name: (identifier) @name) @cls")
+        Some("(class_declaration (type_identifier) @name) @cls")
     }
 
     fn import_query(&self) -> Option<&'static str> {
-        Some("(import_directive) @import")
+        Some("(import_header) @import")
     }
 
     fn string_query(&self) -> Option<&'static str> {

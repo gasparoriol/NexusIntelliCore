@@ -10,8 +10,99 @@
 /// - Apply @mcp-strip filtering
 /// - Never expose actual secret values, only types + line numbers
 use serde_json::{json, Value};
+use tracing::warn;
 
 use crate::sanitizer;
+
+#[derive(Default, Clone, Debug)]
+struct DynamicSecurityOverrides {
+    custom_redaction_patterns: Vec<String>,
+    custom_strip_placeholder: Option<String>,
+}
+
+fn load_dynamic_overrides() -> DynamicSecurityOverrides {
+    let mut overrides = DynamicSecurityOverrides::default();
+
+    if let Ok(raw) = std::env::var("MCP_CUSTOM_REDACTION_PATTERNS") {
+        overrides.custom_redaction_patterns.extend(
+            raw.split(',')
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty()),
+        );
+    }
+
+    if let Ok(raw) = std::env::var("MCP_CUSTOM_STRIP_PLACEHOLDER") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            overrides.custom_strip_placeholder = Some(trimmed.to_string());
+        }
+    }
+
+    if let Ok(config_path) = std::env::var("MCP_SECURITY_CONFIG_PATH") {
+        if let Ok(raw) = std::fs::read_to_string(config_path) {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+                if let Some(arr) = parsed
+                    .get("custom_redaction_patterns")
+                    .and_then(|v| v.as_array())
+                {
+                    overrides.custom_redaction_patterns.extend(
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .filter(|p| !p.is_empty()),
+                    );
+                }
+
+                if overrides.custom_strip_placeholder.is_none() {
+                    overrides.custom_strip_placeholder = parsed
+                        .get("custom_strip_placeholder")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+    }
+
+    overrides
+}
+
+fn apply_custom_redaction_patterns(text: &str) -> (String, Vec<String>) {
+    let patterns = load_dynamic_overrides().custom_redaction_patterns;
+    if patterns.is_empty() {
+        return (text.to_string(), Vec::new());
+    }
+
+    let mut out = text.to_string();
+    let mut fired = Vec::new();
+    for pattern in patterns {
+        match regex::Regex::new(&pattern) {
+            Ok(re) => {
+                if re.is_match(&out) {
+                    out = re.replace_all(&out, "[REDACTED_BY_MCP]").into_owned();
+                    fired.push(format!("CUSTOM_PATTERN:{}", pattern));
+                }
+            }
+            Err(e) => {
+                warn!(pattern = %pattern, error = %e, "Invalid custom redaction regex ignored");
+            }
+        }
+    }
+    (out, fired)
+}
+
+fn sanitize_text_with_dynamic_patterns(text: &str) -> (String, Vec<String>) {
+    let (sanitized, mut redactions) = sanitizer::sanitize_text(text);
+    let (sanitized_custom, custom_redactions) = apply_custom_redaction_patterns(&sanitized);
+    redactions.extend(custom_redactions);
+    (sanitized_custom, redactions)
+}
+
+fn dynamic_strip_placeholder() -> String {
+    load_dynamic_overrides()
+        .custom_strip_placeholder
+        .unwrap_or_else(|| sanitizer::DEFAULT_STRIP_PLACEHOLDER.to_string())
+}
 
 /// Policy for what to do when a secret or sensitive pattern is found
 #[derive(Clone, Debug)]
@@ -63,7 +154,7 @@ pub fn sanitize_output_text(text: &str, policy: &PrivacyPolicy) -> (String, Vec<
         return (text.to_string(), Vec::new());
     }
 
-    let (sanitized, redactions) = sanitizer::sanitize_text(text);
+    let (sanitized, redactions) = sanitize_text_with_dynamic_patterns(text);
 
     let redaction_summary: Vec<String> = redactions.iter().map(|r| r.to_string()).collect();
 
@@ -76,7 +167,7 @@ pub fn sanitize_import(import_text: &str, policy: &PrivacyPolicy) -> (String, Ve
         return (import_text.to_string(), Vec::new());
     }
 
-    let (sanitized, redactions) = sanitizer::sanitize_text(import_text);
+    let (sanitized, redactions) = sanitize_text_with_dynamic_patterns(import_text);
     let redaction_summary: Vec<String> = redactions.iter().map(|r| r.to_string()).collect();
 
     (sanitized, redaction_summary)
@@ -98,7 +189,7 @@ pub fn sanitize_doc_comment(comment: &str, policy: &PrivacyPolicy) -> (String, V
     if !policy.redact_secrets {
         return (comment.to_string(), Vec::new());
     }
-    let (sanitized, redactions) = sanitizer::sanitize_text(comment);
+    let (sanitized, redactions) = sanitize_text_with_dynamic_patterns(comment);
     let redaction_summary: Vec<String> = redactions.iter().map(|r| r.to_string()).collect();
     (sanitized, redaction_summary)
 }
@@ -121,14 +212,21 @@ pub fn sanitize_function_source(
     // Python uses `# @mcp-strip`. Stripping unconditionally would hide all
     // function bodies, defeating the purpose of inspect_symbol.
     if policy.apply_strip_marks && sanitizer::has_mcp_strip(&sanitized) {
-        sanitized = sanitizer::strip_function_body(&sanitized, language);
+        #[allow(deprecated)]
+        {
+            sanitized = sanitizer::strip_function_body_with_placeholder(
+                &sanitized,
+                language,
+                &dynamic_strip_placeholder(),
+            );
+        }
     }
 
     // Step 2: Remove sensitive comments
     sanitized = sanitizer::strip_sensitive_comments(&sanitized);
 
     // Step 3: Redact secrets
-    let (final_sanitized, secret_redactions) = sanitizer::sanitize_text(&sanitized);
+    let (final_sanitized, secret_redactions) = sanitize_text_with_dynamic_patterns(&sanitized);
     redactions.extend(secret_redactions.iter().map(|r| r.to_string()));
 
     (final_sanitized, redactions)
@@ -424,5 +522,36 @@ mod tests {
         let result = sanitize_json_args(&input, &policy);
         // Valores inocuos no deben ser alterados
         assert_eq!(result["sections"][0].as_str().unwrap(), "overview");
+    }
+
+    #[test]
+    fn sanitize_output_text_applies_custom_redaction_pattern() {
+        let orig_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
+        let temp_dir = std::env::temp_dir();
+        let config_file = temp_dir.join("privacy_gateway_custom_pattern_test.json");
+        std::fs::write(
+            &config_file,
+            r#"{
+  "custom_redaction_patterns": ["ACME-[0-9]{4}"]
+}"#,
+        )
+        .unwrap();
+
+        std::env::set_var(
+            "MCP_SECURITY_CONFIG_PATH",
+            config_file.to_string_lossy().to_string(),
+        );
+
+        let policy = PrivacyPolicy::default();
+        let (sanitized, redactions) = sanitize_output_text("ticket=ACME-1234", &policy);
+        assert!(sanitized.contains("[REDACTED_BY_MCP]"));
+        assert!(redactions.iter().any(|r| r.contains("CUSTOM_PATTERN")));
+
+        let _ = std::fs::remove_file(config_file);
+        if let Some(v) = orig_config {
+            std::env::set_var("MCP_SECURITY_CONFIG_PATH", v);
+        } else {
+            std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
+        }
     }
 }

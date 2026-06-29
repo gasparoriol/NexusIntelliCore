@@ -49,6 +49,16 @@ pub(crate) fn extract_imports(
                     .trim_end_matches(';')
                     .to_owned()
             }
+            "kotlin" => {
+                // For Kotlin: `import a.b.C` / `import a.b.*` / `import a.b.C as D`
+                // Keep only the imported symbol path/wildcard, excluding alias.
+                let normalized = raw.trim_start_matches("import ").trim();
+                if let Some((left, _alias)) = normalized.split_once(" as ") {
+                    left.trim().to_owned()
+                } else {
+                    normalized.to_owned()
+                }
+            }
             "c" => {
                 // `#include <stdio.h>` → `stdio.h`, `#include "foo.h"` → `foo.h`
                 raw.trim_start_matches("#include")

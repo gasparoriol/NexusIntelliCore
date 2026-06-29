@@ -485,7 +485,12 @@ fn pr1_body_byte_range_correct_with_generic_signature() {
         "body_byte_range must be populated for a Rust function"
     );
     let (start, end) = f.body_byte_range.unwrap();
-    let stripped = crate::sanitizer::strip_body_by_range(&f.body_source, (start, end));
+    let stripped = crate::sanitizer::strip_body_by_range(
+        &f.body_source,
+        (start, end),
+        "rust",
+        crate::sanitizer::DEFAULT_STRIP_PLACEHOLDER,
+    );
     assert!(
         stripped.contains("HashMap"),
         "Generic type in signature must survive stripping. Got: {}",
@@ -519,9 +524,18 @@ fn pr1_python_first_body_comment_sets_strip_marked() {
         "Python function with # @mcp-strip as first body comment must be strip-marked"
     );
     assert!(
-        f.body_byte_range.is_none(),
-        "body_byte_range must be None for Python (no brace-delimited body)"
+        f.body_byte_range.is_some(),
+        "body_byte_range must be populated for Python using AST block ranges"
     );
+
+    let (start, end) = f.body_byte_range.unwrap();
+    let stripped = crate::sanitizer::strip_body_by_range(
+        &f.body_source,
+        (start, end),
+        "python",
+        crate::sanitizer::DEFAULT_STRIP_PLACEHOLDER,
+    );
+    assert!(!stripped.contains("classified"));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -655,4 +669,56 @@ def run_user_code(user_input):
         !eval_findings.is_empty(),
         "expected a DynamicExecution finding for eval() call"
     );
+}
+
+#[test]
+fn go_ast_extracts_functions_and_structs() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("go_ast_extracts_functions_and_structs.go");
+    std::fs::write(
+        &path,
+        r#"package main
+
+import "fmt"
+
+type Service struct {}
+
+func PublicRun() {
+    fmt.Println("ok")
+}
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_file(&path).expect("analyze_file failed");
+    assert_eq!(analysis.language, "go");
+    assert!(analysis.functions.iter().any(|f| f.name == "PublicRun"));
+    assert!(analysis.classes.iter().any(|c| c.name == "Service"));
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn kotlin_ast_extracts_functions_and_classes() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("kotlin_ast_extracts_functions_and_classes.kt");
+    std::fs::write(
+        &path,
+        r#"package demo
+
+class Worker {
+    fun runTask() {
+        println("ok")
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let analysis = analyze_file(&path).expect("analyze_file failed");
+    assert_eq!(analysis.language, "kotlin");
+    assert!(analysis.functions.iter().any(|f| f.name == "runTask"));
+    assert!(analysis.classes.iter().any(|c| c.name == "Worker"));
+
+    let _ = std::fs::remove_file(&path);
 }

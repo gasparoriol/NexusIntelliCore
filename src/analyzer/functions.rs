@@ -56,21 +56,40 @@ pub(crate) fn extract_functions(
         let doc_comment = extract_preceding_comment(&source_lines, start_line);
         let is_public = lang.is_public_fn(&signature, &name_text);
 
-        // Populate body_byte_range for C-style brace-delimited bodies.
-        // Python uses indentation; body_byte_range is intentionally None.
+        // Populate body_byte_range from AST for all supported body styles.
+        // For brace languages, the range excludes outer braces.
+        // For Python, the range covers the full indented block.
         let fn_start_byte = fn_node_ts.start_byte();
-        let body_byte_range = if lang.name() == "python" {
-            None
-        } else {
-            find_body_node(fn_node_ts).map(|body_node| {
-                let inner_start = (body_node.start_byte() + 1).saturating_sub(fn_start_byte);
-                let inner_end = body_node
-                    .end_byte()
-                    .saturating_sub(fn_start_byte)
-                    .saturating_sub(1);
-                (inner_start, inner_end)
-            })
-        };
+        let body_byte_range = find_body_node(fn_node_ts).and_then(|body_node| {
+            let abs_start = body_node.start_byte();
+            let abs_end = body_node.end_byte();
+
+            if abs_end <= abs_start || abs_start < fn_start_byte {
+                return None;
+            }
+
+            let body_kind = body_node.kind();
+            let body_bytes = source.as_bytes();
+
+            // Brace languages: keep braces intact and replace only body interior.
+            if matches!(
+                body_kind,
+                "block" | "statement_block" | "compound_statement"
+            ) && body_bytes.get(abs_start) == Some(&b'{')
+                && abs_end > abs_start + 1
+                && body_bytes.get(abs_end.saturating_sub(1)) == Some(&b'}')
+            {
+                let inner_start = (abs_start + 1).saturating_sub(fn_start_byte);
+                let inner_end = abs_end.saturating_sub(fn_start_byte).saturating_sub(1);
+                return Some((inner_start, inner_end));
+            }
+
+            // Python and other non-brace block grammars.
+            Some((
+                abs_start.saturating_sub(fn_start_byte),
+                abs_end.saturating_sub(fn_start_byte),
+            ))
+        });
 
         Some(FunctionInfo {
             name: name_text,
@@ -240,6 +259,7 @@ fn find_body_node(node: tree_sitter::Node<'_>) -> Option<tree_sitter::Node<'_>> 
     })?;
 
     // Only block-style bodies delimit signatures reliably.
+    // Note: Python also uses `block` nodes (indentation-based, no braces).
     if matches!(
         body.kind(),
         "block" | "statement_block" | "compound_statement"

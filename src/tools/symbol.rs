@@ -138,13 +138,30 @@ pub(super) async fn inspect_symbol(
     }
 
     let policy = privacy_gateway::PrivacyPolicy::default();
+    let strip_placeholder = state
+        .security_config()
+        .custom_strip_placeholder
+        .clone()
+        .unwrap_or_else(|| sanitizer::DEFAULT_STRIP_PLACEHOLDER.to_string());
     let mut inspected = Vec::with_capacity(matches.len());
     for func in &matches {
         let body_for_sanitization = if func.is_strip_marked {
             if let Some(range) = func.body_byte_range {
-                sanitizer::strip_body_by_range(&func.body_source, range)
+                sanitizer::strip_body_by_range(
+                    &func.body_source,
+                    range,
+                    &analysis.language,
+                    &strip_placeholder,
+                )
             } else {
-                func.body_source.clone()
+                #[allow(deprecated)]
+                {
+                    sanitizer::strip_function_body_with_placeholder(
+                        &func.body_source,
+                        &analysis.language,
+                        &strip_placeholder,
+                    )
+                }
             }
         } else {
             func.body_source.clone()

@@ -1,6 +1,6 @@
 [package]
 name = "NexusIntelliCore"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 
 [[bin]]
@@ -23,6 +23,7 @@ tree-sitter-typescript = "0.21.2"
 tree-sitter-python = "0.21.0"
 tree-sitter-c = "0.21.4"
 tree-sitter-c-sharp = "0.21.3"
+tree-sitter-go = "0.21.2"
 tree-sitter-kotlin = "0.3.8"
 
 # File System and Graph Utilities

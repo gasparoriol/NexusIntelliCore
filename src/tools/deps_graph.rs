@@ -474,8 +474,14 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
         let mut unresolved_list: Vec<String> = Vec::new();
 
         for imp in &analysis.imports {
-            let (resolved_str, kind, _) =
-                resolve_import_path(imp, &path, &allowed_files, &restricted_files);
+            let (resolved_str, kind, _) = resolve_import_path(
+                imp,
+                &path,
+                &analysis.language,
+                Some(state),
+                &allowed_files,
+                &restricted_files,
+            );
             match kind {
                 analyzer::ImportKind::InternalLocal => internal.push(resolved_str),
                 analyzer::ImportKind::InternalRestricted => restricted.push(resolved_str),
@@ -627,17 +633,49 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
 fn resolve_import_path(
     imp: &analyzer::ImportInfo,
     from_file: &std::path::Path,
+    source_language: &str,
+    state: Option<&crate::state::ServerState>,
     allowed_files: &[std::path::PathBuf],
     restricted_files: &[std::path::PathBuf],
 ) -> (String, analyzer::ImportKind, Option<std::path::PathBuf>) {
     use analyzer::ImportKind;
 
+    let path = &imp.path;
+
+    // JS/TS aliases from nearest tsconfig/jsconfig: e.g. '@/x' -> 'src/x'.
+    if matches!(source_language, "javascript" | "typescript" | "tsx")
+        && !path.starts_with("./")
+        && !path.starts_with("../")
+    {
+        if let Some(alias_target) = state.and_then(|s| s.resolve_ts_path_alias(from_file, path)) {
+            if allowed_files.contains(&alias_target) {
+                let rel = alias_target.to_string_lossy().into_owned();
+                return (rel, ImportKind::InternalLocal, Some(alias_target));
+            }
+            if restricted_files.contains(&alias_target) {
+                let rel = alias_target.to_string_lossy().into_owned();
+                return (rel, ImportKind::InternalRestricted, Some(alias_target));
+            }
+
+            if let Ok(canon) = std::fs::canonicalize(&alias_target) {
+                if allowed_files.contains(&canon) {
+                    let rel = canon.to_string_lossy().into_owned();
+                    return (rel, ImportKind::InternalLocal, Some(canon));
+                }
+                if restricted_files.contains(&canon) {
+                    let rel = canon.to_string_lossy().into_owned();
+                    return (rel, ImportKind::InternalRestricted, Some(canon));
+                }
+            }
+
+            return (path.to_owned(), ImportKind::Unresolved, None);
+        }
+    }
+
     // External libraries never resolve to a project file.
     if imp.kind == ImportKind::ExternalLibrary {
         return (imp.path.clone(), ImportKind::ExternalLibrary, None);
     }
-
-    let path = &imp.path;
 
     // Relative paths — resolve against the importing file's parent directory.
     if path.starts_with("./") || path.starts_with("../") {
@@ -834,8 +872,14 @@ mod tests {
             resolved_path: None,
         };
 
-        let (resolved, kind, path_opt) =
-            resolve_import_path(&imp, Path::new("src/main.rs"), &allowed, &restricted);
+        let (resolved, kind, path_opt) = resolve_import_path(
+            &imp,
+            Path::new("src/main.rs"),
+            "rust",
+            None,
+            &allowed,
+            &restricted,
+        );
 
         assert_eq!(kind, ImportKind::InternalLocal);
         assert_eq!(resolved, "src/analyzer.rs");
@@ -861,6 +905,8 @@ mod tests {
         let (resolved, kind, path_opt) = resolve_import_path(
             &imp,
             Path::new("src/tools/deps_graph.rs"),
+            "rust",
+            None,
             &allowed,
             &restricted,
         );
@@ -882,8 +928,14 @@ mod tests {
             resolved_path: None,
         };
 
-        let (resolved, kind, path_opt) =
-            resolve_import_path(&imp, Path::new("src/main.rs"), &allowed, &restricted);
+        let (resolved, kind, path_opt) = resolve_import_path(
+            &imp,
+            Path::new("src/main.rs"),
+            "rust",
+            None,
+            &allowed,
+            &restricted,
+        );
 
         assert_eq!(kind, ImportKind::ExternalLibrary);
         assert_eq!(resolved, "serde_json::Value");

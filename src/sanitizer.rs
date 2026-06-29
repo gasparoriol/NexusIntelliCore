@@ -6,6 +6,8 @@
 use lazy_static::lazy_static;
 use regex::Regex;
 
+pub const DEFAULT_STRIP_PLACEHOLDER: &str = "Lógica de negocio ofuscada por seguridad";
+
 // ---------------------------------------------------------------------------
 // Compiled regex patterns (lazy, compiled once at first use)
 // ---------------------------------------------------------------------------
@@ -164,109 +166,112 @@ pub fn strip_sensitive_comments(text: &str) -> String {
         .into_owned()
 }
 
-/// Strip a Python function body based on indentation, keeping the `def` line.
-fn strip_python_body(code: &str) -> String {
-    for line in code.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("def ") || trimmed.starts_with("async def ") {
-            let base_indent = line.len() - trimmed.len();
-            let inner = " ".repeat(base_indent + 4);
-            let outer = " ".repeat(base_indent);
-            return format!(
-                "{}\n{}# [Lógica de negocio ofuscada por seguridad]\n{}pass",
-                line.trim_end(),
-                inner,
-                outer
-            );
+fn indentation_from_body_slice(body: &str) -> Option<String> {
+    for line in body.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let ws = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect::<String>();
+        return Some(ws);
+    }
+    None
+}
+
+fn indentation_after_signature(before: &str, language: &str) -> String {
+    let base_ws = before
+        .lines()
+        .last()
+        .map(|line| {
+            line.chars()
+                .take_while(|c| *c == ' ' || *c == '\t')
+                .collect::<String>()
+        })
+        .unwrap_or_default();
+
+    if language == "python" {
+        format!("{}    ", base_ws)
+    } else {
+        format!("{}    ", base_ws)
+    }
+}
+
+/// Replace a function body using precise AST byte ranges.
+///
+/// `body_range` is relative to `source` (`FunctionInfo::body_source`).
+/// For brace languages it typically excludes `{` and `}`.
+/// For Python it should include the full indentation-based block.
+pub fn strip_body_by_range(
+    source: &str,
+    body_range: (usize, usize),
+    language: &str,
+    placeholder: &str,
+) -> String {
+    let bytes = source.as_bytes();
+    let (start, end) = body_range;
+    if start > bytes.len() || end > bytes.len() || start > end {
+        return source.to_owned();
+    }
+
+    let before = std::str::from_utf8(&bytes[..start]).unwrap_or(source);
+    let body = std::str::from_utf8(&bytes[start..end]).unwrap_or("");
+    let after = std::str::from_utf8(&bytes[end..]).unwrap_or("");
+
+    if language == "python" {
+        let indent = indentation_from_body_slice(body)
+            .unwrap_or_else(|| indentation_after_signature(before, language));
+        return format!(
+            "{}{}# [{}]\n{}pass{}",
+            before, indent, placeholder, indent, after
+        );
+    }
+
+    // Common case for brace languages with interior body range.
+    if before.trim_end().ends_with('{') {
+        let indent = indentation_after_signature(before, language);
+        return format!("{}\n{}/* {} */\n{}", before, indent, placeholder, after);
+    }
+
+    // Generic fallback for non-brace bodies.
+    let comment = comment_style(language);
+    let indent = indentation_after_signature(before, language);
+    format!(
+        "{}\n{}{} [{}]\n{}",
+        before, indent, comment, placeholder, after
+    )
+}
+
+/// Legacy fallback when AST body ranges are unavailable.
+#[deprecated(note = "Prefer strip_body_by_range with AST byte ranges")]
+pub fn strip_function_body_with_placeholder(
+    code: &str,
+    language: &str,
+    placeholder: &str,
+) -> String {
+    if language == "python" {
+        // Heuristic fallback: replace everything after the first newline.
+        if let Some(pos) = code.find('\n') {
+            return strip_body_by_range(code, (pos + 1, code.len()), language, placeholder);
+        }
+        return code.to_owned();
+    }
+
+    if let Some(open) = code.find('{') {
+        let close = code.rfind('}').unwrap_or(code.len());
+        if open < close {
+            return strip_body_by_range(code, (open + 1, close), language, placeholder);
         }
     }
     code.to_owned()
 }
 
-/// Replace the body of a function with a placeholder, keeping the signature.
-///
-/// For Python (`language == "python"`), strips based on indentation level.
-/// For all other languages, strips based on the first `{` delimiter.
+/// Legacy compatibility wrapper using the default placeholder.
+#[allow(dead_code)]
+#[allow(deprecated)]
 pub fn strip_function_body(code: &str, language: &str) -> String {
-    if language == "python" {
-        return strip_python_body(code);
-    }
-    let mut in_string = false;
-    let mut in_char = false;
-    let mut in_line_comment = false;
-    let mut in_block_comment = false;
-    let mut string_char = '"';
-    let mut chars = code.char_indices().peekable();
-
-    while let Some((i, ch)) = chars.next() {
-        if in_line_comment {
-            if ch == '\n' {
-                in_line_comment = false;
-            }
-            continue;
-        }
-        if in_block_comment {
-            if ch == '*' {
-                if let Some((_, '/')) = chars.peek() {
-                    chars.next();
-                    in_block_comment = false;
-                }
-            }
-            continue;
-        }
-        if in_string {
-            if ch == '\\' {
-                chars.next(); // skip escaped char
-            } else if ch == string_char {
-                in_string = false;
-            }
-            continue;
-        }
-        if in_char {
-            if ch == '\\' {
-                chars.next();
-            } else if ch == '\'' {
-                in_char = false;
-            }
-            continue;
-        }
-
-        // Check for comment starts
-        if ch == '/' {
-            if let Some((_, next_ch)) = chars.peek() {
-                if *next_ch == '/' {
-                    chars.next();
-                    in_line_comment = true;
-                    continue;
-                } else if *next_ch == '*' {
-                    chars.next();
-                    in_block_comment = true;
-                    continue;
-                }
-            }
-        }
-
-        // Check for string starts
-        if ch == '"' || ch == '`' {
-            in_string = true;
-            string_char = ch;
-            continue;
-        }
-        if ch == '\'' {
-            in_char = true;
-            continue;
-        }
-
-        // Check for opening brace
-        if ch == '{' {
-            let sig = &code[..=i];
-            return format!(
-                "{}\n    /* Lógica de negocio ofuscada por seguridad */\n}}",
-                sig
-            );
-        }
-    }
-    code.to_owned()
+    strip_function_body_with_placeholder(code, language, DEFAULT_STRIP_PLACEHOLDER)
 }
 
 /// Strip a function body using precise byte offsets from the AST rather than
@@ -280,18 +285,12 @@ pub fn strip_function_body(code: &str, language: &str) -> String {
 ///
 /// Returns `source` unchanged if the offsets are out of bounds.
 #[allow(dead_code)]
-pub fn strip_body_by_range(source: &str, body_range: (usize, usize)) -> String {
-    let bytes = source.as_bytes();
-    let (start, end) = body_range;
-    if start > bytes.len() || end > bytes.len() || start > end {
-        return source.to_owned();
-    }
-    let before = std::str::from_utf8(&bytes[..start]).unwrap_or(source);
-    let after = std::str::from_utf8(&bytes[end..]).unwrap_or("");
-    format!(
-        "{}\n    // [implementation restricted by @mcp-strip]\n{}",
-        before, after
-    )
+pub fn strip_body_by_range_default(
+    source: &str,
+    body_range: (usize, usize),
+    language: &str,
+) -> String {
+    strip_body_by_range(source, body_range, language, DEFAULT_STRIP_PLACEHOLDER)
 }
 
 // ---------------------------------------------------------------------------

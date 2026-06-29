@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use ignore::WalkBuilder;
 use moka::future::Cache;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,6 +50,147 @@ pub struct AstCacheStats {
     pub ast_max: usize,
     pub tool_entries: usize,
     pub tool_max: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct TsPathAliasRule {
+    pub pattern: String,
+    pub targets: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct TsPathAliasConfig {
+    pub config_dir: PathBuf,
+    pub base_url: Option<PathBuf>,
+    pub rules: Vec<TsPathAliasRule>,
+}
+
+fn parse_ts_path_alias_config(config_path: &Path) -> Option<TsPathAliasConfig> {
+    let raw = std::fs::read_to_string(config_path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let compiler = parsed.get("compilerOptions")?.as_object()?;
+    let paths = compiler.get("paths")?.as_object()?;
+
+    let mut rules = Vec::new();
+    for (pattern, values) in paths {
+        let targets = values
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if !targets.is_empty() {
+            rules.push(TsPathAliasRule {
+                pattern: pattern.to_string(),
+                targets,
+            });
+        }
+    }
+
+    if rules.is_empty() {
+        return None;
+    }
+
+    let base_url = compiler
+        .get("baseUrl")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from);
+
+    Some(TsPathAliasConfig {
+        config_dir: config_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        base_url,
+        rules,
+    })
+}
+
+fn discover_ts_path_aliases(root: &Path) -> Vec<TsPathAliasConfig> {
+    let mut configs = Vec::new();
+    let walker = WalkBuilder::new(root)
+        .hidden(false)
+        .ignore(true)
+        .git_ignore(true)
+        .build();
+
+    for entry in walker.flatten() {
+        let p = entry.path();
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name != "tsconfig.json" && name != "jsconfig.json" {
+            continue;
+        }
+
+        if let Some(cfg) = parse_ts_path_alias_config(p) {
+            configs.push(cfg);
+        }
+    }
+
+    configs.sort_by_key(|cfg| std::cmp::Reverse(cfg.config_dir.components().count()));
+    configs
+}
+
+fn match_alias_pattern(pattern: &str, import_path: &str) -> Option<String> {
+    if let Some(star) = pattern.find('*') {
+        let prefix = &pattern[..star];
+        let suffix = &pattern[star + 1..];
+        if import_path.starts_with(prefix)
+            && import_path.ends_with(suffix)
+            && import_path.len() >= prefix.len() + suffix.len()
+        {
+            return Some(import_path[prefix.len()..import_path.len() - suffix.len()].to_string());
+        }
+        return None;
+    }
+
+    if pattern == import_path {
+        Some(String::new())
+    } else {
+        None
+    }
+}
+
+fn apply_alias_target(target: &str, wildcard: &str) -> String {
+    if target.contains('*') {
+        target.replacen('*', wildcard, 1)
+    } else {
+        target.to_string()
+    }
+}
+
+fn normalize_relative_path(path: PathBuf) -> PathBuf {
+    path.components().fold(PathBuf::new(), |mut acc, comp| {
+        match comp {
+            std::path::Component::ParentDir => {
+                acc.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => acc.push(other),
+        }
+        acc
+    })
+}
+
+fn expand_ts_alias_candidates(base: PathBuf) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if base.extension().is_some() {
+        out.push(base);
+        return out;
+    }
+
+    out.push(base.clone());
+    for ext in ["ts", "tsx", "js", "jsx", "mjs", "cjs"] {
+        out.push(base.with_extension(ext));
+    }
+    for ext in ["ts", "tsx", "js", "jsx", "mjs", "cjs"] {
+        out.push(base.join(format!("index.{}", ext)));
+    }
+    out
 }
 
 pub fn canonicalize_json(value: &serde_json::Value) -> String {
@@ -115,6 +257,8 @@ pub struct ServerState {
     /// True if the project is detected to be an Angular project.
     /// True if the project is detected to be an Angular project.
     is_angular_project: bool,
+    /// Parsed JS/TS path aliases from discovered tsconfig/jsconfig files.
+    ts_path_aliases: Vec<TsPathAliasConfig>,
     /// Configured maximum number of entries in the AST cache.
     ast_cache_limit: usize,
     /// Configured maximum number of entries in the Tool cache.
@@ -190,6 +334,7 @@ impl ServerState {
         }
 
         let lint_root = root.clone();
+        let ts_path_aliases = discover_ts_path_aliases(&root);
 
         let state = ServerState {
             index: RwLock::new(FileIndex::empty(&root)),
@@ -239,6 +384,7 @@ impl ServerState {
             security_config,
             client_authenticated,
             is_angular_project,
+            ts_path_aliases,
             tool_concurrency: tokio::sync::Semaphore::new(tool_max_concurrency),
             tool_invocation_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
             started_at: std::time::Instant::now(),
@@ -287,6 +433,55 @@ impl ServerState {
 
     pub fn is_angular_project(&self) -> bool {
         self.is_angular_project
+    }
+
+    pub fn resolve_ts_path_alias(&self, from_file: &Path, import_path: &str) -> Option<PathBuf> {
+        let mut configs: Vec<&TsPathAliasConfig> = self
+            .ts_path_aliases
+            .iter()
+            .filter(|cfg| from_file.starts_with(&cfg.config_dir))
+            .collect();
+
+        if configs.is_empty() {
+            return None;
+        }
+
+        configs.sort_by_key(|cfg| std::cmp::Reverse(cfg.config_dir.components().count()));
+
+        for cfg in configs {
+            let mut fallback_candidate: Option<PathBuf> = None;
+            for rule in &cfg.rules {
+                let Some(wildcard) = match_alias_pattern(&rule.pattern, import_path) else {
+                    continue;
+                };
+
+                let base_dir = cfg
+                    .base_url
+                    .as_ref()
+                    .map(|b| cfg.config_dir.join(b))
+                    .unwrap_or_else(|| cfg.config_dir.clone());
+
+                for target in &rule.targets {
+                    let candidate = normalize_relative_path(
+                        base_dir.join(apply_alias_target(target, &wildcard)),
+                    );
+                    for expanded in expand_ts_alias_candidates(candidate.clone()) {
+                        if expanded.exists() {
+                            return Some(expanded);
+                        }
+                        if fallback_candidate.is_none() {
+                            fallback_candidate = Some(expanded);
+                        }
+                    }
+                }
+            }
+
+            if fallback_candidate.is_some() {
+                return fallback_candidate;
+            }
+        }
+
+        None
     }
 
     pub async fn index(&self) -> Result<tokio::sync::RwLockReadGuard<'_, FileIndex>> {
@@ -710,5 +905,46 @@ mod tests {
         *c.entry("test_tool".to_owned()).or_insert(0) += 1;
         *c.entry("test_tool".to_owned()).or_insert(0) += 1;
         assert_eq!(*c.get("test_tool").unwrap(), 2);
+    }
+
+    #[test]
+    fn parses_ts_path_alias_config() {
+        let dir = std::env::temp_dir().join("nexus_ts_alias_parse_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let cfg = dir.join("tsconfig.json");
+        std::fs::write(
+            &cfg,
+            r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@lib/*": ["packages/lib/*"]
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let parsed = parse_ts_path_alias_config(&cfg).expect("expected alias config");
+        assert_eq!(parsed.rules.len(), 2);
+        assert_eq!(parsed.base_url, Some(PathBuf::from(".")));
+
+        let _ = std::fs::remove_file(cfg);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn matches_alias_pattern_with_wildcard() {
+        let wild = match_alias_pattern("@/*", "@/components/button").expect("must match");
+        assert_eq!(wild, "components/button");
+        assert!(match_alias_pattern("@core/*", "@/components").is_none());
+    }
+
+    #[test]
+    fn expands_ts_alias_candidates_with_extensions_and_index_files() {
+        let candidates = expand_ts_alias_candidates(PathBuf::from("src/components/button"));
+        assert!(candidates.iter().any(|p| p.ends_with("button.ts")));
+        assert!(candidates.iter().any(|p| p.ends_with("button/index.ts")));
     }
 }

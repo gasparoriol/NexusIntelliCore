@@ -2,7 +2,7 @@ use std::path::Path;
 use tree_sitter::Language;
 
 use super::grammars::{
-    CGrammar, CSharpGrammar, CssGrammar, HtmlGrammar, JavaGrammar, JavaScriptGrammar,
+    CGrammar, CSharpGrammar, CssGrammar, GoGrammar, HtmlGrammar, JavaGrammar, JavaScriptGrammar,
     KotlinGrammar, PythonGrammar, RustGrammar, ScssGrammar, TsxGrammar, TypeScriptGrammar,
 };
 
@@ -52,6 +52,7 @@ pub static LANGUAGE_REGISTRY: std::sync::LazyLock<Vec<Box<dyn LanguageGrammar>>>
             Box::new(CGrammar),
             Box::new(CSharpGrammar),
             Box::new(CssGrammar),
+            Box::new(GoGrammar),
             Box::new(HtmlGrammar),
             Box::new(JavaGrammar),
             Box::new(JavaScriptGrammar),
