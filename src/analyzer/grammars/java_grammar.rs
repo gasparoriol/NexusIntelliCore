@@ -52,7 +52,7 @@ impl LanguageGrammar for JavaGrammar {
     fn get_query(&self, mode: EvalMode) -> Option<&'static str> {
         match mode {
             EvalMode::Exec => Some(crate::audit_queries::JAVA_EXEC_QUERY),
-            _ => None,
+            EvalMode::Basic => None,
         }
     }
 }

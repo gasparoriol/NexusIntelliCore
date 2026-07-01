@@ -132,8 +132,7 @@ pub fn infer_use_cases(analyses: &[(PathBuf, FileAnalysis)]) -> Vec<InferredUseC
             let label = VERB_PREFIXES
                 .iter()
                 .find(|(p, _)| p == prefix)
-                .map(|(_, l)| *l)
-                .unwrap_or("Working with");
+                .map_or("Working with", |(_, l)| *l);
 
             let already_covered = use_cases.iter().any(|uc| {
                 uc.confidence == UseCaseConfidence::High
@@ -145,7 +144,7 @@ pub fn infer_use_cases(analyses: &[(PathBuf, FileAnalysis)]) -> Vec<InferredUseC
 
             let sample: Vec<&str> = fns.iter().take(3).map(String::as_str).collect();
             use_cases.push(InferredUseCase {
-                title: format!("{} data", label),
+                title: format!("{label} data"),
                 description: format!(
                     "Functions such as `{}` provide {} capabilities.",
                     sample.join("`, `"),

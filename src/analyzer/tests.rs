@@ -118,14 +118,13 @@ fn test_detect_grammar_resolves_each_registered_language() {
             .first()
             .copied()
             .expect("each grammar must declare at least one extension");
-        let fake_path = format!("sample.{}", ext);
+        let fake_path = format!("sample.{ext}");
         let detected = detect_grammar(Path::new(&fake_path))
             .expect("detect_grammar should resolve known extension");
         assert_eq!(
             detected.name(),
             grammar.name(),
-            "detect_grammar mismatch for extension '{}'",
-            ext
+            "detect_grammar mismatch for extension '{ext}'"
         );
     }
 }
@@ -283,8 +282,8 @@ fn make_fn(name: &str, is_public: bool) -> FunctionInfo {
         name: name.to_owned(),
         qualified_name: name.to_owned(),
         owner_chain: None,
-        signature: format!("pub fn {}()", name),
-        normalized_signature: Some(format!("pub fn {}()", name)),
+        signature: format!("pub fn {name}()"),
+        normalized_signature: Some(format!("pub fn {name}()")),
         body_source: String::new(),
         start_line: 1,
         end_line: 3,
@@ -493,13 +492,11 @@ fn pr1_body_byte_range_correct_with_generic_signature() {
     );
     assert!(
         stripped.contains("HashMap"),
-        "Generic type in signature must survive stripping. Got: {}",
-        stripped
+        "Generic type in signature must survive stripping. Got: {stripped}"
     );
     assert!(
         !stripped.contains("vec![]"),
-        "Body implementation must be hidden after stripping. Got: {}",
-        stripped
+        "Body implementation must be hidden after stripping. Got: {stripped}"
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -613,13 +610,13 @@ fn pr2_angular_package_import_is_external_library() {
 
 #[test]
 fn pr4_unsafe_in_comment_is_not_a_false_positive() {
-    let source = r#"
+    let source = r"
 fn safe_function() {
     // Previously this code used unsafe { ptr.write(0) } — now it's safe.
     let x = 42;
     let _ = x;
 }
-"#;
+";
     let findings = audit_file_ast(source, grammar("lib.rs"));
     let unsafe_findings: Vec<_> = findings
         .iter()
@@ -627,21 +624,20 @@ fn safe_function() {
         .collect();
     assert!(
         unsafe_findings.is_empty(),
-        "expected no UnsafeCode findings from a comment, got: {:?}",
-        unsafe_findings
+        "expected no UnsafeCode findings from a comment, got: {unsafe_findings:?}"
     );
 }
 
 #[test]
 fn pr4_multiline_unsafe_block_is_detected() {
-    let source = r#"
+    let source = r"
 fn raw_write(ptr: *mut u8, val: u8) {
     unsafe
     {
         *ptr = val;
     }
 }
-"#;
+";
     let findings = audit_file_ast(source, grammar("lib.rs"));
     let unsafe_findings: Vec<_> = findings
         .iter()
@@ -655,11 +651,11 @@ fn raw_write(ptr: *mut u8, val: u8) {
 
 #[test]
 fn pr4_python_eval_call_generates_finding() {
-    let source = r#"
+    let source = r"
 def run_user_code(user_input):
     result = eval(user_input)
     return result
-"#;
+";
     let findings = audit_file_ast(source, grammar("module.py"));
     let eval_findings: Vec<_> = findings
         .iter()

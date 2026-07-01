@@ -36,10 +36,10 @@ impl LanguageGrammar for GoGrammar {
     }
 
     fn is_public_fn(&self, _signature: &str, name: &str) -> bool {
-        name.chars().next().map(char::is_uppercase).unwrap_or(false)
+        name.chars().next().is_some_and(char::is_uppercase)
     }
 
     fn is_public_class(&self, _line_text: &str, name: &str) -> bool {
-        name.chars().next().map(char::is_uppercase).unwrap_or(false)
+        name.chars().next().is_some_and(char::is_uppercase)
     }
 }

@@ -41,7 +41,7 @@ pub(crate) async fn generate_project_docs(
         public_only,
         policy: &policy,
     });
-    let out = format!("{}{}", pagination_header, doc_body);
+    let out = format!("{pagination_header}{doc_body}");
 
     let (sanitized_out, _) = privacy_gateway::sanitize_output_text(&out, &policy);
     Ok(tool_response(vec![text_content(sanitized_out)]))

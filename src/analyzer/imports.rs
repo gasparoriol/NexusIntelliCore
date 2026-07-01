@@ -10,9 +10,8 @@ pub(crate) fn extract_imports(
     lang: &dyn LanguageGrammar,
     ts_lang: &Language,
 ) -> Result<Vec<ImportInfo>> {
-    let query_str = match lang.import_query() {
-        Some(q) => q,
-        None => return Ok(vec![]),
+    let Some(query_str) = lang.import_query() else {
+        return Ok(vec![]);
     };
 
     run_named_query(ts_lang, query_str, root, source, |_match_idx, caps| {

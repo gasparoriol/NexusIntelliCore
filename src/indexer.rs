@@ -162,25 +162,23 @@ impl TreeNode {
         for (idx, (name, restricted)) in self.files.iter().enumerate() {
             if idx >= MAX_RENDER_FILES {
                 lines.push(format!(
-                    "{}... (+{} more files)",
-                    indent,
+                    "{indent}... (+{} more files)",
                     self.files.len() - MAX_RENDER_FILES
                 ));
                 break;
             }
 
             if *restricted {
-                lines.push(format!("{}{}  (Acceso Restringido)", indent, name));
+                lines.push(format!("{indent}{name}  (Acceso Restringido)"));
             } else {
-                lines.push(format!("{}{}", indent, name));
+                lines.push(format!("{indent}{name}"));
             }
         }
 
         for (idx, (name, child)) in self.dirs.iter().enumerate() {
             if idx >= MAX_RENDER_DIRS {
                 lines.push(format!(
-                    "{}... (+{} more directories)",
-                    indent,
+                    "{indent}... (+{} more directories)",
                     self.dirs.len() - MAX_RENDER_DIRS
                 ));
                 break;
@@ -188,8 +186,8 @@ impl TreeNode {
 
             let stats = child.stats();
             lines.push(format!(
-                "{}{}/ [files: {}, dirs: {}, restricted: {}]",
-                indent, name, stats.files, stats.dirs, stats.restricted
+                "{}{name}/ [files: {}, dirs: {}, restricted: {}]",
+                indent, stats.files, stats.dirs, stats.restricted
             ));
 
             if depth + 1 < MAX_RENDER_DEPTH {
@@ -223,23 +221,23 @@ fn build_glob_set(patterns: &[String]) -> Result<Option<GlobSet>> {
     for pattern in patterns {
         if let Some(rel_pat) = pattern.strip_prefix('/') {
             let glob1 =
-                Glob::new(rel_pat).with_context(|| format!("Invalid glob pattern: {}", pattern))?;
+                Glob::new(rel_pat).with_context(|| format!("Invalid glob pattern: {pattern}"))?;
             builder.add(glob1);
-            let glob2 = Glob::new(&format!("{}/**", rel_pat))
-                .with_context(|| format!("Invalid glob pattern: {}/**", pattern))?;
+            let glob2 = Glob::new(&format!("{rel_pat}/**"))
+                .with_context(|| format!("Invalid glob pattern: {pattern}/**"))?;
             builder.add(glob2);
         } else {
             let glob1 =
-                Glob::new(pattern).with_context(|| format!("Invalid glob pattern: {}", pattern))?;
+                Glob::new(pattern).with_context(|| format!("Invalid glob pattern: {pattern}"))?;
             builder.add(glob1);
-            let glob2 = Glob::new(&format!("**/{}", pattern))
-                .with_context(|| format!("Invalid glob pattern: **/{}", pattern))?;
+            let glob2 = Glob::new(&format!("**/{pattern}"))
+                .with_context(|| format!("Invalid glob pattern: **/{pattern}"))?;
             builder.add(glob2);
-            let glob3 = Glob::new(&format!("{}/**", pattern))
-                .with_context(|| format!("Invalid glob pattern: {}/**", pattern))?;
+            let glob3 = Glob::new(&format!("{pattern}/**"))
+                .with_context(|| format!("Invalid glob pattern: {pattern}/**"))?;
             builder.add(glob3);
-            let glob4 = Glob::new(&format!("**/{}/**", pattern))
-                .with_context(|| format!("Invalid glob pattern: **/{}/**", pattern))?;
+            let glob4 = Glob::new(&format!("**/{pattern}/**"))
+                .with_context(|| format!("Invalid glob pattern: **/{pattern}/**"))?;
             builder.add(glob4);
         }
     }
@@ -258,9 +256,8 @@ fn walk_files(root: &Path, matcher: Option<&GlobSet>) -> Result<(Vec<PathBuf>, V
 
     for entry in walker {
         let entry = entry?;
-        let ft = match entry.file_type() {
-            Some(ft) => ft,
-            None => continue,
+        let Some(ft) = entry.file_type() else {
+            continue;
         };
         if !ft.is_file() {
             continue;

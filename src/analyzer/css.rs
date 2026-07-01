@@ -26,7 +26,7 @@ fn collect_css_rule_sets(
     node: tree_sitter::Node<'_>,
     source: &str,
     rules: &mut Vec<CssRuleInfo>,
-    media_query: Option<String>,
+    media_query: Option<&str>,
 ) {
     match node.kind() {
         "rule_set" => {
@@ -36,7 +36,8 @@ fn collect_css_rule_sets(
             for child in node.children(&mut cursor) {
                 match child.kind() {
                     "selectors" => {
-                        selector = source[child.byte_range()].trim().to_owned();
+                        selector.clear();
+                        selector.push_str(source[child.byte_range()].trim());
                     }
                     "block" => {
                         let mut block_cursor = child.walk();
@@ -55,7 +56,7 @@ fn collect_css_rule_sets(
                 rules.push(CssRuleInfo {
                     selector,
                     properties,
-                    media_query: media_query.clone(),
+                    media_query: media_query.map(str::to_owned),
                     start_line: node.start_position().row + 1,
                     end_line: node.end_position().row + 1,
                 });
@@ -73,13 +74,13 @@ fn collect_css_rule_sets(
                 .unwrap_or_default();
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                collect_css_rule_sets(child, source, rules, Some(media_text.clone()));
+                collect_css_rule_sets(child, source, rules, Some(media_text.as_str()));
             }
         }
         _ => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                collect_css_rule_sets(child, source, rules, media_query.clone());
+                collect_css_rule_sets(child, source, rules, media_query);
             }
         }
     }

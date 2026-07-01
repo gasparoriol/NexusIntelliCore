@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
+use std::fmt::Write as _;
 
 use crate::analyzer;
 use crate::privacy_gateway;
@@ -24,9 +25,8 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
     drop(index);
 
     for file in &allowed_files {
-        let path = match state.validate_path(file) {
-            Ok(p) => p,
-            Err(_) => continue,
+        let Ok(path) = state.validate_path(file) else {
+            continue;
         };
 
         let index_read = state.index().await?;
@@ -35,18 +35,16 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
 
         // Read the file in a spawn_blocking block to avoid blocking the event loop
         let path_clone = path.clone();
-        let source = match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_clone))
-            .await?
-        {
-            Ok(s) => s,
-            Err(_) => continue,
+        let Ok(source) =
+            tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_clone)).await?
+        else {
+            continue;
         };
 
         // 4.1 — secret detection (report location, NEVER the value)
         for (secret_type, line) in sanitizer::detect_all_secrets(&source) {
             report.secrets.push(format!(
-                "  ⚠ [{}] detected in {} at line {}",
-                secret_type, rel, line
+                "  ⚠ [{secret_type}] detected in {rel} at line {line}"
             ));
         }
 
@@ -60,14 +58,14 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
             match finding.kind {
                 analyzer::AuditFindingKind::UnsafeCode => {
                     report.unsafe_blocks.push(format!(
-                        "  ⚠ {} in {} at line {}",
-                        finding.description, rel, finding.line
+                        "  ⚠ {} in {rel} at line {}",
+                        finding.description, finding.line
                     ));
                 }
                 analyzer::AuditFindingKind::DynamicExecution => {
                     report.eval_calls.push(format!(
-                        "  ⚠ {} in {} at line {}",
-                        finding.description, rel, finding.line
+                        "  ⚠ {} in {rel} at line {}",
+                        finding.description, finding.line
                     ));
                 }
             }
@@ -83,8 +81,7 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
                 && (line.contains('+') || line.contains("format!") || line.contains("concat"))
             {
                 report.sql_risks.push(format!(
-                    "  ⚠ Potential SQL injection via string concatenation in {} at line {}",
-                    rel, lineno
+                    "  ⚠ Potential SQL injection via string concatenation in {rel} at line {lineno}"
                 ));
             }
         }
@@ -92,11 +89,12 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
 
     let mut out = String::from("# Security Audit Report\n\n");
 
-    out.push_str(&format!(
+    let _ = write!(
+        out,
         "Files scanned: {}\nRestricted files (not scanned): {}\n\n",
         allowed_files.len(),
         restricted_len
-    ));
+    );
 
     // Secrets section
     out.push_str("## Hardcoded Secrets\n");
@@ -151,18 +149,14 @@ pub(super) async fn audit_security_measures() -> Result<Value> {
         + report.unsafe_blocks.len()
         + report.eval_calls.len()
         + report.sql_risks.len();
-    out.push_str(&format!(
-        "\n## Summary\nTotal issues found: {}\n",
-        total_issues
-    ));
+    let _ = write!(out, "\n## Summary\nTotal issues found: {total_issues}\n");
 
     // Sanitize security report through Privacy Gateway (extra validation layer)
     let policy = privacy_gateway::PrivacyPolicy::default();
     let (sanitized_report, _redactions) = privacy_gateway::sanitize_security_report(&out, &policy);
 
     let sanitized_report = format!(
-        "[Think like a security auditor: reason about risk, trust boundaries, and attack surface.]\n{}",
-        sanitized_report
+        "[Think like a security auditor: reason about risk, trust boundaries, and attack surface.]\n{sanitized_report}"
     );
 
     Ok(tool_response(vec![text_content(sanitized_report)]))

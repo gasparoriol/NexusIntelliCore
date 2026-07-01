@@ -11,14 +11,13 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
     let state = crate::state::ServerState::get();
     let ts_path = match state.validate_path(Path::new(component_path)) {
         Ok(p) => p,
-        Err(e) => return Ok(error_response(format!("Access denied: {}", e))),
+        Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
     let index = state.index().await?;
     if index.is_restricted(&ts_path) {
         return Ok(tool_response(vec![text_content(format!(
-            "⚠ Access denied by .mcpignore policy: {}",
-            component_path
+            "⚠ Access denied by .mcpignore policy: {component_path}"
         ))]));
     }
     drop(index);
@@ -28,21 +27,15 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
     let source =
         match tokio::task::spawn_blocking(move || std::fs::read_to_string(&ts_path_clone)).await? {
             Ok(s) => s,
-            Err(e) => {
-                return Ok(error_response(format!(
-                    "Cannot read {}: {}",
-                    component_path, e
-                )))
-            }
+            Err(e) => return Ok(error_response(format!("Cannot read {component_path}: {e}"))),
         };
 
     let info = match crate::relations::extract_component_info(&ts_path, &source) {
         Some(i) => i,
         None => {
             return Ok(tool_response(vec![text_content(format!(
-                "No @Component decorator found in {}.\n\
+                "No @Component decorator found in {component_path}.\n\
                  This file does not appear to be an Angular component.",
-                component_path
             ))]))
         }
     };

@@ -8,7 +8,7 @@ use crate::analyzer;
 use crate::privacy_gateway;
 use crate::protocol::{text_content, tool_response};
 
-/// Default and maximum limits for get_dependencies_graph
+/// Default and maximum limits for `get_dependencies_graph`
 const DEFAULT_MAX_NODES: usize = 100;
 const MAX_EDGES_PER_NODE: usize = 50;
 const MAX_RESPONSE_BYTES: usize = 25 * 1024; // 25 KB for summary mode
@@ -33,43 +33,44 @@ impl QueryParams {
         Self {
             mode: args
                 .get("mode")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("summary")
                 .to_string(),
             scope_path: args
                 .get("scope_path")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .map(String::from),
             depth: args
                 .get("depth")
-                .and_then(|v| v.as_u64())
-                .map(|n| (n as usize).min(5)),
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .map(|n| n.min(5)),
             direction: args
                 .get("direction")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("outbound")
                 .to_string(),
             include_external: args
                 .get("include_external")
-                .and_then(|v| v.as_bool())
+                .and_then(Value::as_bool)
                 .unwrap_or(false),
             include_unresolved: args
                 .get("include_unresolved")
-                .and_then(|v| v.as_bool())
+                .and_then(Value::as_bool)
                 .unwrap_or(false),
             max_nodes: args
                 .get("max_nodes")
-                .and_then(|v| v.as_u64())
-                .map(|n| (n as usize).min(200))
-                .unwrap_or(DEFAULT_MAX_NODES),
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .map_or(DEFAULT_MAX_NODES, |n| n.min(200)),
             max_edges_per_node: args
                 .get("max_edges_per_node")
-                .and_then(|v| v.as_u64())
-                .map(|n| (n as usize).min(100))
-                .unwrap_or(MAX_EDGES_PER_NODE),
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .map_or(MAX_EDGES_PER_NODE, |n| n.min(100)),
             sort_by: args
                 .get("sort_by")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("fanout")
                 .to_string(),
         }
@@ -96,29 +97,24 @@ fn generate_summary(file_deps: &serde_json::Map<String, Value>, params: &QueryPa
         if let Some(obj) = deps_obj.as_object() {
             let internal_count = obj
                 .get("internal")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len);
             let restricted_count = obj
                 .get("restricted")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len);
             let external_count = obj
                 .get("external")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len);
             let unresolved_count = obj
                 .get("unresolved")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len);
             let dependents_count = obj
                 .get("dependents")
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len);
 
             total_internal += internal_count;
             total_restricted += restricted_count;
@@ -401,7 +397,10 @@ fn graph_to_nodes_edges(
 }
 
 fn ensure_budget(mut graph: Value, max_bytes: usize) -> (Value, usize, bool, Option<String>) {
-    let mut bytes = serde_json::to_string(&graph).map(|s| s.len()).unwrap_or(0);
+    let mut bytes = serde_json::to_string(&graph)
+        .ok()
+        .as_deref()
+        .map_or(0, str::len);
     if bytes <= max_bytes {
         return (graph, bytes, false, None);
     }
@@ -409,7 +408,10 @@ fn ensure_budget(mut graph: Value, max_bytes: usize) -> (Value, usize, bool, Opt
     let mut reason = "response_bytes_limit".to_string();
 
     loop {
-        bytes = serde_json::to_string(&graph).map(|s| s.len()).unwrap_or(0);
+        bytes = serde_json::to_string(&graph)
+            .ok()
+            .as_deref()
+            .map_or(0, str::len);
         if bytes <= max_bytes {
             return (graph, bytes, true, Some(reason));
         }
@@ -417,7 +419,7 @@ fn ensure_budget(mut graph: Value, max_bytes: usize) -> (Value, usize, bool, Opt
         let removed_edge = graph
             .get_mut("edges")
             .and_then(|v| v.as_array_mut())
-            .and_then(|edges| edges.pop())
+            .and_then(std::vec::Vec::pop)
             .is_some();
         if removed_edge {
             continue;
@@ -427,45 +429,39 @@ fn ensure_budget(mut graph: Value, max_bytes: usize) -> (Value, usize, bool, Opt
         let removed_node = graph
             .get_mut("nodes")
             .and_then(|v| v.as_array_mut())
-            .and_then(|nodes| nodes.pop())
+            .and_then(std::vec::Vec::pop)
             .is_some();
         if removed_node {
             continue;
         }
 
-        bytes = serde_json::to_string(&graph).map(|s| s.len()).unwrap_or(0);
+        bytes = serde_json::to_string(&graph)
+            .ok()
+            .as_deref()
+            .map_or(0, str::len);
         return (graph, bytes, true, Some(reason));
     }
 }
 
-pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
-    let start = Instant::now();
-    let params = QueryParams::from_args(args);
-
-    let state = crate::state::ServerState::get();
-    let index = state.index().await?;
-    let allowed_files = filter_by_scope(index.allowed_files.clone(), params.scope_path.as_deref());
-    let restricted_files =
-        filter_by_scope(index.restricted_files.clone(), params.scope_path.as_deref());
-    drop(index);
-
-    // Build a per-file classified dependency map:
-    // relative_path → { internal, restricted, external, unresolved }
+async fn build_file_dependencies(
+    state: &crate::state::ServerState,
+    allowed_files: &[PathBuf],
+    restricted_files: &[PathBuf],
+    params: &QueryParams,
+) -> Result<serde_json::Map<String, Value>> {
     let mut file_deps: serde_json::Map<String, Value> = serde_json::Map::new();
 
     for file in allowed_files.iter().take(params.max_nodes * 2) {
-        let path = match state.validate_path(file) {
-            Ok(p) => p,
-            Err(_) => continue,
+        let Ok(path) = state.validate_path(file) else {
+            continue;
         };
 
         let index_read = state.index().await?;
         let rel = index_read.relative(&path).to_string_lossy().into_owned();
         drop(index_read);
 
-        let analysis = match state.get_analysis(&path).await {
-            Ok(a) => a,
-            Err(_) => continue,
+        let Ok(analysis) = state.get_analysis(&path).await else {
+            continue;
         };
 
         let mut internal: Vec<String> = Vec::new();
@@ -479,8 +475,8 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
                 &path,
                 &analysis.language,
                 Some(state),
-                &allowed_files,
-                &restricted_files,
+                allowed_files,
+                restricted_files,
             );
             match kind {
                 analyzer::ImportKind::InternalLocal => internal.push(resolved_str),
@@ -490,13 +486,11 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
             }
         }
 
-        // Apply deduplication and truncation per edge type
         internal = deduplicate_deps(internal);
         restricted = deduplicate_deps(restricted);
         external = deduplicate_deps(external);
         unresolved_list = deduplicate_deps(unresolved_list);
 
-        // Truncate edges per node if needed
         internal.truncate(params.max_edges_per_node);
         restricted.truncate(params.max_edges_per_node);
         external.truncate(params.max_edges_per_node);
@@ -516,6 +510,25 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
             break;
         }
     }
+
+    Ok(file_deps)
+}
+
+pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
+    let start = Instant::now();
+    let params = QueryParams::from_args(args);
+
+    let state = crate::state::ServerState::get();
+    let index = state.index().await?;
+    let allowed_files = filter_by_scope(index.allowed_files.clone(), params.scope_path.as_deref());
+    let restricted_files =
+        filter_by_scope(index.restricted_files.clone(), params.scope_path.as_deref());
+    drop(index);
+
+    // Build a per-file classified dependency map:
+    // relative_path -> { internal, restricted, external, unresolved }
+    let mut file_deps =
+        build_file_dependencies(state, &allowed_files, &restricted_files, &params).await?;
 
     apply_dependency_type_filters(&mut file_deps, &params);
 
@@ -570,17 +583,15 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
     let (mut budgeted_graph, response_bytes, was_truncated, truncation_reason) =
         ensure_budget(sanitized_graph, budget);
 
-    let duration_ms = start.elapsed().as_millis() as u64;
+    let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let nodes_returned = budgeted_graph
         .get("nodes")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
+        .and_then(Value::as_array)
+        .map_or(0, std::vec::Vec::len);
     let edges_returned = budgeted_graph
         .get("edges")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
+        .and_then(Value::as_array)
+        .map_or(0, std::vec::Vec::len);
 
     if let Some(meta) = budgeted_graph
         .get_mut("meta")
@@ -589,7 +600,7 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
         meta.insert("truncated".to_string(), Value::Bool(was_truncated));
         meta.insert(
             "truncation_reason".to_string(),
-            truncation_reason.map(Value::String).unwrap_or(Value::Null),
+            truncation_reason.map_or(Value::Null, Value::String),
         );
         meta.insert(
             "metrics".to_string(),
@@ -609,14 +620,10 @@ pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
 
     let response_text = if params.mode == "summary" {
         format!(
-            "[Dependency analysis in summary mode (focused on hotspots and metrics)]\n{}",
-            graph_json_compact
+            "[Dependency analysis in summary mode (focused on hotspots and metrics)]\n{graph_json_compact}"
         )
     } else {
-        format!(
-            "[Full dependency graph (use summary mode to reduce output)]\n{}",
-            graph_json_compact
-        )
+        format!("[Full dependency graph (use summary mode to reduce output)]\n{graph_json_compact}")
     };
 
     Ok(tool_response(vec![text_content(response_text)]))
@@ -643,33 +650,15 @@ fn resolve_import_path(
     let path = &imp.path;
 
     // JS/TS aliases from nearest tsconfig/jsconfig: e.g. '@/x' -> 'src/x'.
-    if matches!(source_language, "javascript" | "typescript" | "tsx")
-        && !path.starts_with("./")
-        && !path.starts_with("../")
-    {
-        if let Some(alias_target) = state.and_then(|s| s.resolve_ts_path_alias(from_file, path)) {
-            if allowed_files.contains(&alias_target) {
-                let rel = alias_target.to_string_lossy().into_owned();
-                return (rel, ImportKind::InternalLocal, Some(alias_target));
-            }
-            if restricted_files.contains(&alias_target) {
-                let rel = alias_target.to_string_lossy().into_owned();
-                return (rel, ImportKind::InternalRestricted, Some(alias_target));
-            }
-
-            if let Ok(canon) = std::fs::canonicalize(&alias_target) {
-                if allowed_files.contains(&canon) {
-                    let rel = canon.to_string_lossy().into_owned();
-                    return (rel, ImportKind::InternalLocal, Some(canon));
-                }
-                if restricted_files.contains(&canon) {
-                    let rel = canon.to_string_lossy().into_owned();
-                    return (rel, ImportKind::InternalRestricted, Some(canon));
-                }
-            }
-
-            return (path.to_owned(), ImportKind::Unresolved, None);
-        }
+    if let Some(resolved) = resolve_ts_alias_import(
+        source_language,
+        path,
+        from_file,
+        state,
+        allowed_files,
+        restricted_files,
+    ) {
+        return resolved;
     }
 
     // External libraries never resolve to a project file.
@@ -679,39 +668,129 @@ fn resolve_import_path(
 
     // Relative paths — resolve against the importing file's parent directory.
     if path.starts_with("./") || path.starts_with("../") {
-        let base = from_file.parent().unwrap_or(std::path::Path::new("/"));
-        let candidate = base.join(path);
-        for ext in &["", "rs", "ts", "tsx", "js", "py", "java"] {
-            let with_ext = if ext.is_empty() {
-                candidate.clone()
-            } else {
-                candidate.with_extension(ext)
-            };
-            let canon = with_ext
-                .components()
-                .fold(std::path::PathBuf::new(), |mut acc, c| {
-                    match c {
-                        std::path::Component::ParentDir => {
-                            acc.pop();
-                        }
-                        std::path::Component::CurDir => {}
-                        other => acc.push(other),
-                    }
-                    acc
-                });
-            if allowed_files.contains(&canon) {
-                let rel = canon.to_string_lossy().into_owned();
-                return (rel, ImportKind::InternalLocal, Some(canon));
-            }
-            if restricted_files.contains(&canon) {
-                let rel = canon.to_string_lossy().into_owned();
-                return (rel, ImportKind::InternalRestricted, Some(canon));
-            }
-        }
-        return (path.to_owned(), ImportKind::Unresolved, None);
+        return resolve_relative_import_path(path, from_file, allowed_files, restricted_files);
     }
 
-    // Non-relative internal references: normalise separator and search by suffix.
+    resolve_non_relative_import_path(path, allowed_files, restricted_files)
+}
+
+fn resolve_ts_alias_import(
+    source_language: &str,
+    path: &str,
+    from_file: &std::path::Path,
+    state: Option<&crate::state::ServerState>,
+    allowed_files: &[std::path::PathBuf],
+    restricted_files: &[std::path::PathBuf],
+) -> Option<(String, analyzer::ImportKind, Option<std::path::PathBuf>)> {
+    use analyzer::ImportKind;
+
+    if !matches!(source_language, "javascript" | "typescript" | "tsx")
+        || path.starts_with("./")
+        || path.starts_with("../")
+    {
+        return None;
+    }
+
+    let alias_target = state.and_then(|s| s.resolve_ts_path_alias(from_file, path))?;
+    if let Some((rel, kind, resolved)) =
+        classify_project_path(&alias_target, allowed_files, restricted_files)
+    {
+        return Some((rel, kind, Some(resolved)));
+    }
+
+    if let Ok(canon) = std::fs::canonicalize(&alias_target) {
+        if let Some((rel, kind, resolved)) =
+            classify_project_path(&canon, allowed_files, restricted_files)
+        {
+            return Some((rel, kind, Some(resolved)));
+        }
+    }
+
+    Some((path.to_owned(), ImportKind::Unresolved, None))
+}
+
+fn classify_project_path(
+    candidate: &std::path::Path,
+    allowed_files: &[std::path::PathBuf],
+    restricted_files: &[std::path::PathBuf],
+) -> Option<(String, analyzer::ImportKind, std::path::PathBuf)> {
+    use analyzer::ImportKind;
+
+    if allowed_files.contains(&candidate.to_path_buf()) {
+        let rel = candidate.to_string_lossy().into_owned();
+        return Some((rel, ImportKind::InternalLocal, candidate.to_path_buf()));
+    }
+    if restricted_files.contains(&candidate.to_path_buf()) {
+        let rel = candidate.to_string_lossy().into_owned();
+        return Some((rel, ImportKind::InternalRestricted, candidate.to_path_buf()));
+    }
+
+    None
+}
+
+fn resolve_relative_import_path(
+    path: &str,
+    from_file: &std::path::Path,
+    allowed_files: &[std::path::PathBuf],
+    restricted_files: &[std::path::PathBuf],
+) -> (String, analyzer::ImportKind, Option<std::path::PathBuf>) {
+    use analyzer::ImportKind;
+
+    let base = from_file.parent().unwrap_or(std::path::Path::new("/"));
+    let candidate = base.join(path);
+    for ext in &["", "rs", "ts", "tsx", "js", "py", "java"] {
+        let with_ext = if ext.is_empty() {
+            candidate.clone()
+        } else {
+            candidate.with_extension(ext)
+        };
+        let normalised = normalise_path(&with_ext);
+        if let Some((rel, kind, resolved)) =
+            classify_project_path(&normalised, allowed_files, restricted_files)
+        {
+            return (rel, kind, Some(resolved));
+        }
+    }
+
+    (path.to_owned(), ImportKind::Unresolved, None)
+}
+
+fn normalise_path(path: &std::path::Path) -> std::path::PathBuf {
+    path.components()
+        .fold(std::path::PathBuf::new(), |mut acc, component| {
+            match component {
+                std::path::Component::ParentDir => {
+                    acc.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => acc.push(other),
+            }
+            acc
+        })
+}
+
+fn resolve_non_relative_import_path(
+    path: &str,
+    allowed_files: &[std::path::PathBuf],
+    restricted_files: &[std::path::PathBuf],
+) -> (String, analyzer::ImportKind, Option<std::path::PathBuf>) {
+    use analyzer::ImportKind;
+
+    let normalised = normalise_internal_reference(path);
+
+    if let Some(matched) = find_matching_file(&normalised, allowed_files) {
+        let rel = matched.to_string_lossy().into_owned();
+        return (rel, ImportKind::InternalLocal, Some(matched));
+    }
+    if let Some(matched) = find_matching_file(&normalised, restricted_files) {
+        let rel = matched.to_string_lossy().into_owned();
+        return (rel, ImportKind::InternalRestricted, Some(matched));
+    }
+
+    (normalised, ImportKind::Unresolved, None)
+}
+
+fn normalise_internal_reference(path: &str) -> String {
     let normalised = if path.contains("::") {
         path.replace("::", "/")
     } else if path.contains('.') && !path.contains('/') {
@@ -719,8 +798,8 @@ fn resolve_import_path(
     } else {
         path.to_owned()
     };
-    let mut normalised = normalised.trim_matches('/').to_owned();
 
+    let mut normalised = normalised.trim_matches('/').to_owned();
     if normalised.starts_with("crate/") {
         normalised = normalised["crate/".len()..].to_owned();
     } else if normalised.starts_with("self/") {
@@ -730,39 +809,31 @@ fn resolve_import_path(
         normalised = normalised["super/".len()..].to_owned();
     }
 
-    for file in allowed_files {
-        let file_str = file.to_string_lossy();
-        let stem = file_str
-            .trim_end_matches(".rs")
-            .trim_end_matches(".py")
-            .trim_end_matches(".java")
-            .trim_end_matches(".tsx")
-            .trim_end_matches(".ts")
-            .trim_end_matches(".js");
-        if stem.ends_with(&normalised) || file_str.contains(&normalised) {
-            let rel = file_str.into_owned();
-            return (rel, ImportKind::InternalLocal, Some(file.clone()));
-        }
-    }
-    for file in restricted_files {
-        let file_str = file.to_string_lossy();
-        let stem = file_str
-            .trim_end_matches(".rs")
-            .trim_end_matches(".py")
-            .trim_end_matches(".java")
-            .trim_end_matches(".tsx")
-            .trim_end_matches(".ts")
-            .trim_end_matches(".js");
-        if stem.ends_with(&normalised) || file_str.contains(&normalised) {
-            let rel = file_str.into_owned();
-            return (rel, ImportKind::InternalRestricted, Some(file.clone()));
-        }
-    }
-
-    (normalised, ImportKind::Unresolved, None)
+    normalised
 }
 
-/// Filter files based on scope_path
+fn find_matching_file(
+    normalised: &str,
+    files: &[std::path::PathBuf],
+) -> Option<std::path::PathBuf> {
+    for file in files {
+        let file_str = file.to_string_lossy();
+        let stem = file_str
+            .trim_end_matches(".rs")
+            .trim_end_matches(".py")
+            .trim_end_matches(".java")
+            .trim_end_matches(".tsx")
+            .trim_end_matches(".ts")
+            .trim_end_matches(".js");
+        if stem.ends_with(normalised) || file_str.contains(normalised) {
+            return Some(file.clone());
+        }
+    }
+
+    None
+}
+
+/// Filter files based on `scope_path`.
 fn filter_by_scope(files: Vec<PathBuf>, scope: Option<&str>) -> Vec<PathBuf> {
     if let Some(scope_path) = scope {
         files
@@ -825,7 +896,7 @@ fn merge_with_reverse_dependencies(
 fn reverse_dependencies(graph: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
     let mut reversed = serde_json::Map::new();
 
-    for (file, deps_obj) in graph.iter() {
+    for (file, deps_obj) in graph {
         if let Some(obj) = deps_obj.as_object() {
             // For each dependency of this file, add this file as dependent
             for key in &["internal", "restricted"] {
@@ -1070,19 +1141,19 @@ mod tests {
             .and_then(|v| v.as_object())
             .unwrap();
         assert_eq!(
-            stats.get("total_files_analyzed").and_then(|v| v.as_u64()),
+            stats.get("total_files_analyzed").and_then(Value::as_u64),
             Some(2)
         );
         assert_eq!(
-            stats.get("total_internal_deps").and_then(|v| v.as_u64()),
+            stats.get("total_internal_deps").and_then(Value::as_u64),
             Some(3)
         );
         assert_eq!(
-            stats.get("total_external_libs").and_then(|v| v.as_u64()),
+            stats.get("total_external_libs").and_then(Value::as_u64),
             Some(2)
         ); // tokio, serde
         assert_eq!(
-            stats.get("total_unresolved").and_then(|v| v.as_u64()),
+            stats.get("total_unresolved").and_then(Value::as_u64),
             Some(1)
         );
     }
@@ -1093,7 +1164,7 @@ mod tests {
 
         for i in 0..5 {
             file_deps.insert(
-                format!("file{}.rs", i),
+                format!("file{i}.rs"),
                 json!({
                     "internal": [],
                     "restricted": [],
@@ -1117,7 +1188,7 @@ mod tests {
                 sort_by: "fanout".to_string(),
             },
         );
-        let truncated = summary.get("truncated").and_then(|v| v.as_bool());
+        let truncated = summary.get("truncated").and_then(Value::as_bool);
 
         assert_eq!(
             truncated,

@@ -70,5 +70,5 @@ pub fn detect_grammar(path: &Path) -> Option<&'static dyn LanguageGrammar> {
     LANGUAGE_REGISTRY
         .iter()
         .find(|g| g.extensions().contains(&ext))
-        .map(|g| g.as_ref())
+        .map(Box::as_ref)
 }

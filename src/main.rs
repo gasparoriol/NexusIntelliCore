@@ -49,7 +49,7 @@ async fn main() {
         });
 
     if let Err(e) = state::ServerState::init(&root) {
-        error!("Fatal: failed to initialise server state: {}", e);
+        error!("Fatal: failed to initialise server state: {e}");
         std::process::exit(1);
     }
 
@@ -58,7 +58,7 @@ async fn main() {
 
     // Start the file watcher for automatic cache invalidation.
     // The result is intentionally kept alive for the duration of the process.
-    let _file_watcher = watcher::FileWatcher::start(state.root().to_path_buf());
+    let _file_watcher = watcher::FileWatcher::start(state.root());
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -91,33 +91,33 @@ async fn main() {
             Ok(Some(msg)) => {
                 let response = match serde_json::from_value::<JsonRpcRequest>(msg) {
                     Ok(req) => {
-                        if req.jsonrpc != "2.0" {
+                        if req.jsonrpc == "2.0" {
+                            handle_request(req).await
+                        } else {
                             warn!(version = %req.jsonrpc, "Unsupported jsonrpc version");
                             Some(JsonRpcResponse::error(
                                 req.id.unwrap_or(Value::Null),
                                 -32600,
                                 format!("Unsupported jsonrpc version: {}", req.jsonrpc),
                             ))
-                        } else {
-                            handle_request(req).await
                         }
                     }
                     Err(e) => Some(JsonRpcResponse::error(
                         Value::Null,
                         -32700,
-                        format!("Parse error: {}", e),
+                        format!("Parse error: {e}"),
                     )),
                 };
 
                 if let Some(resp) = response {
                     if let Err(e) = transport.write_message(&resp).await {
-                        error!("Failed to write response — pipe closed? Error: {}", e);
+                        error!("Failed to write response - pipe closed? Error: {e}");
                         break;
                     }
                 }
             }
             Err(e) => {
-                error!("Read error or framing error: {}, shutting down", e);
+                error!("Read error or framing error: {e}, shutting down");
                 break;
             }
         }
@@ -149,7 +149,7 @@ async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
 
     match req.method.as_str() {
         // ---- MCP lifecycle ------------------------------------------------
-        "initialize" => Some(handle_initialize(id, req.params)),
+        "initialize" => Some(handle_initialize(id, &req.params)),
 
         // Notifications carry no id and expect no response
         "notifications/initialized" => None,
@@ -166,7 +166,7 @@ async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
         other => Some(JsonRpcResponse::error(
             id,
             -32601,
-            format!("Method not found: {}", other),
+            format!("Method not found: {other}"),
         )),
     }
 }
@@ -175,7 +175,7 @@ async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
 // Lifecycle handlers
 // ---------------------------------------------------------------------------
 
-fn handle_initialize(id: Value, params: Value) -> JsonRpcResponse {
+fn handle_initialize(id: Value, params: &Value) -> JsonRpcResponse {
     let state = state::ServerState::get();
     let mut token_found = None;
 
@@ -243,8 +243,7 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
                 .filter(|t| {
                     t.get("name")
                         .and_then(|v| v.as_str())
-                        .map(|name| allowed.contains(&name.to_string()))
-                        .unwrap_or(false)
+                        .is_some_and(|name| allowed.iter().any(|tool| tool == name))
                 })
                 .cloned()
                 .collect();
@@ -259,7 +258,7 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
     security::log_audit_event(
         "tools_list",
         json!({
-            "count": filtered_tools.as_array().map(|a| a.len()).unwrap_or(0)
+            "count": filtered_tools.as_array().map_or(0, std::vec::Vec::len)
         }),
     );
 
@@ -267,12 +266,11 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
 }
 
 async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
-    let name = match params.get("name").and_then(|v| v.as_str()) {
-        Some(n) => n.to_owned(),
-        None => {
-            warn!("Missing 'name' in tool call");
-            return JsonRpcResponse::error(id, -32602, "Missing 'name' in tool call".to_owned());
-        }
+    let name = if let Some(n) = params.get("name").and_then(|v| v.as_str()) {
+        n.to_owned()
+    } else {
+        warn!("Missing 'name' in tool call");
+        return JsonRpcResponse::error(id, -32602, "Missing 'name' in tool call".to_owned());
     };
 
     let state = state::ServerState::get();
@@ -289,7 +287,7 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
             return JsonRpcResponse::error(
                 id,
                 -32003,
-                format!("Access denied: tool '{}' is not allowed", name),
+                format!("Access denied: tool '{name}' is not allowed"),
             );
         }
     }
@@ -339,7 +337,7 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
             JsonRpcResponse::success(
                 id,
                 json!({
-                    "content": [{ "type": "text", "text": format!("Internal error: {}", e) }],
+                    "content": [{ "type": "text", "text": format!("Internal error: {e}") }],
                     "isError": true
                 }),
             )

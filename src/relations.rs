@@ -96,8 +96,7 @@ fn normalize_path(path: &Path) -> PathBuf {
                 // Pop the last component only if it's a normal directory
                 let popped = components
                     .last()
-                    .map(|c| matches!(c, std::path::Component::Normal(_)))
-                    .unwrap_or(false);
+                    .is_some_and(|c| matches!(c, std::path::Component::Normal(_)));
                 if popped {
                     components.pop();
                 } else {
@@ -152,7 +151,7 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    const COMPONENT_MULTILINE: &str = r#"
+    const COMPONENT_MULTILINE: &str = r"
 import { Component, OnInit } from '@angular/core';
 
 @Component({
@@ -161,17 +160,17 @@ import { Component, OnInit } from '@angular/core';
   styleUrls: ['./hero.component.css', '../shared/common.css']
 })
 export class HeroComponent implements OnInit {}
-"#;
+";
 
-    const COMPONENT_COMPACT: &str = r#"
+    const COMPONENT_COMPACT: &str = r"
 @Component({ selector: 'app-dash', templateUrl: './dash.html', styleUrls: ['./dash.css'] })
 export class DashComponent {}
-"#;
+";
 
-    const COMPONENT_INLINE: &str = r#"
+    const COMPONENT_INLINE: &str = r"
 @Component({ selector: 'app-inline', template: '<div>hello</div>' })
 export class InlineComponent {}
-"#;
+";
 
     #[test]
     fn test_extract_multiline_decorator() {

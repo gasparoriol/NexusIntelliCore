@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::linter::render_lint_summary_scoped;
@@ -20,22 +21,21 @@ pub(super) async fn inspect_symbol(
     let state = crate::state::ServerState::get();
     let path = match state.validate_path(Path::new(file_path)) {
         Ok(p) => p,
-        Err(e) => return Ok(error_response(format!("Access denied: {}", e))),
+        Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
     let index = state.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
-            "⚠ Access denied: {} is protected by .mcpignore.\n\
-             The symbol '{}' exists but cannot be inspected.",
-            file_path, symbol_name
+            "⚠ Access denied: {file_path} is protected by .mcpignore.\n\
+             The symbol '{symbol_name}' exists but cannot be inspected."
         ))]));
     }
     drop(index);
 
     let analysis = match state.get_analysis(&path).await {
         Ok(a) => a,
-        Err(e) => return Ok(error_response(format!("Analysis error: {}", e))),
+        Err(e) => return Ok(error_response(format!("Analysis error: {e}"))),
     };
 
     let mut matches: Vec<_> = match match_mode {
@@ -105,7 +105,7 @@ pub(super) async fn inspect_symbol(
             file_path,
             match_mode,
             signature_hint
-                .map(|h| format!(" signature_hint='{}'", h))
+                .map(|h| format!(" signature_hint='{h}'"))
                 .unwrap_or_default(),
             available.join(", ")
         ))]));
@@ -198,13 +198,12 @@ pub(super) async fn inspect_symbol(
     }
 
     let item = &inspected[0];
+    let qualified_name = item["qualified_name"].as_str().unwrap_or(symbol_name);
+    let start_line = item["start_line"].as_u64().unwrap_or(0);
+    let end_line = item["end_line"].as_u64().unwrap_or(0);
+    let source = item["source"].as_str().unwrap_or("");
     let mut out = format!(
-        "// Symbol: {} in {}\n// Lines {}-{}\n\n{}",
-        item["qualified_name"].as_str().unwrap_or(symbol_name),
-        file_path,
-        item["start_line"].as_u64().unwrap_or(0),
-        item["end_line"].as_u64().unwrap_or(0),
-        item["source"].as_str().unwrap_or("")
+        "// Symbol: {qualified_name} in {file_path}\n// Lines {start_line}-{end_line}\n\n{source}"
     );
 
     if let Some(redactions) = item["redactions"].as_array() {
@@ -214,10 +213,10 @@ pub(super) async fn inspect_symbol(
                 .filter_map(|v| v.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            out.push_str(&format!(
-                "\n\n// ⚠ MCP Privacy Gateway: the following were redacted: {}",
-                list
-            ));
+            let _ = write!(
+                out,
+                "\n\n// ⚠ MCP Privacy Gateway: the following were redacted: {list}"
+            );
         }
     }
 

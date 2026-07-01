@@ -26,30 +26,30 @@ impl QueryParams {
         Self {
             mode: args
                 .get("mode")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("summary")
                 .to_string(),
             file_path: args
                 .get("file_path")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .map(String::from),
             scope_path: args
                 .get("scope_path")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .map(String::from),
             max_files: args
                 .get("max_files")
-                .and_then(|v| v.as_u64())
-                .map(|n| (n as usize).min(500))
-                .unwrap_or(DEFAULT_MAX_FILES),
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .map_or(DEFAULT_MAX_FILES, |n| n.min(500)),
             max_matches: args
                 .get("max_matches")
-                .and_then(|v| v.as_u64())
-                .map(|n| (n as usize).min(2000))
-                .unwrap_or(DEFAULT_MAX_MATCHES),
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .map_or(DEFAULT_MAX_MATCHES, |n| n.min(2000)),
             sort_by: args
                 .get("sort_by")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("pattern")
                 .to_string(),
         }
@@ -70,17 +70,13 @@ fn sort_patterns(items: &mut [analyzer::PatternMatch], sort_by: &str) {
 }
 
 fn ensure_budget(mut payload: Value, max_bytes: usize) -> (Value, usize, bool, Option<String>) {
-    let mut bytes = serde_json::to_string(&payload)
-        .map(|s| s.len())
-        .unwrap_or(0);
+    let mut bytes = serde_json::to_string(&payload).map_or(0, |s| s.len());
     if bytes <= max_bytes {
         return (payload, bytes, false, None);
     }
 
     loop {
-        bytes = serde_json::to_string(&payload)
-            .map(|s| s.len())
-            .unwrap_or(0);
+        bytes = serde_json::to_string(&payload).map_or(0, |s| s.len());
         if bytes <= max_bytes {
             return (
                 payload,
@@ -93,13 +89,11 @@ fn ensure_budget(mut payload: Value, max_bytes: usize) -> (Value, usize, bool, O
         let removed = payload
             .get_mut("matches")
             .and_then(|v| v.as_array_mut())
-            .and_then(|arr| arr.pop())
+            .and_then(std::vec::Vec::pop)
             .is_some();
 
         if !removed {
-            bytes = serde_json::to_string(&payload)
-                .map(|s| s.len())
-                .unwrap_or(0);
+            bytes = serde_json::to_string(&payload).map_or(0, |s| s.len());
             return (
                 payload,
                 bytes,
@@ -110,33 +104,35 @@ fn ensure_budget(mut payload: Value, max_bytes: usize) -> (Value, usize, bool, O
     }
 }
 
-pub(super) async fn search_design_patterns(args: &Value) -> Result<Value> {
-    let start = Instant::now();
-    let params = QueryParams::from_args(args);
-    let state = crate::state::ServerState::get();
-    let index = state.index().await?;
+fn select_candidate_files(
+    index: &crate::indexer::FileIndex,
+    params: &QueryParams,
+) -> Vec<std::path::PathBuf> {
+    if let Some(fp) = params.file_path.as_deref() {
+        return vec![std::path::PathBuf::from(fp)];
+    }
 
-    let files: Vec<_> = if let Some(fp) = params.file_path.as_deref() {
-        vec![std::path::PathBuf::from(fp)]
+    let all = index.allowed_files.clone();
+    if let Some(scope) = params.scope_path.as_deref() {
+        all.into_iter()
+            .filter(|file| file.to_string_lossy().contains(scope))
+            .collect()
     } else {
-        let all = index.allowed_files.clone();
-        if let Some(scope) = params.scope_path.as_deref() {
-            all.into_iter()
-                .filter(|f| f.to_string_lossy().contains(scope))
-                .collect()
-        } else {
-            all
-        }
-    };
-    drop(index);
+        all
+    }
+}
 
+async fn collect_pattern_matches(
+    state: &crate::state::ServerState,
+    files: &[std::path::PathBuf],
+    max_files: usize,
+) -> Result<(Vec<analyzer::PatternMatch>, usize)> {
     let mut all_patterns: Vec<analyzer::PatternMatch> = Vec::new();
     let mut files_scanned = 0usize;
 
-    for file in files.iter().take(params.max_files) {
-        let path = match state.validate_path(file) {
-            Ok(p) => p,
-            Err(_) => continue,
+    for file in files.iter().take(max_files) {
+        let Ok(path) = state.validate_path(file) else {
+            continue;
         };
 
         let index_read = state.index().await?;
@@ -147,14 +143,29 @@ pub(super) async fn search_design_patterns(args: &Value) -> Result<Value> {
         let rel = index_read.relative(&path).to_string_lossy().into_owned();
         drop(index_read);
 
-        let analysis = match state.get_analysis(&path).await {
-            Ok(a) => a,
-            Err(_) => continue,
+        let Ok(analysis) = state.get_analysis(&path).await else {
+            continue;
         };
+
         files_scanned += 1;
         let mut found = analyzer::detect_patterns(&analysis, &rel);
         all_patterns.append(&mut found);
     }
+
+    Ok((all_patterns, files_scanned))
+}
+
+pub(super) async fn search_design_patterns(args: &Value) -> Result<Value> {
+    let start = Instant::now();
+    let params = QueryParams::from_args(args);
+    let state = crate::state::ServerState::get();
+    let index = state.index().await?;
+
+    let files = select_candidate_files(&index, &params);
+    drop(index);
+
+    let (mut all_patterns, files_scanned) =
+        collect_pattern_matches(state, &files, params.max_files).await?;
 
     let total_matches = all_patterns.len();
 
@@ -231,15 +242,14 @@ pub(super) async fn search_design_patterns(args: &Value) -> Result<Value> {
 
     let matches_returned = budgeted
         .get("matches")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
+        .and_then(Value::as_array)
+        .map_or(0, std::vec::Vec::len);
 
     if let Some(meta) = budgeted.get_mut("meta").and_then(|v| v.as_object_mut()) {
         meta.insert("truncated".to_string(), Value::Bool(truncated));
         meta.insert(
             "truncation_reason".to_string(),
-            truncation_reason.map(Value::String).unwrap_or(Value::Null),
+            truncation_reason.map_or(Value::Null, Value::String),
         );
         meta.insert(
             "metrics".to_string(),
@@ -249,7 +259,7 @@ pub(super) async fn search_design_patterns(args: &Value) -> Result<Value> {
                 "matches_returned": matches_returned,
                 "response_bytes": response_bytes,
                 "truncated": truncated,
-                "duration_ms": start.elapsed().as_millis() as u64,
+                "duration_ms": u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
             }),
         );
     }

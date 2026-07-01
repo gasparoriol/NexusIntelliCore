@@ -100,8 +100,6 @@ lazy_static! {
 pub fn comment_style(lang: &str) -> &'static str {
     match lang.to_lowercase().as_str() {
         "python" | "ruby" | "shell" | "bash" | "yaml" | "yml" => "#",
-        "rust" | "go" | "golang" | "java" | "javascript" | "js" | "typescript" | "ts" | "c"
-        | "cpp" | "c++" | "kotlin" | "swift" => "//",
         _ => "//", // fallback for unknown languages
     }
 }
@@ -130,7 +128,7 @@ pub fn sanitize_text(text: &str) -> (String, Vec<String>) {
             result = pattern
                 .replace_all(&result, "[REDACTED_BY_MCP]")
                 .into_owned();
-            fired.push(label.to_string());
+            fired.push((*label).to_string());
         }
     }
 
@@ -180,7 +178,7 @@ fn indentation_from_body_slice(body: &str) -> Option<String> {
     None
 }
 
-fn indentation_after_signature(before: &str, language: &str) -> String {
+fn indentation_after_signature(before: &str) -> String {
     let base_ws = before
         .lines()
         .last()
@@ -191,11 +189,7 @@ fn indentation_after_signature(before: &str, language: &str) -> String {
         })
         .unwrap_or_default();
 
-    if language == "python" {
-        format!("{}    ", base_ws)
-    } else {
-        format!("{}    ", base_ws)
-    }
+    format!("{base_ws}    ")
 }
 
 /// Replace a function body using precise AST byte ranges.
@@ -221,26 +215,20 @@ pub fn strip_body_by_range(
 
     if language == "python" {
         let indent = indentation_from_body_slice(body)
-            .unwrap_or_else(|| indentation_after_signature(before, language));
-        return format!(
-            "{}{}# [{}]\n{}pass{}",
-            before, indent, placeholder, indent, after
-        );
+            .unwrap_or_else(|| indentation_after_signature(before));
+        return format!("{before}{indent}# [{placeholder}]\n{indent}pass{after}");
     }
 
     // Common case for brace languages with interior body range.
     if before.trim_end().ends_with('{') {
-        let indent = indentation_after_signature(before, language);
-        return format!("{}\n{}/* {} */\n{}", before, indent, placeholder, after);
+        let indent = indentation_after_signature(before);
+        return format!("{before}\n{indent}/* {placeholder} */\n{after}");
     }
 
     // Generic fallback for non-brace bodies.
     let comment = comment_style(language);
-    let indent = indentation_after_signature(before, language);
-    format!(
-        "{}\n{}{} [{}]\n{}",
-        before, indent, comment, placeholder, after
-    )
+    let indent = indentation_after_signature(before);
+    format!("{before}\n{indent}{comment} [{placeholder}]\n{after}")
 }
 
 /// Legacy fallback when AST body ranges are unavailable.

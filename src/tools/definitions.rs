@@ -386,8 +386,7 @@ fn schema_lint_file() -> Value {
 /// JSON Schema definitions returned by `tools/list`.
 pub fn tool_definitions() -> Value {
     let is_angular = crate::state::ServerState::get_opt()
-        .map(|s| s.is_angular_project())
-        .unwrap_or(true);
+        .is_none_or(crate::state::ServerState::is_angular_project);
 
     let mut defs = all_tool_definitions();
     if is_angular {

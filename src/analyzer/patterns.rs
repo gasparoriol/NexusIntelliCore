@@ -26,8 +26,7 @@ pub fn detect_patterns(analysis: &FileAnalysis, file_path: &str) -> Vec<PatternM
                         "instance" | "get_instance" | "singleton" | "getInstance"
                     )
                 })
-                .map(|f| f.start_line)
-                .unwrap_or(0),
+                .map_or(0, |f| f.start_line),
         });
     }
 
@@ -37,14 +36,13 @@ pub fn detect_patterns(analysis: &FileAnalysis, file_path: &str) -> Vec<PatternM
     if with_count >= 2 && has_build {
         found.push(PatternMatch {
             pattern: "Builder".to_owned(),
-            evidence: format!("{} with_*() methods + build()/finish() method", with_count),
+            evidence: format!("{with_count} with_*() methods + build()/finish() method"),
             file: file_path.to_owned(),
             line: analysis
                 .functions
                 .iter()
                 .find(|f| f.name.starts_with("with_"))
-                .map(|f| f.start_line)
-                .unwrap_or(0),
+                .map_or(0, |f| f.start_line),
         });
     }
 
@@ -63,7 +61,7 @@ pub fn detect_patterns(analysis: &FileAnalysis, file_path: &str) -> Vec<PatternM
             evidence: if factory_class {
                 "Found *Factory class".to_owned()
             } else {
-                format!("{} create_*/make_*/new_*() methods", create_fns)
+                format!("{create_fns} create_*/make_*/new_*() methods")
             },
             file: file_path.to_owned(),
             line: 0,
@@ -98,10 +96,7 @@ pub fn detect_patterns(analysis: &FileAnalysis, file_path: &str) -> Vec<PatternM
     if find_count >= 1 && has_save && has_delete {
         found.push(PatternMatch {
             pattern: "Repository".to_owned(),
-            evidence: format!(
-                "{} find_*()/get_by_*() + save() + delete() methods",
-                find_count
-            ),
+            evidence: format!("{find_count} find_*()/get_by_*() + save() + delete() methods"),
             file: file_path.to_owned(),
             line: 0,
         });
@@ -121,8 +116,7 @@ pub fn detect_patterns(analysis: &FileAnalysis, file_path: &str) -> Vec<PatternM
                 .classes
                 .iter()
                 .find(|c| c.name.to_lowercase().contains("strategy"))
-                .map(|c| c.start_line)
-                .unwrap_or(0),
+                .map_or(0, |c| c.start_line),
         });
     }
 

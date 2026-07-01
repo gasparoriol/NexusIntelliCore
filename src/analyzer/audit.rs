@@ -11,9 +11,8 @@ use tree_sitter::{Parser, Query, QueryCursor};
 ///
 /// Falls back to an empty vector for languages without tree-sitter support.
 pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFinding> {
-    let ts_lang = match lang.tree_sitter_language() {
-        Some(l) => l,
-        None => return Vec::new(),
+    let Some(ts_lang) = lang.tree_sitter_language() else {
+        return Vec::new();
     };
 
     let mut parser = Parser::new();
@@ -21,9 +20,8 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
         return Vec::new();
     }
 
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return Vec::new(),
+    let Some(tree) = parser.parse(source, None) else {
+        return Vec::new();
     };
 
     let source_bytes = source.as_bytes();
@@ -38,9 +36,8 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
             crate::audit_queries::RUST_PANICS,
             crate::audit_queries::RUST_UNSAFE_BLOCK_QUERY,
         ] {
-            let query = match Query::new(&ts_lang, query_str) {
-                Ok(q) => q,
-                Err(_) => continue,
+            let Ok(query) = Query::new(&ts_lang, query_str) else {
+                continue;
             };
             let mut cursor = QueryCursor::new();
             for m in cursor.matches(&query, tree.root_node(), source_bytes) {
@@ -80,7 +77,7 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
                     findings.push(AuditFinding {
                         kind: AuditFindingKind::DynamicExecution,
                         line,
-                        description: format!("{}() call", name),
+                        description: format!("{name}() call"),
                     });
                 }
             }

@@ -11,9 +11,8 @@ pub(crate) fn extract_functions(
     lang: &dyn LanguageGrammar,
     ts_lang: &Language,
 ) -> Result<Vec<FunctionInfo>> {
-    let query_str = match lang.function_query() {
-        Some(q) => q,
-        None => return Ok(vec![]),
+    let Some(query_str) = lang.function_query() else {
+        return Ok(vec![]);
     };
 
     let source_lines: Vec<&str> = source.lines().collect();
@@ -202,7 +201,7 @@ fn build_qualified_name(
 ) -> String {
     if let Some(owner) = owner_chain {
         let sep = if lang.name() == "rust" { "::" } else { "." };
-        format!("{}{}{}", owner, sep, name)
+        format!("{owner}{sep}{name}")
     } else {
         name.to_owned()
     }

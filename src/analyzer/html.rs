@@ -38,7 +38,8 @@ fn collect_html_elements(
         for child in node.children(&mut cursor) {
             match child.kind() {
                 "tag_name" => {
-                    tag_name = source[child.byte_range()].to_owned();
+                    tag_name.clear();
+                    tag_name.push_str(&source[child.byte_range()]);
                 }
                 "attribute" => {
                     parse_html_attribute(
@@ -85,13 +86,15 @@ fn parse_html_attribute(
     for child in node.children(&mut cursor) {
         match child.kind() {
             "attribute_name" => {
-                attr_name = source[child.byte_range()].to_owned();
+                attr_name.clear();
+                attr_name.push_str(&source[child.byte_range()]);
             }
             "quoted_attribute_value" => {
                 let mut val_cursor = child.walk();
                 for val_child in child.children(&mut val_cursor) {
                     if val_child.kind() == "attribute_value" {
-                        attr_value = source[val_child.byte_range()].to_owned();
+                        attr_value.clear();
+                        attr_value.push_str(&source[val_child.byte_range()]);
                     }
                 }
             }

@@ -9,28 +9,27 @@ pub(super) async fn lint_file(file_path: &str) -> Result<Value> {
     let state = crate::state::ServerState::get();
     let path = match state.validate_path(Path::new(file_path)) {
         Ok(p) => p,
-        Err(e) => return Ok(error_response(format!("Access denied: {}", e))),
+        Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
     let index = state.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
-            "⚠ Access denied by .mcpignore policy: {}",
-            file_path
+            "⚠ Access denied by .mcpignore policy: {file_path}"
         ))]));
     }
     drop(index);
 
     let analysis = match state.get_analysis(&path).await {
         Ok(analysis) => analysis,
-        Err(e) => return Ok(error_response(format!("Analysis error: {}", e))),
+        Err(e) => return Ok(error_response(format!("Analysis error: {e}"))),
     };
 
     let lint_result = state.lint_pool().run_sync(&path, &analysis).await;
     let summary = crate::linter::render_lint_summary(&lint_result)
         .unwrap_or_else(|| "\n\n// Lint: no diagnostics reported".to_string());
 
-    state.invalidate_tool_cache_for_file(&path).await;
+    state.invalidate_tool_cache_for_file(&path);
 
     let payload = json!({
         "file_path": file_path,

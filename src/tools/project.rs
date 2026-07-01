@@ -10,8 +10,7 @@ pub(super) async fn get_project_structure() -> Result<Value> {
     let summary = index.render_tree();
 
     let summary = format!(
-        "[Think like a project architect: reason about layers, module seams, and cross-cutting boundaries.]\n{}",
-        summary
+        "[Think like a project architect: reason about layers, module seams, and cross-cutting boundaries.]\n{summary}"
     );
 
     // Sanitize structure output through Privacy Gateway

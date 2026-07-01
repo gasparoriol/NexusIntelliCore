@@ -47,7 +47,7 @@ fn load_dynamic_overrides() -> DynamicSecurityOverrides {
                 {
                     overrides.custom_redaction_patterns.extend(
                         arr.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .filter_map(|v| v.as_str().map(str::to_owned))
                             .filter(|p| !p.is_empty()),
                     );
                 }
@@ -58,7 +58,7 @@ fn load_dynamic_overrides() -> DynamicSecurityOverrides {
                         .and_then(|v| v.as_str())
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string());
+                        .map(str::to_owned);
                 }
             }
         }
@@ -80,7 +80,7 @@ fn apply_custom_redaction_patterns(text: &str) -> (String, Vec<String>) {
             Ok(re) => {
                 if re.is_match(&out) {
                     out = re.replace_all(&out, "[REDACTED_BY_MCP]").into_owned();
-                    fired.push(format!("CUSTOM_PATTERN:{}", pattern));
+                    fired.push(format!("CUSTOM_PATTERN:{pattern}"));
                 }
             }
             Err(e) => {
@@ -121,7 +121,7 @@ pub struct PrivacyPolicy {
 impl PrivacyPolicy {
     pub fn new(keys: Vec<&str>) -> Self {
         Self {
-            sensitive_keys: keys.into_iter().map(|s| s.to_string()).collect(),
+            sensitive_keys: keys.into_iter().map(str::to_owned).collect(),
             omit_restricted: false,
             redact_secrets: true,
             apply_strip_marks: true,
@@ -155,10 +155,7 @@ pub fn sanitize_output_text(text: &str, policy: &PrivacyPolicy) -> (String, Vec<
     }
 
     let (sanitized, redactions) = sanitize_text_with_dynamic_patterns(text);
-
-    let redaction_summary: Vec<String> = redactions.iter().map(|r| r.to_string()).collect();
-
-    (sanitized, redaction_summary)
+    (sanitized, redactions)
 }
 
 /// Sanitize import strings (may contain hostnames or module names)
@@ -168,9 +165,7 @@ pub fn sanitize_import(import_text: &str, policy: &PrivacyPolicy) -> (String, Ve
     }
 
     let (sanitized, redactions) = sanitize_text_with_dynamic_patterns(import_text);
-    let redaction_summary: Vec<String> = redactions.iter().map(|r| r.to_string()).collect();
-
-    (sanitized, redaction_summary)
+    (sanitized, redactions)
 }
 
 /// Sanitize a file outline (imports list, function signatures, class names)
@@ -190,8 +185,7 @@ pub fn sanitize_doc_comment(comment: &str, policy: &PrivacyPolicy) -> (String, V
         return (comment.to_string(), Vec::new());
     }
     let (sanitized, redactions) = sanitize_text_with_dynamic_patterns(comment);
-    let redaction_summary: Vec<String> = redactions.iter().map(|r| r.to_string()).collect();
-    (sanitized, redaction_summary)
+    (sanitized, redactions)
 }
 
 /// Sanitize function/method source code.
@@ -227,7 +221,7 @@ pub fn sanitize_function_source(
 
     // Step 3: Redact secrets
     let (final_sanitized, secret_redactions) = sanitize_text_with_dynamic_patterns(&sanitized);
-    redactions.extend(secret_redactions.iter().map(|r| r.to_string()));
+    redactions.extend(secret_redactions.iter().cloned());
 
     (final_sanitized, redactions)
 }

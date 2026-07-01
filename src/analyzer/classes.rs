@@ -11,9 +11,8 @@ pub(crate) fn extract_classes(
     lang: &dyn LanguageGrammar,
     ts_lang: &Language,
 ) -> Result<Vec<ClassInfo>> {
-    let query_str = match lang.class_query() {
-        Some(q) => q,
-        None => return Ok(vec![]),
+    let Some(query_str) = lang.class_query() else {
+        return Ok(vec![]);
     };
 
     let source_lines: Vec<&str> = source.lines().collect();
@@ -24,21 +23,16 @@ pub(crate) fn extract_classes(
         let ts_node = cls_node.1;
         let raw_kind = ts_node.kind();
         let kind = match raw_kind {
-            "struct_item" => "struct",
-            "enum_item" => "enum",
+            "struct_item" | "struct_specifier" | "struct_declaration" => "struct",
+            "enum_item" | "enum_declaration" | "enum_specifier" => "enum",
             "impl_item" => "impl",
             "trait_item" => "trait",
             "class_definition" | "class_declaration" => "class",
             "interface_declaration" => "interface",
-            "enum_declaration" => "enum",
             "record_declaration" => "record",
             "annotation_type_declaration" => "@interface",
             // C
-            "struct_specifier" => "struct",
             "union_specifier" => "union",
-            "enum_specifier" => "enum",
-            // C# (struct_declaration distinct from Rust struct_item)
-            "struct_declaration" => "struct",
             _ => raw_kind,
         };
 

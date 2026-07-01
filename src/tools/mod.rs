@@ -41,8 +41,7 @@ fn tool_is_cacheable(name: &str) -> bool {
         .into_iter()
         .chain(std::iter::once(angular_tool_definitions()))
         .find(|def| def.name == name)
-        .map(|def| def.cacheable)
-        .unwrap_or(false)
+        .is_some_and(|def| def.cacheable)
 }
 
 async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
@@ -61,13 +60,12 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
                 .unwrap_or("auto");
             if !matches!(match_mode, "auto" | "simple" | "qualified") {
                 return Ok(error_response(format!(
-                    "Invalid match_mode '{}'. Allowed values: auto, simple, qualified",
-                    match_mode
+                    "Invalid match_mode '{match_mode}'. Allowed values: auto, simple, qualified"
                 )));
             }
             let return_all_matches = args
                 .get("return_all_matches")
-                .and_then(|v| v.as_bool())
+                .and_then(Value::as_bool)
                 .unwrap_or(false);
             let signature_hint = args.get("signature_hint").and_then(|v| v.as_str());
             symbol::inspect_symbol(
@@ -96,44 +94,43 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
             let file = require_file_path(args)?;
             let public_only = args
                 .get("public_only")
-                .and_then(|v| v.as_bool())
+                .and_then(Value::as_bool)
                 .unwrap_or(false);
             summary::get_module_summary(&file, public_only).await
         }
         "generate_project_docs" => {
-            let sections: Vec<String> = args
-                .get("sections")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_else(|| {
+            let sections: Vec<String> = args.get("sections").and_then(Value::as_array).map_or_else(
+                || {
                     vec![
                         "overview".into(),
                         "usage".into(),
                         "api".into(),
                         "use_cases".into(),
                     ]
-                });
+                },
+                |arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                },
+            );
             let public_only = args
                 .get("public_only")
-                .and_then(|v| v.as_bool())
+                .and_then(Value::as_bool)
                 .unwrap_or(true);
             let max_files = args
                 .get("max_files")
-                .and_then(|v| v.as_u64())
-                .map(|n| (n as usize).min(150))
-                .unwrap_or(50);
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
+                .map_or(50, |n| n.min(150));
             let file_offset = args
                 .get("file_offset")
-                .and_then(|v| v.as_u64())
-                .map(|n| n as usize)
+                .and_then(Value::as_u64)
+                .and_then(|n| usize::try_from(n).ok())
                 .unwrap_or(0);
             let language = args
                 .get("language")
-                .and_then(|v| v.as_str())
+                .and_then(Value::as_str)
                 .unwrap_or("en")
                 .to_owned();
             project_docs::generate_project_docs(
@@ -145,7 +142,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
             )
             .await
         }
-        other => Ok(error_response(format!("Unknown tool: {}", other))),
+        other => Ok(error_response(format!("Unknown tool: {other}"))),
     }
 }
 
@@ -157,19 +154,17 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     // Concurrency guard for heavy tools
     let _permit = if is_expensive_tool(name) {
         let state = crate::state::ServerState::get();
-        match state
+        if let Some(permit) = state
             .acquire_tool_permit_timeout(std::time::Duration::from_secs(30))
             .await
         {
-            Some(permit) => Some(permit),
-            None => {
-                tracing::warn!(tool = %name, "Tool rejected: concurrency limit exceeded");
-                return Ok(error_response(format!(
-                    "Tool '{}' is temporarily unavailable: server is processing too many \
-                     concurrent requests. Please retry in a few seconds.",
-                    name
-                )));
-            }
+            Some(permit)
+        } else {
+            tracing::warn!(tool = %name, "Tool rejected: concurrency limit exceeded");
+            return Ok(error_response(format!(
+                "Tool '{name}' is temporarily unavailable: server is processing too many \
+                 concurrent requests. Please retry in a few seconds."
+            )));
         }
     } else {
         None
@@ -190,12 +185,12 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
         .get_with(key.clone(), async move {
             let computed = dispatch_tool_uncached(&name_for_compute, &args_for_compute)
                 .await
-                .unwrap_or_else(|e| error_response(format!("Internal tool error: {}", e)));
+                .unwrap_or_else(|e| error_response(format!("Internal tool error: {e}")));
             computed
         })
         .await;
 
-    if result.get("isError").and_then(|v| v.as_bool()) == Some(true) {
+    if result.get("isError").and_then(Value::as_bool) == Some(true) {
         cache.invalidate(&key).await;
     }
 
@@ -205,12 +200,12 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
 fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
     args.get(key)
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("Missing required argument: {}", key))
+        .ok_or_else(|| anyhow::anyhow!("Missing required argument: {key}"))
 }
 
 fn require_file_path(args: &Value) -> Result<String> {
     let parsed: FilePathArgs = serde_json::from_value(args.clone())
-        .map_err(|e| anyhow::anyhow!("Invalid argument format for file_path: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Invalid argument format for file_path: {e}"))?;
     parsed.file_path.ok_or_else(|| {
         anyhow::anyhow!(
             "Missing required argument: file_path (aliases: FilePath, filepath, file-path)"
@@ -220,10 +215,7 @@ fn require_file_path(args: &Value) -> Result<String> {
 
 fn require_file_path_or_component_path(args: &Value) -> Result<String> {
     let parsed: FilePathArgs = serde_json::from_value(args.clone()).map_err(|e| {
-        anyhow::anyhow!(
-            "Invalid argument format for file_path/component_path: {}",
-            e
-        )
+        anyhow::anyhow!("Invalid argument format for file_path/component_path: {e}")
     })?;
     parsed.file_path.or(parsed.component_path).ok_or_else(|| {
         anyhow::anyhow!(
@@ -238,8 +230,7 @@ fn is_expensive_tool(name: &str) -> bool {
         .into_iter()
         .chain(std::iter::once(angular_tool_definitions()))
         .find(|def| def.name == name)
-        .map(|def| def.expensive)
-        .unwrap_or(false)
+        .is_some_and(|def| def.expensive)
 }
 
 #[cfg(test)]
@@ -253,7 +244,7 @@ mod tests {
         // ServerState::init, causing a "No such file" panic inside SecurityConfig::load.
         let _env_guard = crate::security::SECURITY_ENV_TEST_LOCK
             .lock()
-            .unwrap_or_else(|p| p.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if crate::state::ServerState::get_opt().is_none() {
             let original_security_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
@@ -293,7 +284,7 @@ mod tests {
             .expect("dispatcher should execute generate_project_docs route");
 
         assert_ne!(
-            response.get("isError").and_then(|v| v.as_bool()),
+            response.get("isError").and_then(serde_json::Value::as_bool),
             Some(true),
             "generate_project_docs dispatch should not return an error response"
         );

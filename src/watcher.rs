@@ -5,14 +5,14 @@
 //! (create/remove/rename) request an index refresh.
 //!
 //! # Design notes
-//! * Uses `notify::RecommendedWatcher` (FSEvents on macOS, inotify on Linux).
+//! * Uses `notify::RecommendedWatcher` (`FSEvents` on macOS, `inotify` on Linux).
 //! * Events are processed on a dedicated Tokio task; the watcher itself runs
 //!   on a notify-internal thread and forwards events via a standard channel.
 //! * The watcher is intentionally best-effort: if it fails to start (e.g. the
 //!   OS limit for inotify watches is reached) the server continues without
 //!   automatic invalidation. Users can always call `refresh_index` manually.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,13 +33,15 @@ pub(crate) enum WatchAction {
     ScheduleIndexRefresh,
 }
 
-pub(crate) fn is_rename_modify_kind(kind: &ModifyKind) -> bool {
+pub(crate) fn is_rename_modify_kind(kind: ModifyKind) -> bool {
     matches!(kind, ModifyKind::Name(_))
 }
 
 pub(crate) fn classify_event(event: &Event) -> WatchAction {
     match &event.kind {
-        EventKind::Modify(kind) if is_rename_modify_kind(kind) => WatchAction::ScheduleIndexRefresh,
+        EventKind::Modify(kind) if is_rename_modify_kind(*kind) => {
+            WatchAction::ScheduleIndexRefresh
+        }
         EventKind::Modify(_) => WatchAction::InvalidateCache(event.paths.clone()),
         EventKind::Create(_) | EventKind::Remove(_) => WatchAction::ScheduleIndexRefresh,
         _ => WatchAction::Ignore,
@@ -59,7 +61,7 @@ pub struct FileWatcher {
 impl FileWatcher {
     /// Start watching `root` recursively. Returns `None` if the watcher cannot
     /// be initialised (non-fatal — the server continues without it).
-    pub async fn start(root: PathBuf) -> Option<Self> {
+    pub fn start(root: &Path) -> Option<Self> {
         // Notify emits events via the callback channel. We read them in a
         // blocking loop and forward actions to server state.
         let (tx, rx) = std::sync::mpsc::channel();
@@ -77,7 +79,7 @@ impl FileWatcher {
             }
         };
 
-        if let Err(e) = watcher.watch(&root, RecursiveMode::Recursive) {
+        if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
             warn!(
                 "Could not watch {:?} — cache invalidation disabled: {}",
                 root, e
@@ -107,9 +109,7 @@ impl FileWatcher {
                                 let state = ServerState::get();
                                 let root = state.root().to_owned();
                                 rt_handle.spawn(async move {
-                                    ServerState::get()
-                                        .invalidate_tool_cache_for_root(&root)
-                                        .await;
+                                    ServerState::get().invalidate_tool_cache_for_root(&root);
                                 });
                                 for path in &paths {
                                     debug!(path = %path.display(), "Cache invalidation triggered");
@@ -122,9 +122,7 @@ impl FileWatcher {
                                 let state = ServerState::get();
                                 let root = state.root().to_owned();
                                 rt_handle.spawn(async move {
-                                    ServerState::get()
-                                        .invalidate_tool_cache_for_root(&root)
-                                        .await;
+                                    ServerState::get().invalidate_tool_cache_for_root(&root);
                                 });
                                 if refresh_debounce_active
                                     .compare_exchange(
@@ -282,28 +280,28 @@ mod tests {
 
     #[test]
     fn rename_mode_both_is_rename() {
-        assert!(is_rename_modify_kind(&ModifyKind::Name(RenameMode::Both)));
+        assert!(is_rename_modify_kind(ModifyKind::Name(RenameMode::Both)));
     }
 
     #[test]
     fn rename_mode_from_is_rename() {
-        assert!(is_rename_modify_kind(&ModifyKind::Name(RenameMode::From)));
+        assert!(is_rename_modify_kind(ModifyKind::Name(RenameMode::From)));
     }
 
     #[test]
     fn rename_mode_to_is_rename() {
-        assert!(is_rename_modify_kind(&ModifyKind::Name(RenameMode::To)));
+        assert!(is_rename_modify_kind(ModifyKind::Name(RenameMode::To)));
     }
 
     #[test]
     fn data_change_is_not_rename() {
-        assert!(!is_rename_modify_kind(&ModifyKind::Data(
+        assert!(!is_rename_modify_kind(ModifyKind::Data(
             DataChange::Content
         )));
     }
 
     #[test]
     fn modify_any_is_not_rename() {
-        assert!(!is_rename_modify_kind(&ModifyKind::Any));
+        assert!(!is_rename_modify_kind(ModifyKind::Any));
     }
 }

@@ -4,7 +4,7 @@
 /// - Headers: `Header: value\r\n...Header: value\r\n\r\n`
 /// - Body: exactly N bytes of JSON, where N is specified by `Content-Length` header
 ///
-/// Reference: https://spec.modelcontextprotocol.io/2024-11-05/basic/transports/#stdio-transport
+/// Reference: <https://spec.modelcontextprotocol.io/2024-11-05/basic/transports/#stdio-transport>
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -95,8 +95,7 @@ where
 
             if line.len() > MAX_HEADER_LINE_BYTES {
                 return Err(anyhow!(
-                    "Header line exceeds maximum size ({} bytes)",
-                    MAX_HEADER_LINE_BYTES
+                    "Header line exceeds maximum size ({MAX_HEADER_LINE_BYTES} bytes)"
                 ));
             }
 
@@ -117,7 +116,7 @@ where
                 }
 
                 let msg = serde_json::from_str::<Value>(trimmed)
-                    .map_err(|e| anyhow!("JSON parse error (line-delimited mode): {}", e))?;
+                    .map_err(|e| anyhow!("JSON parse error (line-delimited mode): {e}"))?;
                 return Ok(Some(msg));
             }
 
@@ -127,12 +126,12 @@ where
             }
 
             if headers.len() >= MAX_HEADER_COUNT {
-                return Err(anyhow!("Too many headers (max {})", MAX_HEADER_COUNT));
+                return Err(anyhow!("Too many headers (max {MAX_HEADER_COUNT})"));
             }
 
             let (name, value) = trimmed
                 .split_once(':')
-                .ok_or_else(|| anyhow!("Invalid header format: {}", trimmed))?;
+                .ok_or_else(|| anyhow!("Invalid header format: {trimmed}"))?;
 
             let name_lower = name.trim().to_lowercase();
             let value_trimmed = value.trim().to_string();
@@ -165,9 +164,7 @@ where
 
         if content_length > MAX_MESSAGE_SIZE {
             return Err(anyhow!(
-                "Content-Length exceeds maximum: {} > {}",
-                content_length,
-                MAX_MESSAGE_SIZE
+                "Content-Length exceeds maximum: {content_length} > {MAX_MESSAGE_SIZE}"
             ));
         }
 
@@ -177,11 +174,7 @@ where
         // buffer and will be available on the following `read_message` call.
         let mut body = vec![0u8; content_length];
         self.reader.read_exact(&mut body).await.map_err(|e| {
-            anyhow!(
-                "EOF while reading body (expected {} bytes): {}",
-                content_length,
-                e
-            )
+            anyhow!("EOF while reading body (expected {content_length} bytes): {e}")
         })?;
 
         if trace_enabled {
@@ -194,7 +187,7 @@ where
             );
         }
 
-        let msg = serde_json::from_slice(&body).map_err(|e| anyhow!("JSON parse error: {}", e))?;
+        let msg = serde_json::from_slice(&body).map_err(|e| anyhow!("JSON parse error: {e}"))?;
 
         debug!("Message received via MCP transport");
         Ok(Some(msg))
@@ -218,7 +211,7 @@ where
         let serialized = serde_json::to_vec(msg)?;
         let length = serialized.len();
 
-        let header = format!("Content-Length: {}\r\n\r\n", length);
+        let header = format!("Content-Length: {length}\r\n\r\n");
 
         self.writer.write_all(header.as_bytes()).await?;
         self.writer.write_all(&serialized).await?;
@@ -259,7 +252,7 @@ where
             }
 
             let msg = serde_json::from_str::<Value>(trimmed)
-                .map_err(|e| anyhow!("JSON parse error (line-delimited mode): {}", e))?;
+                .map_err(|e| anyhow!("JSON parse error (line-delimited mode): {e}"))?;
             return Ok(Some(msg));
         }
     }
@@ -276,7 +269,7 @@ fn extract_content_length(headers: &HashMap<String, String>) -> Result<usize> {
 
     value
         .parse::<usize>()
-        .map_err(|_| anyhow!("Content-Length is not a valid number: {}", value))
+        .map_err(|_| anyhow!("Content-Length is not a valid number: {value}"))
 }
 
 fn stdin_trace_enabled() -> bool {

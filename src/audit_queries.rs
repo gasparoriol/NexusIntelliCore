@@ -13,9 +13,9 @@
 /// Rust — `unsafe { … }` expression blocks.
 ///
 /// Catches both bare `unsafe { }` and unsafe blocks inside `unsafe fn`.
-pub const RUST_UNSAFE_BLOCK: &str = r#"
+pub const RUST_UNSAFE_BLOCK: &str = r"
 (unsafe_block) @unsafe_block
-"#;
+";
 
 /// Rust — `unsafe fn` definitions (function-level unsafety declaration).
 pub const RUST_UNSAFE_FN: &str = r#"
@@ -35,9 +35,9 @@ pub const RUST_PANICS: &str = r#"
 "#;
 
 // Detects `unsafe` blocks in Rust source.
-pub const RUST_UNSAFE_BLOCK_QUERY: &str = r#"
+pub const RUST_UNSAFE_BLOCK_QUERY: &str = r"
   (unsafe_block) @unsafe_block
-"#;
+";
 
 /// Detects inline assembly (`asm!`) calls in Rust.
 pub const RUST_INLINE_ASM_QUERY: &str = r#"

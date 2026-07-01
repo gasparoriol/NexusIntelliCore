@@ -1,5 +1,6 @@
 use crate::analyzer;
 use crate::privacy_gateway;
+use std::fmt::Write as _;
 
 use super::data::ProjectDocsData;
 use super::format::{doc_comment_first_line, relative_path_string};
@@ -18,10 +19,7 @@ pub(super) struct RenderInput<'a> {
 
 pub(super) fn render_document(input: &RenderInput<'_>) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "{} {}\n\n",
-        input.labels.h1, input.data.project_name
-    ));
+    let _ = writeln!(out, "{} {}\n", input.labels.h1, input.data.project_name);
 
     if wants(input.sections, "overview") {
         render_overview(&mut out, input);
@@ -55,10 +53,7 @@ fn wants(sections: &[String], name: &str) -> bool {
 }
 
 fn render_overview(out: &mut String, input: &RenderInput<'_>) {
-    out.push_str(&format!(
-        "{} {}\n\n",
-        input.labels.h2, input.labels.overview
-    ));
+    let _ = writeln!(out, "{} {}\n", input.labels.h2, input.labels.overview);
 
     let mut lang_counts: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
@@ -67,13 +62,14 @@ fn render_overview(out: &mut String, input: &RenderInput<'_>) {
     }
     let lang_list: Vec<String> = lang_counts
         .iter()
-        .map(|(language, count)| format!("{} ({})", language, count))
+        .map(|(language, count)| format!("{language} ({count})"))
         .collect();
-    out.push_str(&format!(
-        "**{}:** {}\n\n",
+    let _ = writeln!(
+        out,
+        "**{}:** {}\n",
         input.labels.languages,
         lang_list.join(", ")
-    ));
+    );
 
     let total_pub_fns: usize = input
         .data
@@ -111,8 +107,9 @@ fn render_overview(out: &mut String, input: &RenderInput<'_>) {
                 .count()
         })
         .sum();
-    out.push_str(&format!(
-        "**{}:** {} {}, {} {} ({} {})\n\n",
+    let _ = writeln!(
+        out,
+        "**{}:** {} {}, {} {} ({} {})\n",
         input.labels.public_symbols,
         total_pub_fns,
         input.labels.functions,
@@ -120,7 +117,7 @@ fn render_overview(out: &mut String, input: &RenderInput<'_>) {
         input.labels.types,
         documented_fns,
         input.labels.documented
-    ));
+    );
 
     let best_doc = input
         .data
@@ -138,17 +135,18 @@ fn render_overview(out: &mut String, input: &RenderInput<'_>) {
     }
 
     if input.data.selected_files.len() < input.data.all_files.len() {
-        out.push_str(&format!(
-            "{}\n\n",
+        let _ = writeln!(
+            out,
+            "{}\n",
             input
                 .labels
                 .analyzed_files_note(input.data.selected_files.len(), input.data.all_files.len())
-        ));
+        );
     }
 }
 
 fn render_usage(out: &mut String, input: &RenderInput<'_>) {
-    out.push_str(&format!("{} {}\n\n", input.labels.h2, input.labels.usage));
+    let _ = writeln!(out, "{} {}\n", input.labels.h2, input.labels.usage);
 
     if input.data.entrypoints.is_empty() {
         out.push_str(input.labels.no_entrypoints);
@@ -162,8 +160,9 @@ fn render_usage(out: &mut String, input: &RenderInput<'_>) {
                 if let Some(signature) = &entrypoint.signature {
                     let (clean_signature, _) =
                         privacy_gateway::sanitize_output_text(signature, input.policy);
-                    out.push_str(&format!(
-                        "{} {}\n\n{}: `{}` {} `{}`\n\n```\n{}\n```\n\n",
+                    let _ = writeln!(
+                        out,
+                        "{} {}\n\n{}: `{}` {} `{}`\n\n```\n{}\n```\n",
                         input.labels.h3,
                         input.labels.binary_executable,
                         input.labels.entry_point,
@@ -171,22 +170,24 @@ fn render_usage(out: &mut String, input: &RenderInput<'_>) {
                         input.labels.entry_point_preposition,
                         file_name,
                         clean_signature
-                    ));
+                    );
                 } else {
-                    out.push_str(&format!(
-                        "{} {}\n\n`{}` {} `{}`\n\n",
+                    let _ = writeln!(
+                        out,
+                        "{} {}\n\n`{}` {} `{}`\n",
                         input.labels.h3,
                         input.labels.executable_entry_point,
                         entrypoint.symbol.as_deref().unwrap_or("main"),
                         input.labels.entry_point_preposition,
                         file_name
-                    ));
+                    );
                 }
             }
             analyzer::EntrypointKind::CliFramework(name) => {
                 let file_name = relative_path_string(&input.data.root, &entrypoint.file);
-                out.push_str(&format!(
-                    "{} {} ({})\n\n{} **{}** {} `{}`.\n\n",
+                let _ = writeln!(
+                    out,
+                    "{} {} ({})\n\n{} **{}** {} `{}`.\n",
                     input.labels.h3,
                     input.labels.cli_heading,
                     name,
@@ -194,12 +195,13 @@ fn render_usage(out: &mut String, input: &RenderInput<'_>) {
                     name,
                     input.labels.detected_preposition,
                     file_name
-                ));
+                );
             }
             analyzer::EntrypointKind::HttpFramework(name) => {
                 let file_name = relative_path_string(&input.data.root, &entrypoint.file);
-                out.push_str(&format!(
-                    "{} {} ({})\n\n{} **{}** {} `{}`.\n\n",
+                let _ = writeln!(
+                    out,
+                    "{} {} ({})\n\n{} **{}** {} `{}`.\n",
                     input.labels.h3,
                     input.labels.http_heading,
                     name,
@@ -207,20 +209,21 @@ fn render_usage(out: &mut String, input: &RenderInput<'_>) {
                     name,
                     input.labels.detected_preposition,
                     file_name
-                ));
+                );
             }
             analyzer::EntrypointKind::LibraryCrate => {
-                out.push_str(&format!(
-                    "{} {}\n\n{}\n\n",
+                let _ = writeln!(
+                    out,
+                    "{} {}\n\n{}\n",
                     input.labels.h3, input.labels.library_heading, input.labels.library_text
-                ));
+                );
             }
         }
     }
 }
 
 fn render_api(out: &mut String, input: &RenderInput<'_>) {
-    out.push_str(&format!("{} {}\n\n", input.labels.h2, input.labels.api));
+    let _ = writeln!(out, "{} {}\n", input.labels.h2, input.labels.api);
 
     let mut api_entry_count = 0usize;
 
@@ -249,7 +252,7 @@ fn render_api(out: &mut String, input: &RenderInput<'_>) {
         }
 
         let rel = relative_path_string(&input.data.root, path);
-        out.push_str(&format!("{} `{}`\n\n", input.labels.h3, rel));
+        let _ = writeln!(out, "{} `{}`\n", input.labels.h3, rel);
 
         if let Some(first_line) = analysis
             .module_doc
@@ -258,32 +261,31 @@ fn render_api(out: &mut String, input: &RenderInput<'_>) {
         {
             let (clean, _) = privacy_gateway::sanitize_doc_comment(&first_line, input.policy);
             if !clean.is_empty() {
-                out.push_str(&format!("{}\n\n", clean));
+                let _ = writeln!(out, "{clean}\n");
             }
         }
 
         if !pub_types.is_empty() {
-            out.push_str(&format!(
-                "| {} | Kind | {} |\n|---|---|---|\n",
+            let _ = writeln!(
+                out,
+                "| {} | Kind | {} |\n|---|---|---|",
                 input.labels.type_header, input.labels.description_header
-            ));
+            );
             for class in &pub_types {
                 let desc = class
                     .doc_comment
                     .as_deref()
                     .and_then(doc_comment_first_line)
-                    .unwrap_or_else(|| input.labels.no_documentation.to_owned());
+                    .unwrap_or(input.labels.no_documentation.to_owned());
                 let (clean_desc, _) = privacy_gateway::sanitize_doc_comment(&desc, input.policy);
-                out.push_str(&format!(
-                    "| `{}` | {} | {} |\n",
+                let _ = writeln!(
+                    out,
+                    "| `{}` | {} | {} |",
                     class.name, class.kind, clean_desc
-                ));
+                );
                 api_entry_count += 1;
                 if api_entry_count >= MAX_API_ENTRIES {
-                    out.push_str(&format!(
-                        "\n{}\n\n",
-                        input.labels.api_truncated(MAX_API_ENTRIES)
-                    ));
+                    let _ = writeln!(out, "\n{}\n", input.labels.api_truncated(MAX_API_ENTRIES));
                     break 'files;
                 }
             }
@@ -291,16 +293,17 @@ fn render_api(out: &mut String, input: &RenderInput<'_>) {
         }
 
         if !pub_fns.is_empty() {
-            out.push_str(&format!(
-                "| {} | {} |\n|---|---|\n",
+            let _ = writeln!(
+                out,
+                "| {} | {} |\n|---|---|",
                 input.labels.function_header, input.labels.description_header
-            ));
+            );
             for function in &pub_fns {
                 let desc = function
                     .doc_comment
                     .as_deref()
                     .and_then(doc_comment_first_line)
-                    .unwrap_or_else(|| input.labels.no_documentation.to_owned());
+                    .unwrap_or(input.labels.no_documentation.to_owned());
                 let (clean_signature, _) =
                     privacy_gateway::sanitize_output_text(&function.signature, input.policy);
                 let (clean_desc, _) = privacy_gateway::sanitize_doc_comment(&desc, input.policy);
@@ -309,16 +312,10 @@ fn render_api(out: &mut String, input: &RenderInput<'_>) {
                 } else {
                     ""
                 };
-                out.push_str(&format!(
-                    "| `{}`{} | {} |\n",
-                    clean_signature, strip_note, clean_desc
-                ));
+                let _ = writeln!(out, "| `{clean_signature}`{strip_note} | {clean_desc} |",);
                 api_entry_count += 1;
                 if api_entry_count >= MAX_API_ENTRIES {
-                    out.push_str(&format!(
-                        "\n{}\n\n",
-                        input.labels.api_truncated(MAX_API_ENTRIES)
-                    ));
+                    let _ = writeln!(out, "\n{}\n", input.labels.api_truncated(MAX_API_ENTRIES));
                     break 'files;
                 }
             }
@@ -328,10 +325,7 @@ fn render_api(out: &mut String, input: &RenderInput<'_>) {
 }
 
 fn render_use_cases(out: &mut String, input: &RenderInput<'_>) {
-    out.push_str(&format!(
-        "{} {}\n\n",
-        input.labels.h2, input.labels.use_cases
-    ));
+    let _ = writeln!(out, "{} {}\n", input.labels.h2, input.labels.use_cases);
 
     if input.data.inferred_cases.is_empty() {
         out.push_str(input.labels.use_cases_missing);
@@ -345,9 +339,12 @@ fn render_use_cases(out: &mut String, input: &RenderInput<'_>) {
             analyzer::UseCaseConfidence::Medium => input.labels.inferred_suffix,
             analyzer::UseCaseConfidence::Low => input.labels.low_confidence_suffix,
         };
-        out.push_str(&format!(
-            "{} {}{}\n\n{}\n\n",
-            input.labels.h3, use_case.title, confidence_label, use_case.description
-        ));
+        let _ = writeln!(
+            out,
+            "{} {title}{confidence_label}\n\n{description}\n",
+            input.labels.h3,
+            title = use_case.title,
+            description = use_case.description
+        );
     }
 }

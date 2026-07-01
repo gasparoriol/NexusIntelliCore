@@ -55,19 +55,11 @@ impl SecurityConfig {
         let config_path = std::env::var("MCP_SECURITY_CONFIG_PATH")
             .map_err(|_| "MCP_SECURITY_CONFIG_PATH not set".to_string())?;
 
-        let file = std::fs::File::open(&config_path).map_err(|e| {
-            format!(
-                "Cannot open security config file at '{}': {}",
-                config_path, e
-            )
-        })?;
+        let file = std::fs::File::open(&config_path)
+            .map_err(|e| format!("Cannot open security config file at '{config_path}': {e}"))?;
 
-        let config: Self = serde_json::from_reader(&file).map_err(|e| {
-            format!(
-                "Invalid JSON in security config at '{}': {}",
-                config_path, e
-            )
-        })?;
+        let config: Self = serde_json::from_reader(&file)
+            .map_err(|e| format!("Invalid JSON in security config at '{config_path}': {e}"))?;
 
         Ok(config)
     }
@@ -77,7 +69,7 @@ impl SecurityConfig {
         match Self::load_from_json() {
             Ok(config) => config,
             Err(e) => {
-                eprintln!("[WARN] SecurityConfig: {}", e);
+                eprintln!("[WARN] SecurityConfig: {e}");
                 Self::load_from_env()
             }
         }
@@ -103,11 +95,8 @@ pub fn constant_time_compare(a: &str, b: &str) -> bool {
 
 pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
     // Try to get ServerState, but do not panic if not yet initialized
-    let state = match std::panic::catch_unwind(crate::state::ServerState::get) {
-        Ok(s) => s,
-        Err(_) => {
-            return;
-        }
+    let Ok(state) = std::panic::catch_unwind(crate::state::ServerState::get) else {
+        return;
     };
 
     if let Some(ref path) = state.security_config().audit_log_path {
@@ -127,7 +116,7 @@ pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
         {
             use std::io::Write;
             if let Ok(line) = serde_json::to_string(&log_entry) {
-                let _ = writeln!(file, "{}", line);
+                let _ = writeln!(file, "{line}");
             }
         }
     }

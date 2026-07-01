@@ -77,7 +77,7 @@ fn parse_ts_path_alias_config(config_path: &Path) -> Option<TsPathAliasConfig> {
             .as_array()
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(str::to_owned))
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
@@ -116,7 +116,7 @@ fn discover_ts_path_aliases(root: &Path) -> Vec<TsPathAliasConfig> {
 
     for entry in walker.flatten() {
         let p = entry.path();
-        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }
         let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
@@ -159,11 +159,11 @@ fn apply_alias_target(target: &str, wildcard: &str) -> String {
     if target.contains('*') {
         target.replacen('*', wildcard, 1)
     } else {
-        target.to_string()
+        target.to_owned()
     }
 }
 
-fn normalize_relative_path(path: PathBuf) -> PathBuf {
+fn normalize_relative_path(path: &Path) -> PathBuf {
     path.components().fold(PathBuf::new(), |mut acc, comp| {
         match comp {
             std::path::Component::ParentDir => {
@@ -188,7 +188,7 @@ fn expand_ts_alias_candidates(base: PathBuf) -> Vec<PathBuf> {
         out.push(base.with_extension(ext));
     }
     for ext in ["ts", "tsx", "js", "jsx", "mjs", "cjs"] {
-        out.push(base.join(format!("index.{}", ext)));
+        out.push(base.join(format!("index.{ext}")));
     }
     out
 }
@@ -198,16 +198,14 @@ pub fn canonicalize_json(value: &serde_json::Value) -> String {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => {
-            serde_json::to_string(s).unwrap_or_else(|_| format!("{:?}", s))
-        }
+        serde_json::Value::String(s) => serde_json::Value::String(s.clone()).to_string(),
         serde_json::Value::Array(items) => {
             let rendered = items
                 .iter()
                 .map(canonicalize_json)
                 .collect::<Vec<_>>()
                 .join(",");
-            format!("[{}]", rendered)
+            format!("[{rendered}]")
         }
         serde_json::Value::Object(map) => {
             let mut entries = map.iter().collect::<Vec<_>>();
@@ -215,15 +213,12 @@ pub fn canonicalize_json(value: &serde_json::Value) -> String {
             let rendered = entries
                 .into_iter()
                 .map(|(k, v)| {
-                    format!(
-                        "{}:{}",
-                        serde_json::to_string(k).unwrap_or_else(|_| format!("{:?}", k)),
-                        canonicalize_json(v)
-                    )
+                    let rendered_key = serde_json::Value::String(k.clone()).to_string();
+                    format!("{rendered_key}:{}", canonicalize_json(v))
                 })
                 .collect::<Vec<_>>()
                 .join(",");
-            format!("{{{}}}", rendered)
+            format!("{{{rendered}}}")
         }
     }
 }
@@ -240,11 +235,11 @@ pub struct ServerState {
     index: RwLock<FileIndex>,
     /// Whether the index has been fully built at least once.
     index_ready: AtomicBool,
-    /// AST cache with Moka, mapping PathBuf to CachedAnalysis.
+    /// AST cache with Moka, mapping `PathBuf` to `CachedAnalysis`.
     ast_cache: moka::future::Cache<PathBuf, CachedAnalysis>,
-    /// Tool cache with Moka, mapping ToolCacheKey to the final sanitised serde_json::Value response.
+    /// Tool cache with Moka, mapping `ToolCacheKey` to the final sanitised `serde_json::Value` response.
     tool_cache: moka::future::Cache<ToolCacheKey, serde_json::Value>,
-    /// Hybrid linting pool used by lint_file and inspect_symbol.
+    /// Hybrid linting pool used by `lint_file` and `inspect_symbol`.
     lint_pool: LintPool,
     /// True while a watcher-triggered index refresh loop is running.
     watch_refresh_running: AtomicBool,
@@ -257,7 +252,7 @@ pub struct ServerState {
     /// True if the project is detected to be an Angular project.
     /// True if the project is detected to be an Angular project.
     is_angular_project: bool,
-    /// Parsed JS/TS path aliases from discovered tsconfig/jsconfig files.
+    /// Parsed JS/TS path aliases from discovered `tsconfig`/`jsconfig` files.
     ts_path_aliases: Vec<TsPathAliasConfig>,
     /// Configured maximum number of entries in the AST cache.
     ast_cache_limit: usize,
@@ -275,9 +270,13 @@ impl ServerState {
     /// Initialise global state. Panics if called twice.
     pub fn init(raw_root: &str) -> Result<()> {
         let root = std::fs::canonicalize(raw_root)
-            .with_context(|| format!("Cannot resolve root path: {}", raw_root))?;
+            .with_context(|| format!("Cannot resolve root path: {raw_root}"))?;
 
-        anyhow::ensure!(root.is_dir(), "Root path is not a directory: {:?}", root);
+        anyhow::ensure!(
+            root.is_dir(),
+            "Root path is not a directory: {}",
+            root.display()
+        );
 
         // Load AST cache limit from environment or use default
         let cache_limit = std::env::var(ENV_AST_CACHE_LIMIT)
@@ -287,10 +286,7 @@ impl ServerState {
             .unwrap_or(NonZeroUsize::new(DEFAULT_AST_CACHE_ENTRIES).unwrap());
 
         if let Ok(limit_str) = std::env::var(ENV_AST_CACHE_LIMIT) {
-            info!(
-                "AST cache limit configured via {} = {}",
-                ENV_AST_CACHE_LIMIT, limit_str
-            );
+            info!("AST cache limit configured via {ENV_AST_CACHE_LIMIT} = {limit_str}");
         }
 
         // Load tool concurrency limit from environment or use default
@@ -307,10 +303,7 @@ impl ServerState {
             .unwrap_or(DEFAULT_TOOL_CACHE_ENTRIES);
 
         if let Ok(limit_str) = std::env::var(ENV_TOOL_CACHE_LIMIT) {
-            info!(
-                "Tool cache limit configured via {} = {}",
-                ENV_TOOL_CACHE_LIMIT, limit_str
-            );
+            info!("Tool cache limit configured via {ENV_TOOL_CACHE_LIMIT} = {limit_str}");
         }
 
         let tool_cache = Cache::builder()
@@ -458,13 +451,11 @@ impl ServerState {
                 let base_dir = cfg
                     .base_url
                     .as_ref()
-                    .map(|b| cfg.config_dir.join(b))
-                    .unwrap_or_else(|| cfg.config_dir.clone());
+                    .map_or_else(|| cfg.config_dir.clone(), |b| cfg.config_dir.join(b));
 
                 for target in &rule.targets {
-                    let candidate = normalize_relative_path(
-                        base_dir.join(apply_alias_target(target, &wildcard)),
-                    );
+                    let joined = base_dir.join(apply_alias_target(target, &wildcard));
+                    let candidate = normalize_relative_path(&joined);
                     for expanded in expand_ts_alias_candidates(candidate.clone()) {
                         if expanded.exists() {
                             return Some(expanded);
@@ -476,8 +467,8 @@ impl ServerState {
                 }
             }
 
-            if fallback_candidate.is_some() {
-                return fallback_candidate;
+            if let Some(candidate) = fallback_candidate {
+                return Some(candidate);
             }
         }
 
@@ -519,14 +510,15 @@ impl ServerState {
     /// Validate that `requested` is a descendant of the project root.
     /// Returns the canonicalised path or an error.
     pub fn validate_path(&self, requested: &Path) -> Result<PathBuf> {
+        let requested_text = requested.display().to_string();
         let canonical = std::fs::canonicalize(requested)
-            .with_context(|| format!("Path does not exist or is inaccessible: {:?}", requested))?;
+            .with_context(|| format!("Path does not exist or is inaccessible: {requested_text}"))?;
 
         anyhow::ensure!(
             canonical.starts_with(&self.root),
-            "Access denied: {:?} is outside the project root {:?}",
-            requested,
-            self.root
+            "Access denied: {} is outside the project root {}",
+            requested.display(),
+            self.root.display()
         );
 
         Ok(canonical)
@@ -553,15 +545,15 @@ impl ServerState {
         Ok(cached.analysis)
     }
 
-    /// Clear the AST cache and rebuild the FileIndex.
-    /// Used by refresh_index() tool.
+    /// Clear the AST cache and rebuild the `FileIndex`.
+    /// Used by the `refresh_index()` tool.
     pub async fn refresh_index(&self) -> Result<(usize, u64)> {
         // Rebuild index
         let new_index = FileIndex::build(&self.root)?;
         let files_found = new_index.allowed_files.len() + new_index.restricted_files.len();
 
         // Invalidate tool cache for this project root
-        self.invalidate_tool_cache_for_root(&self.root).await;
+        self.invalidate_tool_cache_for_root(&self.root);
 
         // Replace index
         {
@@ -594,7 +586,7 @@ impl ServerState {
         &self.lint_pool
     }
 
-    pub async fn invalidate_tool_cache_for_file(&self, path: &Path) {
+    pub fn invalidate_tool_cache_for_file(&self, path: &Path) {
         let canonical_path = match std::fs::canonicalize(path) {
             Ok(p) => p,
             Err(_) => path.to_path_buf(),
@@ -606,7 +598,7 @@ impl ServerState {
             .invalidate_entries_if(move |key, _| key.canonical_args.contains(&canonical_text));
     }
 
-    pub async fn invalidate_tool_cache_for_root(&self, root_path: &Path) {
+    pub fn invalidate_tool_cache_for_root(&self, root_path: &Path) {
         let canonical_root = match std::fs::canonicalize(root_path) {
             Ok(p) => p,
             Err(_) => root_path.to_path_buf(),
@@ -682,16 +674,15 @@ impl ServerState {
     /// Called by the file watcher on content changes (e.g. modify).
     /// Returns `true` if an entry was present and removed; `false` if not cached.
     pub async fn evict_cache_entry(&self, path: &std::path::Path) -> bool {
-        let existed = self.ast_cache.remove(path).await.is_some();
-        existed
+        self.ast_cache.remove(path).await.is_some()
     }
 
     /// Get current cache statistics (debug-only).
-    pub async fn get_cache_stats(&self) -> AstCacheStats {
+    pub fn get_cache_stats(&self) -> AstCacheStats {
         AstCacheStats {
-            ast_entries: self.ast_cache.entry_count() as usize,
+            ast_entries: usize::try_from(self.ast_cache.entry_count()).unwrap_or(usize::MAX),
             ast_max: self.ast_cache_limit,
-            tool_entries: self.tool_cache.entry_count() as usize,
+            tool_entries: usize::try_from(self.tool_cache.entry_count()).unwrap_or(usize::MAX),
             tool_max: self.tool_cache_limit,
         }
     }
@@ -704,7 +695,7 @@ impl ServerState {
         tokio::time::timeout(timeout, self.tool_concurrency.acquire())
             .await
             .ok()
-            .and_then(|r| r.ok())
+            .and_then(std::result::Result::ok)
     }
 
     pub fn record_tool_invocation(&self, tool_name: &str) {
@@ -772,7 +763,7 @@ mod tests {
     fn test_env_var_parsing() {
         // Verify that NonZeroUsize parsing works correctly
         let val: Option<NonZeroUsize> = "256".parse::<usize>().ok().and_then(NonZeroUsize::new);
-        assert_eq!(val.map(|v| v.get()), Some(256));
+        assert_eq!(val.map(NonZeroUsize::get), Some(256));
 
         let invalid: Option<NonZeroUsize> = "0".parse::<usize>().ok().and_then(NonZeroUsize::new);
         assert!(invalid.is_none()); // Zero is invalid

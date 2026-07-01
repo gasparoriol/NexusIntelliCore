@@ -11,16 +11,15 @@ pub(super) async fn refresh_index() -> Result<Value> {
     // Rebuild index and clear cache
     let (files_found, cache_cleared) = match state.refresh_index().await {
         Ok((files, cleared)) => (files, cleared),
-        Err(e) => return Ok(error_response(format!("Index rebuild failed: {}", e))),
+        Err(e) => return Ok(error_response(format!("Index rebuild failed: {e}"))),
     };
 
     let msg = format!(
         "Index refreshed successfully:\n\
-         • Files indexed: {}\n\
-         • AST cache entries cleared: {}\n\
+         • Files indexed: {files_found}\n\
+         • AST cache entries cleared: {cache_cleared}\n\
          \n\
-         The project index and AST cache are now up-to-date with the current filesystem state.",
-        files_found, cache_cleared
+         The project index and AST cache are now up-to-date with the current filesystem state."
     );
 
     Ok(tool_response(vec![text_content(msg)]))
@@ -29,7 +28,7 @@ pub(super) async fn refresh_index() -> Result<Value> {
 /// Returns server statistics: AST and tool cache utilization, file index metadata, and runtime configuration.
 pub(super) async fn get_server_stats() -> Result<Value> {
     let state = crate::state::ServerState::get();
-    let stats = state.get_cache_stats().await;
+    let cache_stats = state.get_cache_stats();
     let index = state.index().await?;
     let invocation_counts = state.get_tool_invocation_counts();
     let uptime_secs = state.uptime_seconds();
@@ -37,14 +36,14 @@ pub(super) async fn get_server_stats() -> Result<Value> {
     let stats_json = json!({
         "uptime_seconds": uptime_secs,
         "ast_cache": {
-            "entries": stats.ast_entries,
-            "max_entries": stats.ast_max,
-            "utilization_percent": utilization(stats.ast_entries, stats.ast_max)
+            "entries": cache_stats.ast_entries,
+            "max_entries": cache_stats.ast_max,
+            "utilization_percent": utilization(cache_stats.ast_entries, cache_stats.ast_max)
         },
         "tool_cache": {
-            "entries": stats.tool_entries,
-            "max_entries": stats.tool_max,
-            "utilization_percent": utilization(stats.tool_entries, stats.tool_max)
+            "entries": cache_stats.tool_entries,
+            "max_entries": cache_stats.tool_max,
+            "utilization_percent": utilization(cache_stats.tool_entries, cache_stats.tool_max)
         },
         "index": {
             "allowed_files": index.allowed_files.len(),
@@ -68,12 +67,12 @@ pub(super) async fn get_server_stats() -> Result<Value> {
          {}\n\n\
          **Raw JSON:**\n```json\n{}\n```",
         uptime_secs,
-        stats.ast_entries,
-        stats.ast_max,
-        utilization_f64(stats.ast_entries, stats.ast_max),
-        stats.tool_entries,
-        stats.tool_max,
-        utilization_f64(stats.tool_entries, stats.tool_max),
+        cache_stats.ast_entries,
+        cache_stats.ast_max,
+        utilization_f64(cache_stats.ast_entries, cache_stats.ast_max),
+        cache_stats.tool_entries,
+        cache_stats.tool_max,
+        utilization_f64(cache_stats.tool_entries, cache_stats.tool_max),
         index.allowed_files.len(),
         index.restricted_files.len(),
         format_invocation_table(&invocation_counts),
@@ -91,7 +90,7 @@ fn format_invocation_table(counts: &std::collections::HashMap<String, u64>) -> S
     entries.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0))); // sort by count desc, then name asc
     entries
         .iter()
-        .map(|(name, count)| format!("- `{}`: {} calls", name, count))
+        .map(|(name, count)| format!("- `{name}`: {count} calls"))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -107,7 +106,9 @@ fn utilization_f64(entries: usize, max_entries: usize) -> f64 {
     if max_entries == 0 {
         0.0
     } else {
-        (entries as f64 / max_entries as f64) * 100.0
+        let entries_f = f64::from(u32::try_from(entries).unwrap_or(u32::MAX));
+        let max_f = f64::from(u32::try_from(max_entries).unwrap_or(u32::MAX));
+        (entries_f / max_f) * 100.0
     }
 }
 

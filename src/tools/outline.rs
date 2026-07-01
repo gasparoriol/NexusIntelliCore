@@ -1,37 +1,87 @@
 use anyhow::Result;
 use serde_json::Value;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::privacy_gateway;
 use crate::protocol::{error_response, text_content, tool_response};
 
+fn role_hint_for(language: &str) -> &'static str {
+    match language {
+        "rust" => {
+            "[Think like a Rust architect: map module seams, ownership boundaries, and AST shape.]"
+        }
+        "javascript" | "typescript" | "tsx" => {
+            "[Think like a TypeScript/JavaScript architect: map module seams, data flow, and AST shape.]"
+        }
+        "python" => "[Think like a Python architect: map module seams, intent, and AST shape.]",
+        "java" => "[Think like a Java architect: map service seams, contracts, and AST shape.]",
+        "c" | "csharp" => {
+            "[Think like a systems architect: map coupling points, boundaries, and AST shape.]"
+        }
+        _ => "[Think like an architect: map boundaries, intent, and AST shape.]",
+    }
+}
+
+fn append_html_sections(out: &mut String, html_elements: &[crate::analyzer::HtmlElementInfo]) {
+    let components: Vec<_> = html_elements
+        .iter()
+        .filter(|e| e.is_angular_component)
+        .map(|e| e.tag_name.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    let all_classes: Vec<_> = html_elements
+        .iter()
+        .flat_map(|e| e.class_names.iter())
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if !components.is_empty() {
+        out.push_str("## Angular Components Used\n");
+        for component in &components {
+            let _ = writeln!(out, "  {component}");
+        }
+        out.push('\n');
+    }
+
+    if !all_classes.is_empty() {
+        out.push_str("## CSS Classes Referenced\n");
+        for class_name in &all_classes {
+            let _ = writeln!(out, "  .{class_name}");
+        }
+        out.push('\n');
+    }
+}
+
 pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
     let state = crate::state::ServerState::get();
     let path = match state.validate_path(Path::new(file_path)) {
         Ok(p) => p,
-        Err(e) => return Ok(error_response(format!("Access denied: {}", e))),
+        Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
     let index = state.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
-            "⚠ Access denied by .mcpignore policy: {}\n\
+            "⚠ Access denied by .mcpignore policy: {file_path}\n\
              The file exists but its implementation cannot be exposed to the LLM.",
-            file_path
         ))]));
     }
     drop(index);
 
     let analysis = match state.get_analysis(&path).await {
         Ok(a) => a,
-        Err(e) => return Ok(error_response(format!("Analysis error: {}", e))),
+        Err(e) => return Ok(error_response(format!("Analysis error: {e}"))),
     };
 
     let mut out = String::new();
-    out.push_str(&format!(
-        "# File outline: {}\nLanguage: {}\n\n",
-        file_path, analysis.language
-    ));
+    let _ = writeln!(out, "# File outline: {file_path}");
+    let _ = writeln!(out, "Language: {}", analysis.language);
+    out.push('\n');
 
     // Imports
     if !analysis.imports.is_empty() {
@@ -41,7 +91,7 @@ pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
             // Sanitize import strings (may contain internal hostnames, etc.)
             let (sanitized_import, _redactions) =
                 privacy_gateway::sanitize_import(&imp.raw, &policy);
-            out.push_str(&format!("  {}\n", sanitized_import));
+            let _ = writeln!(out, "  {sanitized_import}");
         }
         out.push('\n');
     }
@@ -50,10 +100,11 @@ pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
     if !analysis.classes.is_empty() {
         out.push_str("## Types\n");
         for cls in &analysis.classes {
-            out.push_str(&format!(
-                "  {} {} (lines {}-{})\n",
+            let _ = writeln!(
+                out,
+                "  {} {} (lines {}-{})",
                 cls.kind, cls.name, cls.start_line, cls.end_line
-            ));
+            );
         }
         out.push('\n');
     }
@@ -68,15 +119,17 @@ pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
                 func.qualified_name.as_str()
             };
             if func.is_strip_marked {
-                out.push_str(&format!(
-                    "  {} | {} — [implementation restricted by @mcp-strip] (lines {}-{})\n",
-                    canonical, func.signature, func.start_line, func.end_line
-                ));
+                let _ = writeln!(
+                    out,
+                    "  {canonical} | {} - [implementation restricted by @mcp-strip] (lines {}-{})",
+                    func.signature, func.start_line, func.end_line
+                );
             } else {
-                out.push_str(&format!(
-                    "  {} | {} (lines {}-{})\n",
-                    canonical, func.signature, func.start_line, func.end_line
-                ));
+                let _ = writeln!(
+                    out,
+                    "  {canonical} | {} (lines {}-{})",
+                    func.signature, func.start_line, func.end_line
+                );
             }
         }
         out.push_str("\nUse inspect_symbol with the canonical identifier shown before '|'.\n");
@@ -90,16 +143,16 @@ pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
                 let media = rule
                     .media_query
                     .as_deref()
-                    .map(|q| format!(" [@media {}]", q))
+                    .map(|q| format!(" [@media {q}]"))
                     .unwrap_or_default();
-                out.push_str(&format!(
-                    "  {} ({} props, lines {}-{}){}\n",
+                let _ = writeln!(
+                    out,
+                    "  {} ({} props, lines {}-{}){media}",
                     rule.selector,
                     rule.properties.len(),
                     rule.start_line,
-                    rule.end_line,
-                    media
-                ));
+                    rule.end_line
+                );
             }
             out.push('\n');
         }
@@ -107,54 +160,15 @@ pub(super) async fn get_file_outline(file_path: &str) -> Result<Value> {
 
     // HTML elements
     if let Some(html_elements) = &analysis.html_elements {
-        let components: Vec<_> = html_elements
-            .iter()
-            .filter(|e| e.is_angular_component)
-            .map(|e| e.tag_name.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let all_classes: Vec<_> = html_elements
-            .iter()
-            .flat_map(|e| e.class_names.iter())
-            .map(|s| s.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        if !components.is_empty() {
-            out.push_str("## Angular Components Used\n");
-            for c in &components {
-                out.push_str(&format!("  {}\n", c));
-            }
-            out.push('\n');
-        }
-        if !all_classes.is_empty() {
-            out.push_str("## CSS Classes Referenced\n");
-            for cls in &all_classes {
-                out.push_str(&format!("  .{}\n", cls));
-            }
-            out.push('\n');
-        }
+        append_html_sections(&mut out, html_elements);
     }
 
     // Sanitize the entire outline through the Privacy Gateway
     let policy = privacy_gateway::PrivacyPolicy::default();
     let (sanitized_outline, _redactions) = privacy_gateway::sanitize_file_outline(&out, &policy);
 
-    let role_hint = match analysis.language.as_str() {
-        "rust" => {
-            "[Think like a Rust architect: map module seams, ownership boundaries, and AST shape.]"
-        }
-        "javascript" | "typescript" | "tsx" => {
-            "[Think like a TypeScript/JavaScript architect: map module seams, data flow, and AST shape.]"
-        }
-        "python" => "[Think like a Python architect: map module seams, intent, and AST shape.]",
-        "java" => "[Think like a Java architect: map service seams, contracts, and AST shape.]",
-        "c" | "csharp" => "[Think like a systems architect: map coupling points, boundaries, and AST shape.]",
-        _ => "[Think like an architect: map boundaries, intent, and AST shape.]",
-    };
-    let sanitized_outline = format!("{}\n{}", role_hint, sanitized_outline);
+    let role_hint = role_hint_for(analysis.language.as_str());
+    let sanitized_outline = format!("{role_hint}\n{sanitized_outline}");
 
     Ok(tool_response(vec![text_content(sanitized_outline)]))
 }

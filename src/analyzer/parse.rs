@@ -16,27 +16,24 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 /// Parse `path` and return a `FileAnalysis`.
 pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
     // Guard: reject files that are too large
-    let metadata = std::fs::metadata(path).with_context(|| format!("Cannot stat {:?}", path))?;
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("Cannot stat {}", path.display()))?;
     if metadata.len() > MAX_FILE_SIZE {
+        let path_display = path.display();
         anyhow::bail!(
-            "File {:?} exceeds maximum size ({} bytes > {} bytes)",
-            path,
-            metadata.len(),
-            MAX_FILE_SIZE
+            "File {path_display} exceeds maximum size ({} bytes > {MAX_FILE_SIZE} bytes)",
+            metadata.len()
         );
     }
 
     let source =
-        std::fs::read_to_string(path).with_context(|| format!("Cannot read {:?}", path))?;
+        std::fs::read_to_string(path).with_context(|| format!("Cannot read {}", path.display()))?;
 
-    let grammar = match detect_grammar(path) {
-        Some(g) => g,
-        None => {
-            return Ok(FileAnalysis {
-                language: "unknown".to_owned(),
-                ..Default::default()
-            })
-        }
+    let Some(grammar) = detect_grammar(path) else {
+        return Ok(FileAnalysis {
+            language: "unknown".to_owned(),
+            ..Default::default()
+        });
     };
 
     // CSS / SCSS / HTML: dedicated parsers with a different data model — return early
@@ -54,14 +51,11 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
         }
     }
 
-    let ts_lang = match grammar.tree_sitter_language() {
-        Some(l) => l,
-        None => {
-            return Ok(FileAnalysis {
-                language: grammar.name().to_owned(),
-                ..Default::default()
-            })
-        }
+    let Some(ts_lang) = grammar.tree_sitter_language() else {
+        return Ok(FileAnalysis {
+            language: grammar.name().to_owned(),
+            ..Default::default()
+        });
     };
 
     let mut parser = Parser::new();

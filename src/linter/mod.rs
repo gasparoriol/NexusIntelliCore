@@ -4,6 +4,7 @@ mod pool;
 mod types;
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 
 pub use pool::LintPool;
 pub use types::{LintDiagnostic, LintResult, Severity};
@@ -15,7 +16,8 @@ pub fn render_lint_summary(result: &LintResult) -> Option<String> {
 
     let mut out = String::from("\n\n// Lint results:");
     for diagnostic in &result.diagnostics {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n// [{}] L{}:{} {}{}",
             diagnostic.severity.as_str(),
             diagnostic.line,
@@ -24,13 +26,13 @@ pub fn render_lint_summary(result: &LintResult) -> Option<String> {
             diagnostic
                 .rule_id
                 .as_deref()
-                .map(|rule| format!(" ({})", rule))
+                .map(|rule| format!(" ({rule})"))
                 .unwrap_or_default()
-        ));
+        );
     }
 
     if !result.sources.is_empty() {
-        out.push_str(&format!("\n// Sources: {}", result.sources.join(", ")));
+        let _ = write!(out, "\n// Sources: {}", result.sources.join(", "));
     }
 
     Some(out)
@@ -61,7 +63,8 @@ pub fn render_lint_summary_scoped(
 
     let mut out = String::from("\n\n// Lint results:");
     for diagnostic in scoped.iter().take(max_items) {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n// [{}] L{}:{} {}{}",
             diagnostic.severity.as_str(),
             diagnostic.line,
@@ -70,16 +73,17 @@ pub fn render_lint_summary_scoped(
             diagnostic
                 .rule_id
                 .as_deref()
-                .map(|rule| format!(" ({})", rule))
+                .map(|rule| format!(" ({rule})"))
                 .unwrap_or_default()
-        ));
+        );
     }
 
     if scoped.len() > max_items {
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "\n// ... and {} more diagnostics in symbol range",
             scoped.len() - max_items
-        ));
+        );
     }
 
     let scoped_sources = scoped
@@ -89,7 +93,7 @@ pub fn render_lint_summary_scoped(
         .into_iter()
         .collect::<Vec<_>>();
     if !scoped_sources.is_empty() {
-        out.push_str(&format!("\n// Sources: {}", scoped_sources.join(", ")));
+        let _ = write!(out, "\n// Sources: {}", scoped_sources.join(", "));
     }
 
     Some(out)
