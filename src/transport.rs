@@ -417,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn test_content_length_too_large() {
         let huge = MAX_MESSAGE_SIZE + 1;
-        let input = format!("Content-Length: {}\r\n\r\n", huge).into_bytes();
+        let input = format!("Content-Length: {huge}\r\n\r\n").into_bytes();
         let mut transport = McpTransport::new(Cursor::new(input), Vec::new());
         let err = transport.read_message().await.unwrap_err();
         assert!(err.to_string().contains("exceeds maximum"));

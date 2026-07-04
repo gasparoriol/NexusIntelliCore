@@ -13,6 +13,6 @@ mod tests {
     fn reexported_generate_project_docs_is_visible() {
         // Compile-time guard: if the re-export disappears or visibility narrows,
         // this reference will fail to compile.
-        let _handler = super::generate_project_docs;
+        let _ = super::generate_project_docs;
     }
 }

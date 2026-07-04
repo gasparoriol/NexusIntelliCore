@@ -44,6 +44,7 @@ fn tool_is_cacheable(name: &str) -> bool {
         .is_some_and(|def| def.cacheable)
 }
 
+#[allow(clippy::too_many_lines)] // Routing match table; splitting by sub-groups would only add indirection
 async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
     match name {
         "get_project_structure" => project::get_project_structure().await,
@@ -262,8 +263,7 @@ mod tests {
                 let msg = err.to_string();
                 assert!(
                     msg.contains("already initialised"),
-                    "test should initialize ServerState with repository root: {}",
-                    msg
+                    "test should initialize ServerState with repository root: {msg}"
                 );
             }
         }
@@ -368,8 +368,7 @@ mod tests {
         for name in dispatched {
             assert!(
                 known_names.contains(name) || name == "analyze_angular_component",
-                "Tool '{}' is dispatched but not registered in all_tool_definitions()",
-                name
+                "Tool '{name}' is dispatched but not registered in all_tool_definitions()"
             );
         }
     }

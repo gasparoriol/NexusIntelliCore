@@ -9,6 +9,7 @@ use std::path::PathBuf;
 ///    groups of ≥ 2 functions.
 ///
 /// Low-confidence items are kept only when nothing better was found.
+#[allow(clippy::too_many_lines)] // Verb lists and heuristics mapping logic
 pub fn infer_use_cases(analyses: &[(PathBuf, FileAnalysis)]) -> Vec<InferredUseCase> {
     const VERB_PREFIXES: &[(&str, &str)] = &[
         ("create_", "Creating"),

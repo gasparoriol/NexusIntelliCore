@@ -3,7 +3,8 @@
 /// • 4.1  Intercepts secrets (API keys, AWS keys, JWTs, DB URIs, private IPs, …)
 /// • 4.2  Strips function bodies marked with `// @mcp-strip`
 /// • 4.3  Removes or redacts sensitive inline comments
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
+
 use regex::Regex;
 
 pub const DEFAULT_STRIP_PLACEHOLDER: &str = "Lógica de negocio ofuscada por seguridad";
@@ -11,8 +12,8 @@ pub const DEFAULT_STRIP_PLACEHOLDER: &str = "Lógica de negocio ofuscada por seg
 // ---------------------------------------------------------------------------
 // Compiled regex patterns (lazy, compiled once at first use)
 // ---------------------------------------------------------------------------
-lazy_static! {
-    static ref SECRET_PATTERNS: Vec<(&'static str, Regex)> = vec![
+static SECRET_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
         // OpenAI / Anthropic-style API keys
         (
             "OPENAI_KEY",
@@ -67,23 +68,25 @@ lazy_static! {
             "INTERNAL_HOSTNAME",
             Regex::new(r"\b[\w-]+\.(internal|corp|local|lan|intranet)\b").unwrap(),
         ),
-    ];
+    ]
+});
 
-    /// Detects the `// @mcp-strip` annotation (Rust / JS / TS / Java style).
-    static ref MCP_STRIP_RE: Regex =
-        Regex::new(r"(?m)//\s*@mcp-strip\b").unwrap();
+/// Detects the `// @mcp-strip` annotation (Rust / JS / TS / Java style).
+static MCP_STRIP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)//\s*@mcp-strip\b").unwrap());
 
-    /// Detects the `# @mcp-strip` annotation (Python style).
-    static ref MCP_STRIP_PY_RE: Regex =
-        Regex::new(r"(?m)#\s*@mcp-strip\b").unwrap();
+/// Detects the `# @mcp-strip` annotation (Python style).
+static MCP_STRIP_PY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)#\s*@mcp-strip\b").unwrap());
 
-    /// Matches inline comments that look like they contain employee data,
-    /// credentials, or confidentiality markers.
-    static ref SENSITIVE_COMMENT_RE: Regex = Regex::new(
+/// Matches inline comments that look like they contain employee data,
+/// credentials, or confidentiality markers.
+static SENSITIVE_COMMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
         r"(?im)//[^\n]*(confidential|classified|do\s+not\s+share|employee\s+id|salary|ssn|social\s+security|do\s+not\s+commit)",
     )
-    .unwrap();
-}
+    .unwrap()
+});
 
 // ---------------------------------------------------------------------------
 // Language Support — Comment Styles and Detection
@@ -327,8 +330,7 @@ mod tests {
         );
         assert!(
             !stripped.contains("internal_logic"),
-            "body must not appear. Got: {}",
-            stripped
+            "body must not appear. Got: {stripped}"
         );
     }
 
@@ -590,7 +592,7 @@ mod tests {
         let stripped = strip_function_body(code, "rust");
         assert!(stripped.contains("fn foo()"));
         assert!(stripped.contains("/* Lógica de negocio ofuscada por seguridad */"));
-        assert!(stripped.contains("}"));
+        assert!(stripped.contains('}'));
         assert!(!stripped.contains("real_body"));
     }
 }

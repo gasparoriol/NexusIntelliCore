@@ -4,6 +4,7 @@ use std::path::PathBuf;
 /// Scan `analyses` and return detected entrypoints.
 ///
 /// Operates entirely on data already in memory — no new I/O or parsing.
+#[allow(clippy::too_many_lines)] // Mapping table for framework specific entrypoints
 pub fn detect_entrypoints(analyses: &[(PathBuf, FileAnalysis)]) -> Vec<Entrypoint> {
     const CLI_MARKERS: &[(&str, &str)] = &[
         ("clap", "clap"),

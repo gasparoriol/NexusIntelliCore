@@ -11,6 +11,7 @@ pub fn run_tree_sitter_checks(path: &Path, analysis: &FileAnalysis) -> Vec<LintD
     let language_rules = language_rules(analysis.language.as_str());
 
     for (line_index, line) in source.lines().enumerate() {
+        #[allow(clippy::cast_possible_truncation)] // line counts never exceed u32
         let line_number = (line_index + 1) as u32;
         for marker in ["TODO", "FIXME", "HACK"] {
             if line.contains(marker) {
@@ -18,7 +19,7 @@ pub fn run_tree_sitter_checks(path: &Path, analysis: &FileAnalysis) -> Vec<LintD
                     line: line_number,
                     column: 1,
                     severity: Severity::Info,
-                    message: format!("{} found in comment or code", marker),
+                    message: format!("{marker} found in comment or code"),
                     rule_id: Some(marker.to_lowercase()),
                     source: "tree-sitter".to_string(),
                 });
@@ -29,9 +30,11 @@ pub fn run_tree_sitter_checks(path: &Path, analysis: &FileAnalysis) -> Vec<LintD
         let scan_line = sanitized_line_for_matching(line, language);
         for rule in language_rules {
             if let Some(col_idx) = scan_line.find(rule.pattern) {
+                #[allow(clippy::cast_possible_truncation)] // column counts never exceed u32
+                let col_number = (col_idx + 1) as u32;
                 diagnostics.push(mk_diag(
                     line_number,
-                    (col_idx + 1) as u32,
+                    col_number,
                     rule.message,
                     rule.rule_id,
                 ));
@@ -42,6 +45,7 @@ pub fn run_tree_sitter_checks(path: &Path, analysis: &FileAnalysis) -> Vec<LintD
     diagnostics
 }
 
+#[allow(clippy::struct_field_names)] // `rule_id` is intentionally named after the struct
 struct Rule {
     pattern: &'static str,
     message: &'static str,

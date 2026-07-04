@@ -7,6 +7,8 @@ use crate::privacy_gateway;
 use crate::protocol::{text_content, tool_response};
 use crate::sanitizer;
 
+#[allow(clippy::too_many_lines)] // Security audit aggregates multiple categories; splitting would lose co-location
+#[allow(clippy::items_after_statements)] // Report struct is local to this function for encapsulation
 pub(super) async fn audit_security_measures() -> Result<Value> {
     let state = crate::state::ServerState::get();
     let index = state.index().await?;

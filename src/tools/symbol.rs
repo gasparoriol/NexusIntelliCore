@@ -11,6 +11,7 @@ use crate::sanitizer;
 
 const INSPECT_SYMBOL_LINT_MAX_ITEMS: usize = 5;
 
+#[allow(clippy::too_many_lines)] // Complex symbol AST extraction and match formatting
 pub(super) async fn inspect_symbol(
     file_path: &str,
     symbol_name: &str,

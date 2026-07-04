@@ -19,7 +19,7 @@ static RE_TEMPLATE_URL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"templateUrl\s*:\s*['"]([^'"]+)['"]"#).unwrap());
 
 static RE_STYLE_URLS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"styleUrls\s*:\s*\[([^\]]+)\]"#).unwrap());
+    LazyLock::new(|| Regex::new(r"styleUrls\s*:\s*\[([^\]]+)\]").unwrap());
 
 static RE_STYLE_URL_ITEM: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"['"]([^'"]+)['"]"#).unwrap());

@@ -34,7 +34,6 @@ globset = "0.4"
 
 # Sanitization and Privacy
 regex = "1.10"
-lazy_static = "1.5"
 
 # Observability
 tracing = "0.1"

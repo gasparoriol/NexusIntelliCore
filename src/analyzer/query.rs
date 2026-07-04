@@ -11,7 +11,7 @@ pub(crate) fn run_named_query<T>(
     mut f: impl FnMut(usize, Vec<(String, tree_sitter::Node<'_>, String)>) -> Option<T>,
 ) -> Result<Vec<T>> {
     let query = Query::new(language, query_str)
-        .with_context(|| format!("Failed to compile tree-sitter query: {}", query_str))?;
+        .with_context(|| format!("Failed to compile tree-sitter query: {query_str}"))?;
 
     let mut cursor = QueryCursor::new();
     let matches = cursor.matches(&query, root, source.as_bytes());

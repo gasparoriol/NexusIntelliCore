@@ -7,6 +7,7 @@ use crate::protocol::{error_response, text_content, tool_response};
 
 const ANGULAR_LINT_MAX_ITEMS: usize = 5;
 
+#[allow(clippy::too_many_lines)] // Rich multi-step analysis: template + styles + lint; splitting would harm readability
 pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Value> {
     let state = crate::state::ServerState::get();
     let ts_path = match state.validate_path(Path::new(component_path)) {
@@ -30,14 +31,11 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
             Err(e) => return Ok(error_response(format!("Cannot read {component_path}: {e}"))),
         };
 
-    let info = match crate::relations::extract_component_info(&ts_path, &source) {
-        Some(i) => i,
-        None => {
-            return Ok(tool_response(vec![text_content(format!(
-                "No @Component decorator found in {component_path}.\n\
-                 This file does not appear to be an Angular component.",
-            ))]))
-        }
+    let Some(info) = crate::relations::extract_component_info(&ts_path, &source) else {
+        return Ok(tool_response(vec![text_content(format!(
+            "No @Component decorator found in {component_path}.\n\
+             This file does not appear to be an Angular component.",
+        ))]));
     };
 
     // Analyse the .ts file itself (for class names / methods)
@@ -141,7 +139,7 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
             .unwrap_or_default()
             .iter()
             .flat_map(|e| e.class_names.iter())
-            .map(|s| s.as_str())
+            .map(std::string::String::as_str)
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
@@ -164,7 +162,7 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
         None
     };
 
-    let mut styles_section = Vec::with_capacity(style_analyses.len());
+    let mut style_entries = Vec::with_capacity(style_analyses.len());
     for (path_str, path_buf, analysis) in &style_analyses {
         let selectors: Vec<_> = analysis
             .css_rules
@@ -180,23 +178,23 @@ pub(super) async fn analyze_angular_component(component_path: &str) -> Result<Va
                 })
             })
             .collect();
-        let mut style_section = Map::new();
-        style_section.insert("file".to_string(), json!(path_str));
-        style_section.insert("language".to_string(), json!(analysis.language));
-        style_section.insert("selectors".to_string(), json!(selectors));
+        let mut style_item = Map::new();
+        style_item.insert("file".to_string(), json!(path_str));
+        style_item.insert("language".to_string(), json!(analysis.language));
+        style_item.insert("selectors".to_string(), json!(selectors));
         if state.lint_pool().enabled() {
-            style_section.insert(
+            style_item.insert(
                 "lint".to_string(),
                 build_lint_section(state, path_buf, analysis, ANGULAR_LINT_MAX_ITEMS).await,
             );
         }
-        styles_section.push(Value::Object(style_section));
+        style_entries.push(Value::Object(style_item));
     }
 
     let result = json!({
         "component": component_section,
         "template": template_section,
-        "styles": styles_section,
+        "styles": style_entries,
     });
 
     let policy = privacy_gateway::PrivacyPolicy::default();

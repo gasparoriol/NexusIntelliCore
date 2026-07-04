@@ -1,3 +1,4 @@
+#![allow(clippy::similar_names)]
 use super::audit::audit_file_ast;
 use super::css::parse_css_file;
 use super::docs::{extract_module_doc, extract_preceding_comment};

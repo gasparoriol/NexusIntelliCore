@@ -1,6 +1,7 @@
 use super::types::{FileAnalysis, PatternMatch};
 
 /// Run heuristic checks against a `FileAnalysis` to find common design patterns.
+#[allow(clippy::too_many_lines)] // Rule-based heuristic pattern detector
 pub fn detect_patterns(analysis: &FileAnalysis, file_path: &str) -> Vec<PatternMatch> {
     let mut found = Vec::new();
 

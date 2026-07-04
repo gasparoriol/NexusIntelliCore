@@ -1,3 +1,4 @@
+#![allow(clippy::match_same_arms)]
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -110,7 +111,7 @@ fn unique_temp_log_path() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    std::env::temp_dir().join(format!("nexus_audit_{}.log", ts))
+    std::env::temp_dir().join(format!("nexus_audit_{ts}.log"))
 }
 
 #[test]
@@ -125,7 +126,7 @@ fn unauthenticated_request_is_rejected_when_auth_token_is_configured() {
         &envs,
     );
 
-    assert!(response.contains("Unauthorized"), "Response: {}", response);
+    assert!(response.contains("Unauthorized"), "Response: {response}");
     assert!(response.contains("-32001") || response.contains("\"code\":-32001"));
 }
 
@@ -141,8 +142,8 @@ fn initialize_accepts_token_in_auth_token_parameter() {
         &envs,
     );
 
-    assert!(response.contains("\"result\""), "Response: {}", response);
-    assert!(!response.contains("Unauthorized"), "Response: {}", response);
+    assert!(response.contains("\"result\""), "Response: {response}");
+    assert!(!response.contains("Unauthorized"), "Response: {response}");
 }
 
 #[test]
@@ -157,8 +158,8 @@ fn initialize_accepts_token_in_meta_field() {
         &envs,
     );
 
-    assert!(response.contains("\"result\""), "Response: {}", response);
-    assert!(!response.contains("Unauthorized"), "Response: {}", response);
+    assert!(response.contains("\"result\""), "Response: {response}");
+    assert!(!response.contains("Unauthorized"), "Response: {response}");
 }
 
 #[test]
@@ -173,7 +174,7 @@ fn initialize_rejects_invalid_token() {
         &envs,
     );
 
-    assert!(response.contains("Unauthorized"), "Response: {}", response);
+    assert!(response.contains("Unauthorized"), "Response: {response}");
 }
 
 #[test]
@@ -190,13 +191,11 @@ fn allowed_tools_restricts_tools_list_output() {
 
     assert!(
         response.contains("get_module_summary"),
-        "Response: {}",
-        response
+        "Response: {response}"
     );
     assert!(
         !response.contains("get_project_structure"),
-        "Response: {}",
-        response
+        "Response: {response}"
     );
 }
 
@@ -212,7 +211,7 @@ fn blocked_tool_call_returns_custom_access_denied_error() {
         &envs,
     );
 
-    assert!(response.contains("Access denied"), "Response: {}", response);
+    assert!(response.contains("Access denied"), "Response: {response}");
     assert!(response.contains("-32003") || response.contains("\"code\":-32003"));
 }
 
@@ -230,14 +229,13 @@ fn audit_log_file_is_written_when_configured() {
         &envs,
     );
 
-    assert!(response.contains("\"result\""), "Response: {}", response);
+    assert!(response.contains("\"result\""), "Response: {response}");
 
     let content = fs::read_to_string(&log_path).unwrap_or_default();
     assert!(!content.is_empty(), "Audit log should not be empty");
     assert!(
         content.contains("tools_list"),
-        "Audit log content: {}",
-        content
+        "Audit log content: {content}"
     );
 
     let _ = fs::remove_file(log_path);

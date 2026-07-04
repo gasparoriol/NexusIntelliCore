@@ -51,6 +51,7 @@ impl Labels {
     }
 }
 
+#[allow(clippy::too_many_lines)] // Plain dictionary definition mapping UI strings; splitting is counterproductive
 pub(super) fn labels(language: &str) -> Labels {
     match language {
         "es" => Labels {

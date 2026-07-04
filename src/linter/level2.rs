@@ -507,7 +507,9 @@ fn parse_clippy_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
             continue;
         };
 
+        #[allow(clippy::cast_possible_truncation)] // span values are source line numbers, never exceed u32
         let line = span.get("line_start").and_then(Value::as_u64).unwrap_or(1) as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let column = span
             .get("column_start")
             .and_then(Value::as_u64)
@@ -548,7 +550,9 @@ fn parse_eslint_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
             .unwrap_or_default();
         for msg in messages {
             diagnostics.push(LintDiagnostic {
+                #[allow(clippy::cast_possible_truncation)] // eslint line/col are 1-based small ints
                 line: msg.get("line").and_then(Value::as_u64).unwrap_or(1) as u32,
+                #[allow(clippy::cast_possible_truncation)]
                 column: msg.get("column").and_then(Value::as_u64).unwrap_or(1) as u32,
                 severity: map_eslint_severity(msg.get("severity").and_then(Value::as_u64)),
                 message: msg
@@ -673,9 +677,7 @@ fn parse_ktlint_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
             .and_then(|m| m.as_str().parse::<u32>().ok())
             .unwrap_or(1);
         let message = caps
-            .name("message")
-            .map(|m| m.as_str().trim().to_string())
-            .unwrap_or_else(|| "ktlint finding".to_string());
+            .name("message").map_or_else(|| "ktlint finding".to_string(), |m| m.as_str().trim().to_string());
         let rule_id = caps.name("rule").map(|m| m.as_str().trim().to_string());
 
         diagnostics.push(LintDiagnostic {
@@ -719,11 +721,9 @@ fn parse_kotlinc_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDia
                 .name("column")
                 .and_then(|m| m.as_str().parse::<u32>().ok())
                 .unwrap_or(1);
-            let level = caps.name("level").map(|m| m.as_str()).unwrap_or("warning");
+            let level = caps.name("level").map_or("warning", |m| m.as_str());
             let message = caps
-                .name("message")
-                .map(|m| m.as_str().trim().to_string())
-                .unwrap_or_else(|| "kotlinc finding".to_string());
+                .name("message").map_or_else(|| "kotlinc finding".to_string(), |m| m.as_str().trim().to_string());
 
             diagnostics.push(LintDiagnostic {
                 line: line_num,
@@ -751,9 +751,7 @@ fn parse_kotlinc_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDia
                 .and_then(|m| m.as_str().parse::<u32>().ok())
                 .unwrap_or(1);
             let message = caps
-                .name("message")
-                .map(|m| m.as_str().trim().to_string())
-                .unwrap_or_else(|| "kotlinc finding".to_string());
+                .name("message").map_or_else(|| "kotlinc finding".to_string(), |m| m.as_str().trim().to_string());
             let severity = if trimmed.starts_with("e:") {
                 Severity::Error
             } else {
@@ -837,12 +835,10 @@ fn parse_dotnet_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
             .name("column")
             .and_then(|m| m.as_str().parse::<u32>().ok())
             .unwrap_or(1);
-        let level = caps.name("level").map(|m| m.as_str()).unwrap_or("warning");
+        let level = caps.name("level").map_or("warning", |m| m.as_str());
         let code = caps.name("code").map(|m| m.as_str().trim().to_string());
         let message = caps
-            .name("message")
-            .map(|m| m.as_str().trim().to_string())
-            .unwrap_or_else(|| "dotnet finding".to_string());
+            .name("message").map_or_else(|| "dotnet finding".to_string(), |m| m.as_str().trim().to_string());
 
         diagnostics.push(LintDiagnostic {
             line: line_num,
@@ -886,9 +882,7 @@ fn map_eslint_severity(value: Option<u64>) -> Severity {
 fn map_severity(level: &str) -> Severity {
     match level {
         "error" => Severity::Error,
-        "warning" => Severity::Warning,
-        "warn" => Severity::Warning,
-        "style" | "performance" | "portability" => Severity::Warning,
+        "warning" | "warn" | "style" | "performance" | "portability" => Severity::Warning,
         _ => Severity::Info,
     }
 }

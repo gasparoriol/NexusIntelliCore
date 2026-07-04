@@ -176,13 +176,13 @@ impl FileWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{CreateKind, DataChange, RemoveKind, RenameMode};
+    use notify::event::{CreateKind, DataChange, EventAttributes, RemoveKind, RenameMode};
 
     fn ev(kind: EventKind) -> Event {
         Event {
             kind,
             paths: vec![],
-            attrs: Default::default(),
+            attrs: EventAttributes::default(),
         }
     }
 
@@ -190,7 +190,7 @@ mod tests {
         Event {
             kind,
             paths,
-            attrs: Default::default(),
+            attrs: EventAttributes::default(),
         }
     }
 

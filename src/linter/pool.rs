@@ -24,14 +24,12 @@ impl LintPool {
     pub fn init(root: &Path) -> Self {
         let enabled = std::env::var("MCP_LINT_ENABLED")
             .ok()
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-            .unwrap_or(false);
+            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "on"));
 
         let timeout = std::env::var("MCP_LINT_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or(Duration::from_secs(10));
+            .map_or(Duration::from_secs(10), Duration::from_secs);
 
         Self {
             enabled,

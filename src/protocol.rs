@@ -55,6 +55,7 @@ pub fn text_content(text: impl Into<String>) -> Value {
 }
 
 /// Wrap content items into a tool result object.
+#[allow(clippy::needless_pass_by_value)] // Vec<Value> by value is ergonomic for all call sites
 pub fn tool_response(content: Vec<Value>) -> Value {
     serde_json::json!({ "content": content })
 }

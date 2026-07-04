@@ -359,8 +359,7 @@ mod tests {
         let (sanitized, redactions) = sanitize_import(import, &policy);
         assert!(
             !sanitized.contains("db.internal"),
-            "Internal hostname should be redacted. Got: {}",
-            sanitized
+            "Internal hostname should be redacted. Got: {sanitized}"
         );
         assert!(!redactions.is_empty());
     }
@@ -384,8 +383,7 @@ mod tests {
         let (sanitized, redactions) = sanitize_file_outline(outline, &policy);
         assert!(
             !sanitized.contains("sk-abcdef"),
-            "API key should be redacted. Got: {}",
-            sanitized
+            "API key should be redacted. Got: {sanitized}"
         );
         assert!(!redactions.is_empty());
     }
@@ -397,8 +395,7 @@ mod tests {
         let (sanitized, _redactions) = sanitize_function_source(source, "secret", "rust", &policy);
         assert!(
             !sanitized.contains("admin123") || sanitized.contains("[REDACTED"),
-            "Body should be stripped. Got: {}",
-            sanitized
+            "Body should be stripped. Got: {sanitized}"
         );
     }
 
@@ -411,8 +408,7 @@ mod tests {
         let (sanitized, _) = sanitize_function_source(source, "public_helper", "rust", &policy);
         assert!(
             sanitized.contains("compute"),
-            "Body of unannotated function must not be stripped. Got: {}",
-            sanitized
+            "Body of unannotated function must not be stripped. Got: {sanitized}"
         );
     }
 
@@ -423,13 +419,11 @@ mod tests {
         let (sanitized, _) = sanitize_function_source(source, "secret", "python", &policy);
         assert!(
             sanitized.contains("def secret"),
-            "def line must be preserved. Got: {}",
-            sanitized
+            "def line must be preserved. Got: {sanitized}"
         );
         assert!(
             !sanitized.contains("DB_PASS"),
-            "Body must be stripped for Python @mcp-strip. Got: {}",
-            sanitized
+            "Body must be stripped for Python @mcp-strip. Got: {sanitized}"
         );
     }
 
@@ -450,30 +444,26 @@ mod tests {
         let node_label = sanitized["nodes"][0]["label"].as_str().unwrap_or("");
         assert!(
             !node_label.contains("db.internal"),
-            "Hostname should be redacted in node label. Got: {}",
-            node_label
+            "Hostname should be redacted in node label. Got: {node_label}"
         );
 
         // source and target must also be sanitized — this was the original bypass
         let edge_source = sanitized["edges"][0]["source"].as_str().unwrap_or("");
         assert!(
             !edge_source.contains("db.internal"),
-            "Hostname should be redacted in edge source. Got: {}",
-            edge_source
+            "Hostname should be redacted in edge source. Got: {edge_source}"
         );
 
         let edge_target = sanitized["edges"][0]["target"].as_str().unwrap_or("");
         assert!(
             edge_target == "src/main.rs",
-            "Clean edge target should be unchanged. Got: {}",
-            edge_target
+            "Clean edge target should be unchanged. Got: {edge_target}"
         );
 
         let edge_label = sanitized["edges"][0]["label"].as_str().unwrap_or("");
         assert!(
             !edge_label.contains("db.internal"),
-            "Hostname should be redacted in edge label. Got: {}",
-            edge_label
+            "Hostname should be redacted in edge label. Got: {edge_label}"
         );
     }
 
@@ -489,8 +479,7 @@ mod tests {
         let key_val = result["api_key"].as_str().unwrap();
         assert!(
             key_val.contains("[REDACTED"),
-            "API key should be redacted, got: {}",
-            key_val
+            "API key should be redacted, got: {key_val}"
         );
     }
 

@@ -1,9 +1,4 @@
-//! Integration tests: send JSON-RPC over MCP-framed stdin, verify responses.
-//!
-//! Note: These tests are disabled until we resolve a bug where the server
-//! doesn't properly handle multiple framed messages in sequence. For now,
-//! we test that the MCP framing layer is correctly implemented via unit tests
-//! in the transport module.
+#![allow(clippy::match_same_arms, clippy::needless_pass_by_value)]
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -118,13 +113,11 @@ fn mcp_framing_is_correct() {
     // The response should be valid JSON with id 1
     assert!(
         response.contains(r#""id":1"#),
-        "Response should have id. Got: {}",
-        response
+        "Response should have id. Got: {response}"
     );
     assert!(
         response.contains(r#""jsonrpc":"2.0""#),
-        "Response should be JSON-RPC 2.0. Got: {}",
-        response
+        "Response should be JSON-RPC 2.0. Got: {response}"
     );
 }
 
@@ -139,8 +132,7 @@ fn access_control_blocks_traversal() {
         response.contains("Access denied")
             || response.contains("outside")
             || response.contains("Internal error"),
-        "Path traversal should be denied. Got: {}",
-        response
+        "Path traversal should be denied. Got: {response}"
     );
 }
 
@@ -155,8 +147,7 @@ fn extract_tool_text(response: &str) -> String {
 
 fn call_generate_project_docs(root: &str, args: &str) -> String {
     let request = format!(
-        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"generate_project_docs","arguments":{}}}}}"#,
-        args
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"generate_project_docs","arguments":{args}}}}}"#
     );
     send_single_mcp_request(root, &request)
 }
@@ -222,8 +213,7 @@ fn generate_project_docs_max_files_one_does_not_panic() {
         serde_json::from_str(&response).expect("Response must be valid JSON even for max_files=1");
     assert!(
         parsed.pointer("/result/content").is_some() || parsed.pointer("/error").is_some(),
-        "Response must have result.content or error. Got: {}",
-        response
+        "Response must have result.content or error. Got: {response}"
     );
 }
 
@@ -284,7 +274,7 @@ fn generate_project_docs_pagination_returns_offset_hint() {
 #[test]
 fn inspect_symbol_simple_name_returns_ambiguous_payload_when_multiple_matches() {
     let root = env!("CARGO_MANIFEST_DIR");
-    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let fixture = format!("{root}/tests/fixtures/AmbiguousSymbols.java");
     let response = call_tool(
         root,
         "inspect_symbol",
@@ -299,23 +289,23 @@ fn inspect_symbol_simple_name_returns_ambiguous_payload_when_multiple_matches() 
     let payload: serde_json::Value =
         serde_json::from_str(&text).expect("Ambiguous response should be JSON");
 
-    assert_eq!(payload["status"], "ambiguous", "Payload: {}", payload);
+    assert_eq!(payload["status"], "ambiguous", "Payload: {payload}");
     let candidates = payload["candidates"]
         .as_array()
         .expect("candidates must be an array");
-    assert!(candidates.len() >= 2, "Payload: {}", payload);
+    assert!(candidates.len() >= 2, "Payload: {payload}");
     for c in candidates {
-        assert!(c.get("qualified_name").is_some(), "Candidate: {}", c);
-        assert!(c.get("signature").is_some(), "Candidate: {}", c);
-        assert!(c.get("start_line").is_some(), "Candidate: {}", c);
-        assert!(c.get("end_line").is_some(), "Candidate: {}", c);
+        assert!(c.get("qualified_name").is_some(), "Candidate: {c}");
+        assert!(c.get("signature").is_some(), "Candidate: {c}");
+        assert!(c.get("start_line").is_some(), "Candidate: {c}");
+        assert!(c.get("end_line").is_some(), "Candidate: {c}");
     }
 }
 
 #[test]
 fn inspect_symbol_qualified_mode_returns_exact_inner_method() {
     let root = env!("CARGO_MANIFEST_DIR");
-    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let fixture = format!("{root}/tests/fixtures/AmbiguousSymbols.java");
     let response = call_tool(
         root,
         "inspect_symbol",
@@ -329,15 +319,14 @@ fn inspect_symbol_qualified_mode_returns_exact_inner_method() {
     let text = extract_tool_text(&response);
     assert!(
         text.contains("inner:"),
-        "Qualified match should return inner method body. Got: {}",
-        text
+        "Qualified match should return inner method body. Got: {text}"
     );
 }
 
 #[test]
 fn inspect_symbol_signature_hint_disambiguates_overloads() {
     let root = env!("CARGO_MANIFEST_DIR");
-    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let fixture = format!("{root}/tests/fixtures/AmbiguousSymbols.java");
     let response = call_tool(
         root,
         "inspect_symbol",
@@ -352,15 +341,14 @@ fn inspect_symbol_signature_hint_disambiguates_overloads() {
     let text = extract_tool_text(&response);
     assert!(
         text.contains("outer-2:"),
-        "signature_hint should select int overload. Got: {}",
-        text
+        "signature_hint should select int overload. Got: {text}"
     );
 }
 
 #[test]
 fn inspect_symbol_return_all_matches_returns_json_with_sanitized_sources() {
     let root = env!("CARGO_MANIFEST_DIR");
-    let fixture = format!("{}/tests/fixtures/AmbiguousSymbols.java", root);
+    let fixture = format!("{root}/tests/fixtures/AmbiguousSymbols.java");
     let response = call_tool(
         root,
         "inspect_symbol",
@@ -376,15 +364,15 @@ fn inspect_symbol_return_all_matches_returns_json_with_sanitized_sources() {
     let payload: serde_json::Value =
         serde_json::from_str(&text).expect("return_all_matches response should be JSON");
 
-    assert_eq!(payload["status"], "ok", "Payload: {}", payload);
+    assert_eq!(payload["status"], "ok", "Payload: {payload}");
     let matches = payload["matches"]
         .as_array()
         .expect("matches must be an array");
-    assert!(matches.len() >= 2, "Payload: {}", payload);
+    assert!(matches.len() >= 2, "Payload: {payload}");
     for m in matches {
-        assert!(m.get("qualified_name").is_some(), "Match: {}", m);
-        assert!(m.get("signature").is_some(), "Match: {}", m);
-        assert!(m.get("source").is_some(), "Match: {}", m);
+        assert!(m.get("qualified_name").is_some(), "Match: {m}");
+        assert!(m.get("signature").is_some(), "Match: {m}");
+        assert!(m.get("source").is_some(), "Match: {m}");
     }
 }
 
@@ -426,27 +414,22 @@ fn get_server_stats_is_always_available_and_returns_stats() {
 
     assert!(
         text.contains("Server Statistics"),
-        "Stats response should contain heading. Got: {}",
-        text
+        "Stats response should contain heading. Got: {text}"
     );
     assert!(
         text.contains("Uptime"),
-        "Stats response should contain Uptime. Got: {}",
-        text
+        "Stats response should contain Uptime. Got: {text}"
     );
     assert!(
         text.contains("AST Cache"),
-        "Stats response should contain AST Cache. Got: {}",
-        text
+        "Stats response should contain AST Cache. Got: {text}"
     );
     assert!(
         text.contains("Tool Cache"),
-        "Stats response should contain Tool Cache. Got: {}",
-        text
+        "Stats response should contain Tool Cache. Got: {text}"
     );
     assert!(
         text.contains("Tool Invocations"),
-        "Stats response should contain Tool Invocations. Got: {}",
-        text
+        "Stats response should contain Tool Invocations. Got: {text}"
     );
 }

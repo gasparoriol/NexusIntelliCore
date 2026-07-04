@@ -93,6 +93,7 @@ pub fn constant_time_compare(a: &str, b: &str) -> bool {
     result == 0
 }
 
+#[allow(clippy::needless_pass_by_value)] // json! literals are ergonomic to pass by value
 pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
     // Try to get ServerState, but do not panic if not yet initialized
     let Ok(state) = std::panic::catch_unwind(crate::state::ServerState::get) else {

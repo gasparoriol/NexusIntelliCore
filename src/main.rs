@@ -1,4 +1,4 @@
-/// NexusIntelliCore MCP Server
+/// `NexusIntelliCore` MCP Server
 ///
 /// Implements the Model Context Protocol (MCP) over stdin/stdout using
 /// standard MCP framing (Content-Length headers).  All code extracts pass through the
