@@ -507,7 +507,8 @@ fn parse_clippy_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
             continue;
         };
 
-        #[allow(clippy::cast_possible_truncation)] // span values are source line numbers, never exceed u32
+        #[allow(clippy::cast_possible_truncation)]
+        // span values are source line numbers, never exceed u32
         let line = span.get("line_start").and_then(Value::as_u64).unwrap_or(1) as u32;
         #[allow(clippy::cast_possible_truncation)]
         let column = span
@@ -676,8 +677,10 @@ fn parse_ktlint_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
             .name("column")
             .and_then(|m| m.as_str().parse::<u32>().ok())
             .unwrap_or(1);
-        let message = caps
-            .name("message").map_or_else(|| "ktlint finding".to_string(), |m| m.as_str().trim().to_string());
+        let message = caps.name("message").map_or_else(
+            || "ktlint finding".to_string(),
+            |m| m.as_str().trim().to_string(),
+        );
         let rule_id = caps.name("rule").map(|m| m.as_str().trim().to_string());
 
         diagnostics.push(LintDiagnostic {
@@ -722,8 +725,10 @@ fn parse_kotlinc_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDia
                 .and_then(|m| m.as_str().parse::<u32>().ok())
                 .unwrap_or(1);
             let level = caps.name("level").map_or("warning", |m| m.as_str());
-            let message = caps
-                .name("message").map_or_else(|| "kotlinc finding".to_string(), |m| m.as_str().trim().to_string());
+            let message = caps.name("message").map_or_else(
+                || "kotlinc finding".to_string(),
+                |m| m.as_str().trim().to_string(),
+            );
 
             diagnostics.push(LintDiagnostic {
                 line: line_num,
@@ -750,8 +755,10 @@ fn parse_kotlinc_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDia
                 .name("column")
                 .and_then(|m| m.as_str().parse::<u32>().ok())
                 .unwrap_or(1);
-            let message = caps
-                .name("message").map_or_else(|| "kotlinc finding".to_string(), |m| m.as_str().trim().to_string());
+            let message = caps.name("message").map_or_else(
+                || "kotlinc finding".to_string(),
+                |m| m.as_str().trim().to_string(),
+            );
             let severity = if trimmed.starts_with("e:") {
                 Severity::Error
             } else {
@@ -837,8 +844,10 @@ fn parse_dotnet_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
             .unwrap_or(1);
         let level = caps.name("level").map_or("warning", |m| m.as_str());
         let code = caps.name("code").map(|m| m.as_str().trim().to_string());
-        let message = caps
-            .name("message").map_or_else(|| "dotnet finding".to_string(), |m| m.as_str().trim().to_string());
+        let message = caps.name("message").map_or_else(
+            || "dotnet finding".to_string(),
+            |m| m.as_str().trim().to_string(),
+        );
 
         diagnostics.push(LintDiagnostic {
             line: line_num,

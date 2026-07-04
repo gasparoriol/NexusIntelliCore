@@ -32,12 +32,7 @@ pub fn run_tree_sitter_checks(path: &Path, analysis: &FileAnalysis) -> Vec<LintD
             if let Some(col_idx) = scan_line.find(rule.pattern) {
                 #[allow(clippy::cast_possible_truncation)] // column counts never exceed u32
                 let col_number = (col_idx + 1) as u32;
-                diagnostics.push(mk_diag(
-                    line_number,
-                    col_number,
-                    rule.message,
-                    rule.rule_id,
-                ));
+                diagnostics.push(mk_diag(line_number, col_number, rule.message, rule.rule_id));
             }
         }
     }
