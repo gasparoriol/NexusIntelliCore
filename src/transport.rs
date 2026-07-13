@@ -62,8 +62,6 @@ where
             return self.read_message_line_delimited().await;
         }
 
-        let mut headers: HashMap<String, String> = HashMap::new();
-        let mut saw_first_line = false;
         let trace_enabled = stdin_trace_enabled();
 
         if trace_enabled {
@@ -72,80 +70,15 @@ where
             );
         }
 
-        // Read one header line at a time until the empty \r\n separator.
-        loop {
-            let mut line = String::new();
-            let n = self.reader.read_line(&mut line).await?;
+        let headers = match self.read_headers(trace_enabled).await? {
+            Some(h) => h,
+            None => return Ok(None),
+        };
 
-            if n == 0 {
-                // EOF
-                if !saw_first_line {
-                    if trace_enabled {
-                        warn!("MCP stdin trace: EOF before first header line");
-                    }
-                    return Ok(None); // clean shutdown — no data was in flight
-                }
-                return Err(anyhow!("EOF while reading headers"));
-            }
-
-            if trace_enabled {
-                let escaped = line.replace('\r', "\\r").replace('\n', "\\n");
-                warn!(bytes = n, line = %escaped, "MCP stdin trace: header chunk");
-            }
-
-            if line.len() > MAX_HEADER_LINE_BYTES {
-                return Err(anyhow!(
-                    "Header line exceeds maximum size ({MAX_HEADER_LINE_BYTES} bytes)"
-                ));
-            }
-
-            let is_first_header_line = !saw_first_line;
-            saw_first_line = true;
-
-            // Strip the line terminator (\r\n or bare \n).
-            let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-
-            // Compatibility mode: some clients send one JSON-RPC message per
-            // line instead of MCP Content-Length framing. If the first line
-            // looks like JSON, parse and return it immediately.
-            if is_first_header_line && looks_like_json(trimmed) {
-                self.line_delimited_json_mode = true;
-
-                if trace_enabled {
-                    warn!("MCP stdin trace: detected line-delimited JSON message (no Content-Length header)");
-                }
-
-                let msg = serde_json::from_str::<Value>(trimmed)
-                    .map_err(|e| anyhow!("JSON parse error (line-delimited mode): {e}"))?;
-                return Ok(Some(msg));
-            }
-
-            // Empty line signals the end of the header block.
-            if trimmed.is_empty() {
-                break;
-            }
-
-            if headers.len() >= MAX_HEADER_COUNT {
-                return Err(anyhow!("Too many headers (max {MAX_HEADER_COUNT})"));
-            }
-
-            let (name, value) = trimmed
-                .split_once(':')
-                .ok_or_else(|| anyhow!("Invalid header format: {trimmed}"))?;
-
-            let name_lower = name.trim().to_lowercase();
-            let value_trimmed = value.trim().to_string();
-
-            if headers.contains_key(&name_lower) {
-                warn!(header = %name_lower, "Duplicate header received");
-                return Err(anyhow!("Duplicate header: {}", name.trim()));
-            }
-
-            headers.insert(name_lower, value_trimmed);
-        }
-
-        if headers.is_empty() {
-            return Err(anyhow!("Received empty header block"));
+        if let Some(msg_str) = headers.get("x-compat-json-message") {
+            let msg = serde_json::from_str::<Value>(msg_str)
+                .map_err(|e| anyhow!("JSON parse error (line-delimited mode): {e}"))?;
+            return Ok(Some(msg));
         }
 
         let content_length = extract_content_length(&headers)?;
@@ -191,6 +124,93 @@ where
 
         debug!("Message received via MCP transport");
         Ok(Some(msg))
+    }
+
+    async fn read_headers(&mut self, trace_enabled: bool) -> Result<Option<HashMap<String, String>>> {
+        let mut headers: HashMap<String, String> = HashMap::new();
+        let mut saw_first_line = false;
+
+        loop {
+            let mut line = String::new();
+            let n = self.reader.read_line(&mut line).await?;
+
+            if n == 0 {
+                // EOF
+                if !saw_first_line {
+                    if trace_enabled {
+                        warn!("MCP stdin trace: EOF before first header line");
+                    }
+                    return Ok(None); // clean shutdown — no data was in flight
+                }
+                return Err(anyhow!("EOF while reading headers"));
+            }
+
+            if trace_enabled {
+                let escaped = line.replace('\r', "\\r").replace('\n', "\\n");
+                warn!(bytes = n, line = %escaped, "MCP stdin trace: header chunk");
+            }
+
+            if line.len() > MAX_HEADER_LINE_BYTES {
+                return Err(anyhow!(
+                    "Header line exceeds maximum size ({MAX_HEADER_LINE_BYTES} bytes)"
+                ));
+            }
+
+            let is_first_header_line = !saw_first_line;
+            saw_first_line = true;
+
+            // Strip the line terminator (\r\n or bare \n).
+            let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+
+            // Compatibility mode: some clients send one JSON-RPC message per
+            // line instead of MCP Content-Length framing. If the first line
+            // looks like JSON, parse and return it immediately.
+            if is_first_header_line && looks_like_json(trimmed) {
+                self.line_delimited_json_mode = true;
+
+                if trace_enabled {
+                    warn!("MCP stdin trace: detected line-delimited JSON message (no Content-Length header)");
+                }
+
+                let mut compat_headers = HashMap::new();
+                compat_headers.insert("x-compat-json-message".to_string(), trimmed.to_string());
+                return Ok(Some(compat_headers));
+            }
+
+            // Empty line signals the end of the header block.
+            if trimmed.is_empty() {
+                break;
+            }
+
+            if headers.len() >= MAX_HEADER_COUNT {
+                return Err(anyhow!("Too many headers (max {MAX_HEADER_COUNT})"));
+            }
+
+            Self::parse_header_line(trimmed, &mut headers)?;
+        }
+
+        if headers.is_empty() {
+            return Err(anyhow!("Received empty header block"));
+        }
+
+        Ok(Some(headers))
+    }
+
+    fn parse_header_line(trimmed: &str, headers: &mut HashMap<String, String>) -> Result<()> {
+        let (name, value) = trimmed
+            .split_once(':')
+            .ok_or_else(|| anyhow!("Invalid header format: {trimmed}"))?;
+
+        let name_lower = name.trim().to_lowercase();
+        let value_trimmed = value.trim().to_string();
+
+        if headers.contains_key(&name_lower) {
+            warn!(header = %name_lower, "Duplicate header received");
+            return Err(anyhow!("Duplicate header: {}", name.trim()));
+        }
+
+        headers.insert(name_lower, value_trimmed);
+        Ok(())
     }
 
     /// Serializes a JSON message and sends it with MCP stdio framing.
