@@ -118,8 +118,7 @@ fn append_import_sections(
     }
 }
 
-pub(super) async fn get_module_summary(file_path: &str, public_only: bool) -> Result<Value> {
-    let state = crate::state::ServerState::get();
+pub(super) async fn get_module_summary(state: &crate::state::ServerState, file_path: &str, public_only: bool) -> Result<Value> {
     let path = match state.validate_path(Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),

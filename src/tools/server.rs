@@ -5,8 +5,7 @@ use crate::protocol::{error_response, text_content, tool_response};
 
 /// Rebuilds the project file index from disk and clears the AST cache.
 /// Use this when files are added/removed or to free memory.
-pub(super) async fn refresh_index() -> Result<Value> {
-    let state = crate::state::ServerState::get();
+pub(super) async fn refresh_index(state: &crate::state::ServerState) -> Result<Value> {
 
     // Rebuild index and clear cache
     let (files_found, cache_cleared) = match state.refresh_index().await {
@@ -26,8 +25,7 @@ pub(super) async fn refresh_index() -> Result<Value> {
 }
 
 /// Returns server statistics: AST and tool cache utilization, file index metadata, and runtime configuration.
-pub(super) async fn get_server_stats() -> Result<Value> {
-    let state = crate::state::ServerState::get();
+pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Result<Value> {
     let cache_stats = state.get_cache_stats();
     let index = state.index().await?;
     let invocation_counts = state.get_tool_invocation_counts();

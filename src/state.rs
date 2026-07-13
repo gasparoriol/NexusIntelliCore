@@ -3,7 +3,7 @@ use ignore::WalkBuilder;
 use moka::future::Cache;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use tokio::sync::RwLock;
@@ -31,7 +31,7 @@ const DEFAULT_TOOL_CACHE_ENTRIES: usize = 100 * 1024 * 1024;
 const ENV_TOOL_CACHE_LIMIT: &str = "MCP_TOOL_CACHE_ENTRIES";
 
 /// Global server state, initialised once at startup.
-static STATE: OnceLock<ServerState> = OnceLock::new();
+static STATE: OnceLock<Arc<ServerState>> = OnceLock::new();
 
 /// Environment variable to configure maximum concurrent tool executions.
 const ENV_TOOL_CONCURRENCY: &str = "NEXUS_TOOL_MAX_CONCURRENCY";
@@ -267,8 +267,12 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    /// Initialise global state. Panics if called twice.
-    pub fn init(raw_root: &str) -> Result<()> {
+    /// Builds a `ServerState` from a project root path.
+    ///
+    /// In production, use [`init`] which stores the result in the global
+    /// singleton. In tests, call this directly to obtain an independent
+    /// instance without touching the singleton.
+    pub fn new(raw_root: &str) -> Result<Arc<Self>> {
         let root = std::fs::canonicalize(raw_root)
             .with_context(|| format!("Cannot resolve root path: {raw_root}"))?;
 
@@ -383,23 +387,32 @@ impl ServerState {
             started_at: std::time::Instant::now(),
         };
 
-        STATE
-            .set(state)
-            .map_err(|_| anyhow::anyhow!("ServerState already initialised"))?;
-
-        Ok(())
+        Ok(Arc::new(state))
     }
 
-    /// Get the global state reference.
+    /// Initialise the global singleton. Returns an error if called more than once.
+    pub fn init(raw_root: &str) -> Result<()> {
+        let state = Self::new(raw_root)?;
+        STATE
+            .set(state)
+            .map_err(|_| anyhow::anyhow!("ServerState already initialised"))
+    }
+
+    /// Returns the global instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`init`] has not been called.
     pub fn get() -> &'static ServerState {
         STATE
             .get()
             .expect("ServerState not initialised — call init() first")
+            .as_ref()
     }
 
-    /// Try to get the global state reference, returning None if not initialised.
+    /// Returns the global instance if initialised, or `None`.
     pub fn get_opt() -> Option<&'static ServerState> {
-        STATE.get()
+        STATE.get().map(Arc::as_ref)
     }
 
     pub fn security_config(&self) -> &SecurityConfig {
@@ -736,6 +749,19 @@ mod tests {
                                            // No asegurar exactamente cuál fue evictado (moka es probabilístico),
                                            // pero el total debe ser ≤ 2
         assert!(cache.entry_count() <= 2);
+    }
+
+    #[test]
+    fn new_returns_independent_instance() {
+        // Verifica que ServerState::new() construye una instancia independiente
+        // sin tocar el singleton global (STATE). Esto es la ruta de inyección
+        // para tests de integración que necesitan raíces distintas.
+        let tmp = std::env::temp_dir();
+        let state = ServerState::new(tmp.to_str().unwrap())
+            .expect("should build without touching the global singleton");
+        assert_eq!(state.root(), tmp.canonicalize().unwrap());
+        // El singleton global NO debe haber sido modificado por este test.
+        // (get_opt devuelve None si init() no fue llamado en este proceso)
     }
 
     #[test]

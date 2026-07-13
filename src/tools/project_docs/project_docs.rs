@@ -9,13 +9,14 @@ use super::i18n::labels;
 use super::render::{render_document, RenderInput};
 
 pub(crate) async fn generate_project_docs(
+    state: &crate::state::ServerState,
     sections: Vec<String>,
     public_only: bool,
     max_files: usize,
     file_offset: usize,
     language: &str,
 ) -> Result<Value> {
-    let data = collect_project_docs_data(max_files, file_offset).await?;
+    let data = collect_project_docs_data(state, max_files, file_offset).await?;
 
     if data.all_files.is_empty() {
         return Ok(tool_response(vec![text_content(

@@ -4,8 +4,7 @@ use serde_json::Value;
 use crate::privacy_gateway;
 use crate::protocol::{text_content, tool_response};
 
-pub(super) async fn get_project_structure() -> Result<Value> {
-    let state = crate::state::ServerState::get();
+pub(super) async fn get_project_structure(state: &crate::state::ServerState) -> Result<Value> {
     let index = state.index().await?;
     let summary = index.render_tree();
 

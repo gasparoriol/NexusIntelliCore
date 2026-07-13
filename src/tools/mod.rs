@@ -45,12 +45,12 @@ fn tool_is_cacheable(name: &str) -> bool {
 }
 
 #[allow(clippy::too_many_lines)] // Routing match table; splitting by sub-groups would only add indirection
-async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
+async fn dispatch_tool_uncached(state: &crate::state::ServerState, name: &str, args: &Value) -> Result<Value> {
     match name {
-        "get_project_structure" => project::get_project_structure().await,
+        "get_project_structure" => project::get_project_structure(state).await,
         "get_file_outline" => {
             let file = require_file_path(args)?;
-            outline::get_file_outline(&file).await
+            outline::get_file_outline(state, &file).await
         }
         "inspect_symbol" => {
             let file = require_file_path(args)?;
@@ -70,6 +70,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
                 .unwrap_or(false);
             let signature_hint = args.get("signature_hint").and_then(|v| v.as_str());
             symbol::inspect_symbol(
+                state,
                 &file,
                 symbol,
                 match_mode,
@@ -80,16 +81,16 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
         }
         "lint_file" => {
             let file = require_file_path(args)?;
-            lint::lint_file(&file).await
+            lint::lint_file(state, &file).await
         }
-        "get_dependencies_graph" => deps_graph::get_dependencies_graph(args).await,
-        "search_design_patterns" => patterns::search_design_patterns(args).await,
-        "audit_security_measures" => audit::audit_security_measures().await,
-        "refresh_index" => server::refresh_index().await,
-        "get_server_stats" => server::get_server_stats().await,
+        "get_dependencies_graph" => deps_graph::get_dependencies_graph(state, args).await,
+        "search_design_patterns" => patterns::search_design_patterns(state, args).await,
+        "audit_security_measures" => audit::audit_security_measures(state).await,
+        "refresh_index" => server::refresh_index(state).await,
+        "get_server_stats" => server::get_server_stats(state).await,
         "analyze_angular_component" => {
             let path = require_file_path_or_component_path(args)?;
-            angular::analyze_angular_component(&path).await
+            angular::analyze_angular_component(state, &path).await
         }
         "get_module_summary" => {
             let file = require_file_path(args)?;
@@ -97,7 +98,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
                 .get("public_only")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            summary::get_module_summary(&file, public_only).await
+            summary::get_module_summary(state, &file, public_only).await
         }
         "generate_project_docs" => {
             let sections: Vec<String> = args.get("sections").and_then(Value::as_array).map_or_else(
@@ -135,6 +136,7 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
                 .unwrap_or("en")
                 .to_owned();
             project_docs::generate_project_docs(
+                state,
                 sections,
                 public_only,
                 max_files,
@@ -149,12 +151,11 @@ async fn dispatch_tool_uncached(name: &str, args: &Value) -> Result<Value> {
 
 /// Dispatch a `tools/call` request to the appropriate handler.
 pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
-    // Record the tool invocation count
-    crate::state::ServerState::get().record_tool_invocation(name);
+    let state = crate::state::ServerState::get();
+    state.record_tool_invocation(name);
 
     // Concurrency guard for heavy tools
     let _permit = if is_expensive_tool(name) {
-        let state = crate::state::ServerState::get();
         if let Some(permit) = state
             .acquire_tool_permit_timeout(std::time::Duration::from_secs(30))
             .await
@@ -173,10 +174,9 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     // automatically release the permit at the final of the function
 
     if !tool_is_cacheable(name) {
-        return dispatch_tool_uncached(name, &args).await;
+        return dispatch_tool_uncached(state, name, &args).await;
     }
 
-    let state = crate::state::ServerState::get();
     let key = state.make_tool_cache_key(name, &args);
     let args_for_compute = args.clone();
     let name_for_compute = name.to_owned();
@@ -184,10 +184,13 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     let cache = state.tool_cache();
     let result = cache
         .get_with(key.clone(), async move {
-            let computed = dispatch_tool_uncached(&name_for_compute, &args_for_compute)
+            // Inside the cache closure we still need state — re-acquire it here.
+            // This is the one remaining call to get() that cannot be avoided because
+            // the Moka closure is 'static and cannot capture a borrowed &ServerState.
+            let s = crate::state::ServerState::get();
+            dispatch_tool_uncached(s, &name_for_compute, &args_for_compute)
                 .await
-                .unwrap_or_else(|e| error_response(format!("Internal tool error: {e}")));
-            computed
+                .unwrap_or_else(|e| error_response(format!("Internal tool error: {e}")))
         })
         .await;
 
@@ -279,7 +282,8 @@ mod tests {
             "language": "en"
         });
 
-        let response = super::dispatch_tool_uncached("generate_project_docs", &args)
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "generate_project_docs", &args)
             .await
             .expect("dispatcher should execute generate_project_docs route");
 
@@ -298,7 +302,8 @@ mod tests {
             "file_path": "/definitely/not/found.component.ts"
         });
 
-        let response = super::dispatch_tool_uncached("analyze_angular_component", &args)
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "analyze_angular_component", &args)
             .await
             .expect("dispatcher should execute analyze_angular_component route");
 
@@ -324,7 +329,8 @@ mod tests {
             "component_path": "/definitely/not/found.component.ts"
         });
 
-        let response = super::dispatch_tool_uncached("analyze_angular_component", &args)
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "analyze_angular_component", &args)
             .await
             .expect("dispatcher should execute analyze_angular_component route");
 
@@ -400,7 +406,8 @@ mod tests {
             "file_path": "/definitely/not/found.rs"
         });
 
-        let response = super::dispatch_tool_uncached("lint_file", &args)
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "lint_file", &args)
             .await
             .expect("dispatcher should execute lint_file route");
 
@@ -426,7 +433,8 @@ mod tests {
             "file-path": "/definitely/not/found.rs"
         });
 
-        let response = super::dispatch_tool_uncached("lint_file", &args)
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "lint_file", &args)
             .await
             .expect("dispatcher should execute lint_file route");
 
@@ -452,7 +460,8 @@ mod tests {
             "FilePath": "/definitely/not/found.rs"
         });
 
-        let response = super::dispatch_tool_uncached("get_file_outline", &args)
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "get_file_outline", &args)
             .await
             .expect("dispatcher should execute get_file_outline route");
 

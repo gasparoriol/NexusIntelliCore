@@ -23,10 +23,10 @@ pub(super) struct ProjectDocsData {
 }
 
 pub(super) async fn collect_project_docs_data(
+    state: &crate::state::ServerState,
     max_files: usize,
     file_offset: usize,
 ) -> Result<ProjectDocsData> {
-    let state = crate::state::ServerState::get();
     let index = state.index().await?;
     let root = state.root().to_path_buf();
     let project_name = root

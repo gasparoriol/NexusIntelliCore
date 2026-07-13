@@ -5,8 +5,7 @@ use std::path::Path;
 use crate::privacy_gateway;
 use crate::protocol::{error_response, text_content, tool_response};
 
-pub(super) async fn lint_file(file_path: &str) -> Result<Value> {
-    let state = crate::state::ServerState::get();
+pub(super) async fn lint_file(state: &crate::state::ServerState, file_path: &str) -> Result<Value> {
     let path = match state.validate_path(Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),

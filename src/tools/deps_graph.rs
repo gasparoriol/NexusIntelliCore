@@ -514,11 +514,10 @@ async fn build_file_dependencies(
     Ok(file_deps)
 }
 
-pub(super) async fn get_dependencies_graph(args: &Value) -> Result<Value> {
+pub(super) async fn get_dependencies_graph(state: &crate::state::ServerState, args: &Value) -> Result<Value> {
     let start = Instant::now();
     let params = QueryParams::from_args(args);
 
-    let state = crate::state::ServerState::get();
     let index = state.index().await?;
     let allowed_files = filter_by_scope(index.allowed_files.clone(), params.scope_path.as_deref());
     let restricted_files =
