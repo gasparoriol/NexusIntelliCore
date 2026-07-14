@@ -45,7 +45,11 @@ fn tool_is_cacheable(name: &str) -> bool {
 }
 
 #[allow(clippy::too_many_lines)] // Routing match table; splitting by sub-groups would only add indirection
-async fn dispatch_tool_uncached(state: &crate::state::ServerState, name: &str, args: &Value) -> Result<Value> {
+async fn dispatch_tool_uncached(
+    state: &crate::state::ServerState,
+    name: &str,
+    args: &Value,
+) -> Result<Value> {
     match name {
         "get_project_structure" => project::get_project_structure(state).await,
         "get_file_outline" => {

@@ -125,7 +125,10 @@ where
         Ok(Some(msg))
     }
 
-    async fn read_headers(&mut self, trace_enabled: bool) -> Result<Option<HashMap<String, String>>> {
+    async fn read_headers(
+        &mut self,
+        trace_enabled: bool,
+    ) -> Result<Option<HashMap<String, String>>> {
         let mut headers: HashMap<String, String> = HashMap::new();
         let mut saw_first_line = false;
 

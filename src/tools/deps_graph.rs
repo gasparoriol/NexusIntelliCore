@@ -514,7 +514,10 @@ async fn build_file_dependencies(
     Ok(file_deps)
 }
 
-pub(super) async fn get_dependencies_graph(state: &crate::state::ServerState, args: &Value) -> Result<Value> {
+pub(super) async fn get_dependencies_graph(
+    state: &crate::state::ServerState,
+    args: &Value,
+) -> Result<Value> {
     let start = Instant::now();
     let params = QueryParams::from_args(args);
 

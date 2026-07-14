@@ -779,9 +779,7 @@ mod tests {
             module_doc: None,
         };
 
-        let cached = CachedAnalysis {
-            analysis,
-        };
+        let cached = CachedAnalysis { analysis };
 
         assert_eq!(cached.analysis.language, "rust");
     }

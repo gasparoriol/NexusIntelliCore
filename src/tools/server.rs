@@ -6,7 +6,6 @@ use crate::protocol::{error_response, text_content, tool_response};
 /// Rebuilds the project file index from disk and clears the AST cache.
 /// Use this when files are added/removed or to free memory.
 pub(super) async fn refresh_index(state: &crate::state::ServerState) -> Result<Value> {
-
     // Rebuild index and clear cache
     let (files_found, cache_cleared) = match state.refresh_index().await {
         Ok((files, cleared)) => (files, cleared),

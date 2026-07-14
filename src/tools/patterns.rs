@@ -155,7 +155,10 @@ async fn collect_pattern_matches(
     Ok((all_patterns, files_scanned))
 }
 
-pub(super) async fn search_design_patterns(state: &crate::state::ServerState, args: &Value) -> Result<Value> {
+pub(super) async fn search_design_patterns(
+    state: &crate::state::ServerState,
+    args: &Value,
+) -> Result<Value> {
     let start = Instant::now();
     let params = QueryParams::from_args(args);
     let index = state.index().await?;

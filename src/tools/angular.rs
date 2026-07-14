@@ -8,7 +8,10 @@ use crate::protocol::{error_response, text_content, tool_response};
 const ANGULAR_LINT_MAX_ITEMS: usize = 5;
 
 #[allow(clippy::too_many_lines)] // Rich multi-step analysis: template + styles + lint; splitting would harm readability
-pub(super) async fn analyze_angular_component(state: &crate::state::ServerState, component_path: &str) -> Result<Value> {
+pub(super) async fn analyze_angular_component(
+    state: &crate::state::ServerState,
+    component_path: &str,
+) -> Result<Value> {
     let ts_path = match state.validate_path(Path::new(component_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),

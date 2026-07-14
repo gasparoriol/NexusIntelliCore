@@ -57,7 +57,10 @@ fn append_html_sections(out: &mut String, html_elements: &[crate::analyzer::Html
     }
 }
 
-pub(super) async fn get_file_outline(state: &crate::state::ServerState, file_path: &str) -> Result<Value> {
+pub(super) async fn get_file_outline(
+    state: &crate::state::ServerState,
+    file_path: &str,
+) -> Result<Value> {
     let path = match state.validate_path(Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
