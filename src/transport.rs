@@ -70,9 +70,8 @@ where
             );
         }
 
-        let headers = match self.read_headers(trace_enabled).await? {
-            Some(h) => h,
-            None => return Ok(None),
+        let Some(headers) = self.read_headers(trace_enabled).await? else {
+            return Ok(None);
         };
 
         if let Some(msg_str) = headers.get("x-compat-json-message") {
@@ -293,16 +292,13 @@ fn extract_content_length(headers: &HashMap<String, String>) -> Result<usize> {
 }
 
 fn stdin_trace_enabled() -> bool {
-    match env::var(STDIN_TRACE_ENV) {
-        Ok(v) => {
-            let v = v.trim();
-            v.eq_ignore_ascii_case("1")
-                || v.eq_ignore_ascii_case("true")
-                || v.eq_ignore_ascii_case("yes")
-                || v.eq_ignore_ascii_case("on")
-        }
-        Err(_) => false,
-    }
+    env::var(STDIN_TRACE_ENV).is_ok_and(|v| {
+        let v = v.trim();
+        v.eq_ignore_ascii_case("1")
+            || v.eq_ignore_ascii_case("true")
+            || v.eq_ignore_ascii_case("yes")
+            || v.eq_ignore_ascii_case("on")
+    })
 }
 
 fn looks_like_json(s: &str) -> bool {

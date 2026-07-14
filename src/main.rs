@@ -237,7 +237,7 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
     let state = state::ServerState::get();
     let all_tools = tools::tool_definitions();
     let filtered_tools = if let Some(ref allowed) = state.security_config().allowed_tools {
-        if let Some(arr) = all_tools.as_array() {
+        all_tools.as_array().map_or(all_tools.clone(), |arr| {
             let filtered: Vec<Value> = arr
                 .iter()
                 .filter(|t| {
@@ -248,9 +248,7 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
                 .cloned()
                 .collect();
             Value::Array(filtered)
-        } else {
-            all_tools
-        }
+        })
     } else {
         all_tools
     };

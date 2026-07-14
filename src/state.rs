@@ -720,7 +720,8 @@ impl ServerState {
     pub fn get_tool_invocation_counts(&self) -> std::collections::HashMap<String, u64> {
         self.tool_invocation_counts
             .lock()
-            .map(|g| g.clone())
+            .as_deref()
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -779,7 +780,7 @@ mod tests {
         };
 
         let cached = CachedAnalysis {
-            analysis: analysis.clone(),
+            analysis,
         };
 
         assert_eq!(cached.analysis.language, "rust");
@@ -918,10 +919,12 @@ mod tests {
     #[test]
     fn record_tool_invocation_increments_counter() {
         let counts = std::sync::Mutex::new(std::collections::HashMap::new());
-        let mut c = counts.lock().unwrap();
-        *c.entry("test_tool".to_owned()).or_insert(0) += 1;
-        *c.entry("test_tool".to_owned()).or_insert(0) += 1;
-        assert_eq!(*c.get("test_tool").unwrap(), 2);
+        {
+            let mut c = counts.lock().unwrap();
+            *c.entry("test_tool".to_owned()).or_insert(0) += 1;
+            *c.entry("test_tool".to_owned()).or_insert(0) += 1;
+            assert_eq!(*c.get("test_tool").unwrap(), 2);
+        }
     }
 
     #[test]
