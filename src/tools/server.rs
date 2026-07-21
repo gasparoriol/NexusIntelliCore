@@ -29,18 +29,27 @@ pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Resul
     let index = state.index().await?;
     let invocation_counts = state.get_tool_invocation_counts();
     let uptime_secs = state.uptime_seconds();
+    let (ast_hits, ast_misses, tool_hits, tool_misses, rejections) =
+        state.get_operational_metrics();
 
     let stats_json = json!({
         "uptime_seconds": uptime_secs,
         "ast_cache": {
             "entries": cache_stats.ast_entries,
             "max_entries": cache_stats.ast_max,
-            "utilization_percent": utilization(cache_stats.ast_entries, cache_stats.ast_max)
+            "utilization_percent": utilization(cache_stats.ast_entries, cache_stats.ast_max),
+            "hits": ast_hits,
+            "misses": ast_misses
         },
         "tool_cache": {
             "entries": cache_stats.tool_entries,
             "max_entries": cache_stats.tool_max,
-            "utilization_percent": utilization(cache_stats.tool_entries, cache_stats.tool_max)
+            "utilization_percent": utilization(cache_stats.tool_entries, cache_stats.tool_max),
+            "hits": tool_hits,
+            "misses": tool_misses
+        },
+        "concurrency": {
+            "rejections": rejections
         },
         "index": {
             "allowed_files": index.allowed_files.len(),
@@ -54,9 +63,13 @@ pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Resul
         "## Server Statistics\n\n\
          **Uptime**: {} seconds\n\n\
          ### AST Cache\n\
-         - Entries: {}/{} ({:.1}% full)\n\n\
+         - Entries: {}/{} ({:.1}% full)\n\
+         - Hits: {}, Misses: {}\n\n\
          ### Tool Cache\n\
-         - Entries: {}/{} ({:.1}% full)\n\n\
+         - Entries: {}/{} ({:.1}% full)\n\
+         - Hits: {}, Misses: {}\n\n\
+         ### Concurrency\n\
+         - Tool rejections: {}\n\n\
          ### Project Index\n\
          - Allowed files: {}\n\
          - Restricted files: {}\n\n\
@@ -67,9 +80,14 @@ pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Resul
         cache_stats.ast_entries,
         cache_stats.ast_max,
         utilization_f64(cache_stats.ast_entries, cache_stats.ast_max),
+        ast_hits,
+        ast_misses,
         cache_stats.tool_entries,
         cache_stats.tool_max,
         utilization_f64(cache_stats.tool_entries, cache_stats.tool_max),
+        tool_hits,
+        tool_misses,
+        rejections,
         index.allowed_files.len(),
         index.restricted_files.len(),
         format_invocation_table(&invocation_counts),

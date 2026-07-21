@@ -33,14 +33,15 @@ pub(crate) fn extract_imports(
             }
             "javascript" | "typescript" | "tsx" => {
                 // Prefer AST source field over brittle text parsing of 'from ...'
-                if let Some(src_node) = imp.1.child_by_field_name("source") {
-                    let quoted = source[src_node.byte_range()].trim();
-                    quoted
-                        .trim_matches(|c: char| c == '"' || c == '\'')
-                        .to_owned()
-                } else {
-                    extract_js_import_path(&raw)
-                }
+                imp.1.child_by_field_name("source").map_or_else(
+                    || extract_js_import_path(&raw),
+                    |src_node| {
+                        let quoted = source[src_node.byte_range()].trim();
+                        quoted
+                            .trim_matches(|c: char| c == '"' || c == '\'')
+                            .to_owned()
+                    },
+                )
             }
             "java" => {
                 // For Java: `import com.example.Service;` → path is `com.example.Service`

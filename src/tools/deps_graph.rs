@@ -244,15 +244,16 @@ fn apply_depth_limit(
         return file_deps.clone();
     };
 
-    let mut roots: Vec<String> = if let Some(scope) = params.scope_path.as_deref() {
-        file_deps
-            .keys()
-            .filter(|k| k.contains(scope))
-            .cloned()
-            .collect()
-    } else {
-        file_deps.keys().cloned().collect()
-    };
+    let mut roots: Vec<String> = params.scope_path.as_deref().map_or_else(
+        || file_deps.keys().cloned().collect(),
+        |scope| {
+            file_deps
+                .keys()
+                .filter(|k| k.contains(scope))
+                .cloned()
+                .collect()
+        },
+    );
 
     if roots.is_empty() {
         roots = file_deps.keys().cloned().collect();
@@ -827,7 +828,10 @@ fn find_matching_file(
             .trim_end_matches(".tsx")
             .trim_end_matches(".ts")
             .trim_end_matches(".js");
-        if stem.ends_with(normalised) || file_str.contains(normalised) {
+
+        // Strict suffix match to avoid sub-string false positives
+        // e.g., if normalised is "state", it should match "src/state", but not "src/state_helper" or "src/statement"
+        if stem == normalised || stem.ends_with(&format!("/{normalised}")) {
             return Some(file.clone());
         }
     }
@@ -1013,6 +1017,23 @@ mod tests {
         assert_eq!(kind, ImportKind::ExternalLibrary);
         assert_eq!(resolved, "serde_json::Value");
         assert!(path_opt.is_none());
+    }
+
+    #[test]
+    fn test_find_matching_file_strictness() {
+        let files = vec![
+            PathBuf::from("src/state.rs"),
+            PathBuf::from("src/state_helper.rs"),
+            PathBuf::from("src/statement.rs"),
+        ];
+
+        // Should match src/state.rs strictly and not be fooled by substrings
+        let matched = find_matching_file("state", &files);
+        assert_eq!(matched, Some(PathBuf::from("src/state.rs")));
+
+        // Should not match anything for "stat" since it's not a full segment or exact file stem
+        let matched_none = find_matching_file("stat", &files);
+        assert_eq!(matched_none, None);
     }
 
     // Phase 0: Tests for contention mitigation

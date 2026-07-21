@@ -101,10 +101,9 @@ pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
     };
 
     if let Some(ref path) = state.security_config().audit_log_path {
-        let timestamp = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-            Ok(d) => d.as_secs(),
-            Err(_) => 0,
-        };
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
         let log_entry = serde_json::json!({
             "timestamp": timestamp,
             "event": event_type,

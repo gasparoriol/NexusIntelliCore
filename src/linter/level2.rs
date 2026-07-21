@@ -865,17 +865,18 @@ fn parse_dotnet_output(stdout: &str, target: &Path, root: &Path) -> Vec<LintDiag
 fn parse_mypy_rest(rest: &str) -> Option<(Severity, String, Option<String>)> {
     let (level, message_part) = rest.split_once(':')?;
     let message_trimmed = message_part.trim();
-    let (message, rule_id) = if let Some(start) = message_trimmed.rfind('[') {
-        if message_trimmed.ends_with(']') && start > 0 {
-            let msg = message_trimmed[..start].trim_end().to_string();
-            let code = message_trimmed[start + 1..message_trimmed.len() - 1].to_string();
-            (msg, Some(code))
-        } else {
-            (message_trimmed.to_string(), None)
-        }
-    } else {
-        (message_trimmed.to_string(), None)
-    };
+    let (message, rule_id) = message_trimmed.rfind('[').map_or_else(
+        || (message_trimmed.to_string(), None),
+        |start| {
+            if message_trimmed.ends_with(']') && start > 0 {
+                let msg = message_trimmed[..start].trim_end().to_string();
+                let code = message_trimmed[start + 1..message_trimmed.len() - 1].to_string();
+                (msg, Some(code))
+            } else {
+                (message_trimmed.to_string(), None)
+            }
+        },
+    );
 
     Some((map_severity(level.trim()), message, rule_id))
 }

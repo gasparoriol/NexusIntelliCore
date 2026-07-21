@@ -199,12 +199,13 @@ fn build_qualified_name(
     owner_chain: Option<&str>,
     lang: &dyn LanguageGrammar,
 ) -> String {
-    if let Some(owner) = owner_chain {
-        let sep = if lang.name() == "rust" { "::" } else { "." };
-        format!("{owner}{sep}{name}")
-    } else {
-        name.to_owned()
-    }
+    owner_chain.map_or_else(
+        || name.to_owned(),
+        |owner| {
+            let sep = if lang.name() == "rust" { "::" } else { "." };
+            format!("{owner}{sep}{name}")
+        },
+    )
 }
 
 fn normalize_signature(signature: &str) -> Option<String> {

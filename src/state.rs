@@ -264,6 +264,12 @@ pub struct ServerState {
     tool_invocation_counts: std::sync::Mutex<std::collections::HashMap<String, u64>>,
     /// Instant when the server was started.
     started_at: std::time::Instant,
+    /// Counters for operational metrics
+    ast_cache_hits: std::sync::atomic::AtomicU64,
+    ast_cache_misses: std::sync::atomic::AtomicU64,
+    tool_cache_hits: std::sync::atomic::AtomicU64,
+    tool_cache_misses: std::sync::atomic::AtomicU64,
+    tool_concurrency_rejections: std::sync::atomic::AtomicU64,
 }
 
 impl ServerState {
@@ -385,6 +391,11 @@ impl ServerState {
             tool_concurrency: tokio::sync::Semaphore::new(tool_max_concurrency),
             tool_invocation_counts: std::sync::Mutex::new(std::collections::HashMap::new()),
             started_at: std::time::Instant::now(),
+            ast_cache_hits: std::sync::atomic::AtomicU64::new(0),
+            ast_cache_misses: std::sync::atomic::AtomicU64::new(0),
+            tool_cache_hits: std::sync::atomic::AtomicU64::new(0),
+            tool_cache_misses: std::sync::atomic::AtomicU64::new(0),
+            tool_concurrency_rejections: std::sync::atomic::AtomicU64::new(0),
         };
 
         Ok(Arc::new(state))
@@ -541,6 +552,12 @@ impl ServerState {
     pub async fn get_analysis(&self, path: &Path) -> Result<analyzer::FileAnalysis> {
         let path_buf = path.to_path_buf();
 
+        if self.ast_cache.contains_key(&path_buf) {
+            self.record_ast_cache_hit();
+        } else {
+            self.record_ast_cache_miss();
+        }
+
         let cached = self
             .ast_cache
             .get_with(path_buf.clone(), async move {
@@ -600,10 +617,7 @@ impl ServerState {
     }
 
     pub fn invalidate_tool_cache_for_file(&self, path: &Path) {
-        let canonical_path = match std::fs::canonicalize(path) {
-            Ok(p) => p,
-            Err(_) => path.to_path_buf(),
-        };
+        let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
         let canonical_text = canonical_path.to_string_lossy().to_string();
         let _ = self
@@ -612,10 +626,8 @@ impl ServerState {
     }
 
     pub fn invalidate_tool_cache_for_root(&self, root_path: &Path) {
-        let canonical_root = match std::fs::canonicalize(root_path) {
-            Ok(p) => p,
-            Err(_) => root_path.to_path_buf(),
-        };
+        let canonical_root =
+            std::fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
         debug!(root_path = %canonical_root.display(), "Invalidating tool cache for root");
         let _ = self
             .tool_cache
@@ -727,6 +739,46 @@ impl ServerState {
 
     pub fn uptime_seconds(&self) -> u64 {
         self.started_at.elapsed().as_secs()
+    }
+
+    pub fn record_ast_cache_hit(&self) {
+        self.ast_cache_hits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn record_ast_cache_miss(&self) {
+        self.ast_cache_misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn record_tool_cache_hit(&self) {
+        self.tool_cache_hits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn record_tool_cache_miss(&self) {
+        self.tool_cache_misses
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn record_tool_concurrency_rejection(&self) {
+        self.tool_concurrency_rejections
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn get_operational_metrics(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.ast_cache_hits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.ast_cache_misses
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.tool_cache_hits
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.tool_cache_misses
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.tool_concurrency_rejections
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 }
 

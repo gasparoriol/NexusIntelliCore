@@ -166,6 +166,7 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
         {
             Some(permit)
         } else {
+            state.record_tool_concurrency_rejection();
             tracing::warn!(tool = %name, "Tool rejected: concurrency limit exceeded");
             return Ok(error_response(format!(
                 "Tool '{name}' is temporarily unavailable: server is processing too many \
@@ -186,6 +187,12 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     let name_for_compute = name.to_owned();
 
     let cache = state.tool_cache();
+    if cache.contains_key(&key) {
+        state.record_tool_cache_hit();
+    } else {
+        state.record_tool_cache_miss();
+    }
+
     let result = cache
         .get_with(key.clone(), async move {
             // Inside the cache closure we still need state — re-acquire it here.

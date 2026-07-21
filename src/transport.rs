@@ -63,11 +63,8 @@ where
         }
 
         let trace_enabled = stdin_trace_enabled();
-
         if trace_enabled {
-            warn!(
-                "MCP stdin trace enabled: waiting for header lines (expecting Content-Length framing)"
-            );
+            warn!("MCP stdin trace enabled: waiting for header lines (expecting Content-Length framing)");
         }
 
         let Some(headers) = self.read_headers(trace_enabled).await? else {
@@ -81,29 +78,23 @@ where
         }
 
         let content_length = extract_content_length(&headers)?;
-
         if trace_enabled {
-            warn!(
-                headers = ?headers,
-                content_length,
-                "MCP stdin trace: parsed headers"
-            );
+            warn!(headers = ?headers, content_length, "MCP stdin trace: parsed headers");
         }
 
-        if content_length == 0 {
-            return Err(anyhow!("Content-Length must be greater than 0"));
-        }
+        validate_content_length(content_length)?;
+        let msg = self.read_body(content_length, trace_enabled).await?;
 
-        if content_length > MAX_MESSAGE_SIZE {
-            return Err(anyhow!(
-                "Content-Length exceeds maximum: {content_length} > {MAX_MESSAGE_SIZE}"
-            ));
-        }
+        debug!("Message received via MCP transport");
+        Ok(Some(msg))
+    }
 
-        // `read_exact` first drains any bytes already in BufReader's internal
-        // buffer, then reads the remainder directly from the underlying source.
-        // Any bytes belonging to the *next* message are left untouched in the
-        // buffer and will be available on the following `read_message` call.
+    /// Reads exactly `content_length` bytes from the buffered reader and
+    /// parses the result as JSON.
+    ///
+    /// `BufReader` drains its internal buffer first, so pipelined messages are
+    /// never lost.
+    async fn read_body(&mut self, content_length: usize, trace_enabled: bool) -> Result<Value> {
         let mut body = vec![0u8; content_length];
         self.reader.read_exact(&mut body).await.map_err(|e| {
             anyhow!("EOF while reading body (expected {content_length} bytes): {e}")
@@ -112,17 +103,10 @@ where
         if trace_enabled {
             let preview_len = body.len().min(256);
             let preview = String::from_utf8_lossy(&body[..preview_len]).to_string();
-            warn!(
-                body_bytes = body.len(),
-                preview = %preview,
-                "MCP stdin trace: body received"
-            );
+            warn!(body_bytes = body.len(), preview = %preview, "MCP stdin trace: body received");
         }
 
-        let msg = serde_json::from_slice(&body).map_err(|e| anyhow!("JSON parse error: {e}"))?;
-
-        debug!("Message received via MCP transport");
-        Ok(Some(msg))
+        serde_json::from_slice(&body).map_err(|e| anyhow!("JSON parse error: {e}"))
     }
 
     async fn read_headers(
@@ -281,7 +265,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// Private helper
+// Private helpers
 // ---------------------------------------------------------------------------
 
 fn extract_content_length(headers: &HashMap<String, String>) -> Result<usize> {
@@ -292,6 +276,20 @@ fn extract_content_length(headers: &HashMap<String, String>) -> Result<usize> {
     value
         .parse::<usize>()
         .map_err(|_| anyhow!("Content-Length is not a valid number: {value}"))
+}
+
+/// Rejects a `Content-Length` value that would produce an empty or
+/// oversized allocation before any I/O is attempted.
+fn validate_content_length(content_length: usize) -> Result<()> {
+    if content_length == 0 {
+        return Err(anyhow!("Content-Length must be greater than 0"));
+    }
+    if content_length > MAX_MESSAGE_SIZE {
+        return Err(anyhow!(
+            "Content-Length exceeds maximum: {content_length} > {MAX_MESSAGE_SIZE}"
+        ));
+    }
+    Ok(())
 }
 
 fn stdin_trace_enabled() -> bool {

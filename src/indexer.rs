@@ -60,10 +60,9 @@ impl FileIndex {
     /// Returns `true` when `path` is covered by a `.mcpignore` rule.
     pub fn is_restricted(&self, path: &Path) -> bool {
         let rel = path.strip_prefix(&self.root).unwrap_or(path);
-        match &self.mcpignore_matcher {
-            Some(matcher) => matcher.is_match(rel),
-            None => false,
-        }
+        self.mcpignore_matcher
+            .as_ref()
+            .is_some_and(|matcher| matcher.is_match(rel))
     }
 
     /// Strip the root prefix so paths are relative for display.
@@ -203,14 +202,15 @@ impl TreeNode {
 
 fn load_mcpignore(root: &Path) -> Vec<String> {
     let path = root.join(".mcpignore");
-    match std::fs::read_to_string(&path) {
-        Ok(content) => content
-            .lines()
-            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-            .map(|l| l.trim().to_owned())
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+    std::fs::read_to_string(&path)
+        .map(|content| {
+            content
+                .lines()
+                .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+                .map(|l| l.trim().to_owned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn build_glob_set(patterns: &[String]) -> Result<Option<GlobSet>> {
@@ -272,10 +272,7 @@ fn walk_files(root: &Path, matcher: Option<&GlobSet>) -> Result<(Vec<PathBuf>, V
             continue;
         }
 
-        let is_restricted = match matcher {
-            Some(m) => m.is_match(rel),
-            None => false,
-        };
+        let is_restricted = matcher.as_ref().is_some_and(|m| m.is_match(rel));
 
         if is_restricted {
             restricted.push(path);
