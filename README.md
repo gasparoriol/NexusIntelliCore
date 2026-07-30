@@ -60,7 +60,7 @@ The server exposes twelve MCP tools:
 2. `get_file_outline` — structural map of a file (signatures, types, imports, doc-comments)
 3. `get_module_summary` — module-level doc-comments and public API
 4. `inspect_symbol` — sanitized source of a specific function or method
-5. `get_dependencies_graph` — import graph between modules
+5. `get_dependencies_graph` — import graph between modules, including dependency-cycle alerts
 6. `search_design_patterns` — heuristic design-pattern detection
 7. `audit_security_measures` — secret scanning and insecure-code detection
 8. `analyze_angular_component` — full Angular component analysis (TS + HTML + CSS)
@@ -68,6 +68,21 @@ The server exposes twelve MCP tools:
 10. `get_server_stats` — operational stats (cache entries, indexed files, uptime)
 11. `generate_project_docs` — auto-generate structured Markdown documentation from AST analysis
 12. `lint_file` — hybrid linting for a file (tree-sitter checks always available; external linters are opt-in)
+
+#### Dependency Graph Cycle Detection
+
+`get_dependencies_graph` now reports circular dependencies using strongly connected components (SCC) over the directed file dependency graph.
+
+- Cycle detection is computed from project-file edges (`internal` and `restricted` dependencies).
+- Results are included in a top-level `dependency_cycles` array.
+- Each cycle entry includes:
+  - `files`: list of files in the cycle
+  - `size`: number of files in that cycle
+- Aggregate cycle metadata is exposed at `meta.alerts`:
+  - `dependency_cycles_detected`
+  - `cycle_sizes`
+
+The detected cycles reflect the same active filters as the graph itself (`scope_path`, `depth`, `direction`, and dependency-type flags).
 
 #### Security Audit Coverage (AST)
 

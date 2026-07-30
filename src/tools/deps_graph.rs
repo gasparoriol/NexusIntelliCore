@@ -1,6 +1,9 @@
 use anyhow::Result;
+use petgraph::algo::kosaraju_scc;
+use petgraph::graph::DiGraph;
+use petgraph::graph::NodeIndex;
 use serde_json::{json, Value};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -397,6 +400,57 @@ fn graph_to_nodes_edges(
     (nodes, edges)
 }
 
+fn detect_dependency_cycles(file_deps: &serde_json::Map<String, Value>) -> Vec<Vec<String>> {
+    let mut graph: DiGraph<String, ()> = DiGraph::new();
+    let mut node_by_file: HashMap<String, NodeIndex> = HashMap::new();
+
+    for file in file_deps.keys() {
+        let node = graph.add_node(file.clone());
+        node_by_file.insert(file.clone(), node);
+    }
+
+    for (source, deps_obj) in file_deps {
+        let Some(&source_node) = node_by_file.get(source) else {
+            continue;
+        };
+
+        if let Some(obj) = deps_obj.as_object() {
+            for key in ["internal", "restricted"] {
+                if let Some(arr) = obj.get(key).and_then(Value::as_array) {
+                    for dep in arr {
+                        let Some(dep_file) = dep.as_str() else {
+                            continue;
+                        };
+                        if let Some(&target_node) = node_by_file.get(dep_file) {
+                            graph.add_edge(source_node, target_node, ());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cycles: Vec<Vec<String>> = Vec::new();
+
+    for component in kosaraju_scc(&graph) {
+        if component.len() > 1 {
+            let mut files: Vec<String> = component.iter().map(|idx| graph[*idx].clone()).collect();
+            files.sort();
+            cycles.push(files);
+            continue;
+        }
+
+        if let Some(node) = component.first() {
+            if graph.contains_edge(*node, *node) {
+                cycles.push(vec![graph[*node].clone()]);
+            }
+        }
+    }
+
+    cycles.sort();
+    cycles
+}
+
 fn ensure_budget(mut graph: Value, max_bytes: usize) -> (Value, usize, bool, Option<String>) {
     let mut bytes = serde_json::to_string(&graph)
         .ok()
@@ -543,14 +597,21 @@ pub(super) async fn get_dependencies_graph(
     };
 
     let file_deps = apply_depth_limit(&file_deps, &params);
+    let dependency_cycles = detect_dependency_cycles(&file_deps);
 
     let summary = generate_summary(&file_deps, &params);
     let summary_mode = params.mode == "summary";
     let (nodes, edges) = graph_to_nodes_edges(&file_deps, summary_mode);
+    let cycle_count = dependency_cycles.len();
+    let cycle_sizes: Vec<usize> = dependency_cycles.iter().map(std::vec::Vec::len).collect();
 
     let output = json!({
         "nodes": nodes,
         "edges": edges,
+        "dependency_cycles": dependency_cycles
+            .iter()
+            .map(|files| json!({ "files": files, "size": files.len() }))
+            .collect::<Vec<_>>(),
         "meta": {
             "format": "nodes_edges_meta",
             "applied_filters": {
@@ -568,6 +629,10 @@ pub(super) async fn get_dependencies_graph(
                 "response_budget_bytes": if summary_mode { MAX_RESPONSE_BYTES } else { MAX_GRAPH_RESPONSE_BYTES },
             },
             "summary": summary,
+            "alerts": {
+                "dependency_cycles_detected": cycle_count,
+                "cycle_sizes": cycle_sizes,
+            },
             "truncated": false,
             "truncation_reason": Value::Null,
         }
@@ -1335,5 +1400,67 @@ mod tests {
         assert!(truncated);
         assert!(bytes <= 120);
         assert!(reason.is_some());
+    }
+
+    #[test]
+    fn test_detect_dependency_cycles_finds_two_node_cycle() {
+        let mut file_deps: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        file_deps.insert(
+            "a.rs".to_string(),
+            json!({
+                "internal": ["b.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+        file_deps.insert(
+            "b.rs".to_string(),
+            json!({
+                "internal": ["a.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+
+        let cycles = detect_dependency_cycles(&file_deps);
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0], vec!["a.rs".to_string(), "b.rs".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_dependency_cycles_ignores_acyclic_graph() {
+        let mut file_deps: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        file_deps.insert(
+            "a.rs".to_string(),
+            json!({
+                "internal": ["b.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+        file_deps.insert(
+            "b.rs".to_string(),
+            json!({
+                "internal": ["c.rs"],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+        file_deps.insert(
+            "c.rs".to_string(),
+            json!({
+                "internal": [],
+                "restricted": [],
+                "external": [],
+                "unresolved": []
+            }),
+        );
+
+        let cycles = detect_dependency_cycles(&file_deps);
+        assert!(cycles.is_empty());
     }
 }
