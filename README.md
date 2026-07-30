@@ -45,6 +45,13 @@ All tool outputs pass through a centralized Privacy Gateway.
 - **Tool Query Cache**: Caches final outputs of deterministic tools using `moka::future::Cache` to avoid re-analysing files when project code is unchanged. Purgings are immediate on file watcher events and concurrent misses are deduplicated.
 - **Dynamic Tool Discovery**: Scans project root on startup; if Angular is not detected (`angular.json` or `@angular/` package dependencies), the `analyze_angular_component` tool is dynamically hidden from the client to reduce context noise and model hallucinations.
 
+#### `.mcpignore` Reactive Refresh
+
+- The file watcher treats `.mcpignore` changes as topology-impacting events and schedules a full index refresh.
+- A watcher-triggered refresh rebuilds both `allowed_files` and `restricted_files` from disk and invalidates the tool cache for the project root.
+- Regular file content changes still evict AST entries and invalidate matching tool-cache keys.
+- Manual fallback remains available through `refresh_index` when watcher events are unavailable in the runtime environment.
+
 ### Analysis Tools
 
 The server exposes twelve MCP tools:
@@ -61,6 +68,27 @@ The server exposes twelve MCP tools:
 10. `get_server_stats` — operational stats (cache entries, indexed files, uptime)
 11. `generate_project_docs` — auto-generate structured Markdown documentation from AST analysis
 12. `lint_file` — hybrid linting for a file (tree-sitter checks always available; external linters are opt-in)
+
+#### Security Audit Coverage (AST)
+
+`audit_security_measures` combines regex-based secret detection with AST-based unsafe pattern detection.
+
+AST checks currently include:
+
+- Rust: `unsafe` blocks and unsafe declarations.
+- JavaScript / TypeScript / TSX:
+  - `eval(...)`
+  - `new Function(...)`
+  - assignments to `.innerHTML`
+- Python:
+  - `eval(...)` / `exec(...)`
+  - `subprocess.*(..., shell=True)`
+
+Findings are classified by kind and location (`line`), including:
+
+- `UnsafeCode`
+- `DynamicExecution`
+- `InsecureAssignment`
 
 ### Documentation Generation
 
