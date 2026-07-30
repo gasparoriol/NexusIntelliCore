@@ -46,6 +46,12 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
             schema: schema_query_ast,
         },
         ToolDefinition {
+            name: "read_config_file",
+            cacheable: true,
+            expensive: false,
+            schema: schema_read_config_file,
+        },
+        ToolDefinition {
             name: "search_design_patterns",
             cacheable: true,
             expensive: true,
@@ -274,6 +280,23 @@ fn schema_query_ast() -> Value {
                 }
             },
             "required": ["file_path", "query"]
+        }
+    })
+}
+
+fn schema_read_config_file() -> Value {
+    json!({
+        "name": "read_config_file",
+        "description": "Reads a plain-text configuration file (.properties, .yaml, .yml, .toml, .env) and returns its content with secrets, credentials and IP addresses redacted. Use this instead of reading config files directly, since they carry no tree-sitter grammar and are never covered by AST-based sanitization.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the configuration file to read"
+                }
+            },
+            "required": ["file_path"]
         }
     })
 }

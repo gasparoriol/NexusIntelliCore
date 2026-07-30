@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::privacy_gateway;
 use crate::protocol::{error_response, text_content, tool_response};
+use crate::sanitizer;
 
 fn role_hint_for(language: &str) -> &'static str {
     match language {
@@ -57,6 +58,35 @@ fn append_html_sections(out: &mut String, html_elements: &[crate::analyzer::Html
     }
 }
 
+/// Outline for plain-text configuration files (`.properties`, `.yaml`, `.env`, …).
+/// These have no tree-sitter grammar, so instead of an empty outline this lists
+/// each key with sensitive values redacted via `sanitizer::sanitize_config_text`.
+async fn render_config_outline(path: &Path, file_path: &str) -> Result<Value> {
+    let path_for_read = path.to_path_buf();
+    let source =
+        match tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read)).await {
+            Ok(Ok(content)) => content,
+            Ok(Err(e)) => return Ok(error_response(format!("Cannot read file: {e}"))),
+            Err(e) => return Ok(error_response(format!("Cannot read file: {e}"))),
+        };
+
+    let (sanitized, _redactions) = sanitizer::sanitize_config_text(&source);
+
+    let mut out = String::new();
+    let _ = writeln!(out, "# File outline: {file_path}");
+    out.push_str("Language: config\n\n");
+    out.push_str("## Configuration Keys (sensitive values redacted)\n");
+    for line in sanitized.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
+            continue;
+        }
+        let _ = writeln!(out, "  {line}");
+    }
+
+    Ok(tool_response(vec![text_content(out)]))
+}
+
 pub(super) async fn get_file_outline(
     state: &crate::state::ServerState,
     file_path: &str,
@@ -74,6 +104,10 @@ pub(super) async fn get_file_outline(
         ))]));
     }
     drop(index);
+
+    if sanitizer::is_config_file(&path) {
+        return render_config_outline(&path, file_path).await;
+    }
 
     let analysis = match state.get_analysis(&path).await {
         Ok(a) => a,

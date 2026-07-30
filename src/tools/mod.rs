@@ -10,6 +10,7 @@ use crate::protocol::error_response;
 
 mod angular;
 mod audit;
+mod config_file;
 mod definitions;
 mod deps_graph;
 mod lint;
@@ -93,6 +94,10 @@ async fn dispatch_tool_uncached(
             let file = require_file_path(args)?;
             let query_source = require_str(args, "query")?;
             query_ast::query_ast(state, &file, query_source).await
+        }
+        "read_config_file" => {
+            let file = require_file_path(args)?;
+            config_file::read_config_file(state, &file).await
         }
         "search_design_patterns" => patterns::search_design_patterns(state, args).await,
         "audit_security_measures" => audit::audit_security_measures(state).await,
@@ -380,6 +385,7 @@ mod tests {
             "lint_file",
             "get_dependencies_graph",
             "query_ast",
+            "read_config_file",
             "search_design_patterns",
             "audit_security_measures",
             "refresh_index",
@@ -415,6 +421,7 @@ mod tests {
         assert!(find("inspect_symbol"));
         assert!(find("get_dependencies_graph"));
         assert!(find("query_ast"));
+        assert!(find("read_config_file"));
     }
 
     #[tokio::test]
@@ -474,6 +481,53 @@ mod tests {
             flattened.contains("[REDACTED_BY_MCP]"),
             "captured source should be sanitized by Privacy Gateway"
         );
+
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[tokio::test]
+    async fn read_config_file_route_redacts_secrets() {
+        ensure_state_init();
+
+        let root = env!("CARGO_MANIFEST_DIR");
+        let file = std::path::Path::new(root)
+            .join("tests/fixtures/read_config_file_route_test.properties");
+        std::fs::create_dir_all(file.parent().expect("fixtures parent should exist"))
+            .expect("fixtures directory should exist");
+        std::fs::write(
+            &file,
+            "server.port=8080\nspring.datasource.password=hunter2\nserver.host=8.8.8.8\n",
+        )
+        .expect("fixture file should be written");
+
+        let args = json!({
+            "file_path": file.to_string_lossy()
+        });
+
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "read_config_file", &args)
+            .await
+            .expect("dispatcher should execute read_config_file route");
+
+        let text = response
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        let payload: serde_json::Value =
+            serde_json::from_str(text).expect("read_config_file should return JSON payload");
+        let content = payload
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+
+        assert!(content.contains("server.port=8080"));
+        assert!(!content.contains("hunter2"));
+        assert!(!content.contains("8.8.8.8"));
+        assert!(content.contains("[REDACTED_BY_MCP]"));
 
         let _ = std::fs::remove_file(&file);
     }

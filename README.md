@@ -54,7 +54,7 @@ All tool outputs pass through a centralized Privacy Gateway.
 
 ### Analysis Tools
 
-The server exposes twelve MCP tools:
+The server exposes fourteen MCP tools:
 
 1. `get_project_structure` — directory tree with access-control markers
 2. `get_file_outline` — structural map of a file (signatures, types, imports, doc-comments)
@@ -68,6 +68,8 @@ The server exposes twelve MCP tools:
 10. `get_server_stats` — operational stats (cache entries, indexed files, uptime)
 11. `generate_project_docs` — auto-generate structured Markdown documentation from AST analysis
 12. `lint_file` — hybrid linting for a file (tree-sitter checks always available; external linters are opt-in)
+13. `query_ast` — ad-hoc tree-sitter query against any supported source file, captures sanitized through the Privacy Gateway
+14. `read_config_file` — safe read of configuration files (`.properties`, `.yaml`, `.yml`, `.toml`, `.env`) with automatic secret and IP redaction
 
 #### Dependency Graph Cycle Detection
 
@@ -104,6 +106,51 @@ Findings are classified by kind and location (`line`), including:
 - `UnsafeCode`
 - `DynamicExecution`
 - `InsecureAssignment`
+
+#### Ad-hoc AST Queries (`query_ast`)
+
+`query_ast` lets clients run an arbitrary tree-sitter S-expression query against any source file and receive the matching node captures.
+
+| Parameter   | Type     | Required | Description                                                                      |
+| ----------- | -------- | -------- | -------------------------------------------------------------------------------- |
+| `file_path` | `string` | yes      | Absolute path to the source file to query                                        |
+| `query`     | `string` | yes      | A tree-sitter S-expression query (e.g. `(function_item name: (identifier) @fn)`) |
+
+Each capture in the response includes:
+
+- `capture`: the capture name from the query pattern (e.g. `@fn`)
+- `start` / `end`: `{ row, column }` positions in the source file
+- `text`: the capture text, sanitized through the Privacy Gateway
+- `redactions`: list of pattern labels that fired on that capture
+
+The tool validates the path against the project root and `.mcpignore` before reading, and returns a structured error when the file language has no tree-sitter grammar or the query is malformed.
+
+**Practical use**: pinpoint every call to a specific function, find all type definitions of a given name, or extract string literals from a file — without sending the whole file to the model.
+
+#### Configuration File Safety (`read_config_file`)
+
+`read_config_file` provides a safe, redacted view of plain-text configuration files that have no tree-sitter grammar and would otherwise be read verbatim by the agent.
+
+| Parameter   | Type     | Required | Description                              |
+| ----------- | -------- | -------- | ---------------------------------------- |
+| `file_path` | `string` | yes      | Absolute path to the config file to read |
+
+Accepted extensions: `.properties`, `.yaml`, `.yml`, `.toml`, `.env`, `.env.*`.
+
+Redaction rules applied line-by-line:
+
+- **Sensitive-key redaction**: when the key name matches `password`, `passwd`, `pwd`, `secret`, `token`, `api_key`, `apikey`, `auth`, `credential`, `private`, `cert`, `keystore`, `dsn`, or `connection_string`, the value is replaced with `[REDACTED_BY_MCP]` regardless of its content.
+- **Secret-pattern redaction**: values that match any of the generic secret patterns (API keys, JWT, DB connection URIs, PEM keys, GitHub tokens, …) are redacted even when the key name is neutral.
+- **IPv4 redaction (Option A)**: any IPv4 address in a config value is redacted, except `127.0.0.1` and `0.0.0.0`.
+- **Key and structure preserved**: the key name, indentation, and separator (`=` / `: `) are never altered, so the model can reason about which settings are present without seeing the secret values.
+- **Comments and blank lines**: `#`, `!` comment lines and blank lines pass through unmodified.
+
+The response JSON contains:
+
+- `content`: the sanitized file text
+- `redactions`: list of pattern labels that fired (e.g. `CONFIG_SENSITIVE_KEY`, `DB_CONNECTION_URI`, `CONFIG_IPV4`)
+
+`get_file_outline` applies the same sanitization defensively when called on a config file, returning the key structure without exposing values.
 
 ### Documentation Generation
 
@@ -281,7 +328,7 @@ High-level module responsibilities:
 - `src/relations.rs`: Angular `@Component` decorator parser — resolves `templateUrl` and `styleUrls` to filesystem paths
 - `src/watcher.rs`: file-system watcher (FSEvents/inotify via `notify`); classifies events into cache invalidation or index refresh, with 500 ms debounce for topological changes
 - `src/privacy_gateway.rs`: policy-driven sanitization layer
-- `src/sanitizer.rs`: secret detection/redaction utilities
+- `src/sanitizer.rs`: secret detection/redaction utilities; `sanitize_config_text` for key-value config files; `is_config_file` for format detection
 
 ## Requirements
 

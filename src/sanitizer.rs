@@ -71,6 +71,30 @@ static SECRET_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| 
     ]
 });
 
+/// IPv4 matcher used only for configuration files (Option A): flags every
+/// address so `sanitize_config_text` can redact all but loopback / 0.0.0.0.
+/// Config files (`.properties`, `.yaml`, `.env`) commonly expose real
+/// infrastructure endpoints, unlike source code where public IPs are often
+/// just examples/documentation (see `does_not_redact_public_ip`).
+static CONFIG_IPV4_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap());
+
+/// Config keys that mark their value as sensitive regardless of its content.
+static CONFIG_SENSITIVE_KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)(password|passwd|pwd|secret|token|api[-_.]?key|apikey|auth|credential|private[-_.]?key|keystore|dsn|connection[-_.]?string|access[-_.]?key|client[-_.]?secret)",
+    )
+    .unwrap()
+});
+
+/// Matches a `key = value` / `key: value` config line (`.properties`, `.env`,
+/// simple YAML/TOML), capturing leading indentation, the key, the separator
+/// (with surrounding whitespace) and the value tail.
+static CONFIG_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?P<indent>\s*)(?P<key>[^:=#!\s][^:=]*?)(?P<sep>\s*[:=]\s*)(?P<value>.*)$")
+        .unwrap()
+});
+
 /// Detects the `// @mcp-strip` annotation (Rust / JS / TS / Java style).
 static MCP_STRIP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)//\s*@mcp-strip\b").unwrap());
@@ -158,6 +182,102 @@ pub fn detect_all_secrets(text: &str) -> Vec<(&'static str, usize)> {
 /// `# @mcp-strip` (Python).
 pub fn has_mcp_strip(text: &str) -> bool {
     MCP_STRIP_RE.is_match(text) || MCP_STRIP_PY_RE.is_match(text)
+}
+
+/// Returns `true` when `path` is a plain-text configuration file
+/// (`.properties`, `.yaml`, `.yml`, `.toml`, `.env`). These files have no
+/// tree-sitter grammar and are read verbatim, so callers must route them
+/// through `sanitize_config_text` instead of exposing raw content.
+pub fn is_config_file(path: &std::path::Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase);
+    if matches!(
+        ext.as_deref(),
+        Some("properties" | "yaml" | "yml" | "toml" | "env")
+    ) {
+        return true;
+    }
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name == ".env" || name.starts_with(".env."))
+}
+
+/// Redact a single config value: reuses the generic secret patterns, then
+/// additionally redacts every IPv4 address except loopback and `0.0.0.0`
+/// (IP Option A — config files commonly expose real infrastructure hosts).
+fn redact_config_value(value: &str) -> (String, Vec<String>) {
+    let (mut sanitized, mut fired) = sanitize_text(value);
+
+    if CONFIG_IPV4_RE.is_match(&sanitized) {
+        let redacted = CONFIG_IPV4_RE
+            .replace_all(&sanitized, |caps: &regex::Captures<'_>| {
+                let ip = &caps[0];
+                if ip == "127.0.0.1" || ip == "0.0.0.0" {
+                    ip.to_owned()
+                } else {
+                    "[REDACTED_BY_MCP]".to_owned()
+                }
+            })
+            .into_owned();
+        if redacted != sanitized {
+            fired.push("CONFIG_IPV4".to_string());
+        }
+        sanitized = redacted;
+    }
+
+    (sanitized, fired)
+}
+
+/// Sanitize a `.properties` / `.yaml` / `.yml` / `.env` / `.toml` file.
+///
+/// Unlike `sanitize_text` (used for source code), this parses each line as a
+/// `key = value` / `key: value` pair: the value is fully redacted when the
+/// key name looks sensitive (password, secret, token, api_key, …), otherwise
+/// it is scanned with the generic secret patterns plus IPv4 detection.
+/// Comment lines (`#`, `!`) and key-only lines are preserved unchanged.
+///
+/// Returns `(sanitized_text, list_of_pattern_labels_that_fired)`.
+pub fn sanitize_config_text(text: &str) -> (String, Vec<String>) {
+    let mut fired: Vec<String> = Vec::new();
+    let mut out_lines = Vec::with_capacity(text.lines().count());
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('!') {
+            out_lines.push(line.to_owned());
+            continue;
+        }
+
+        let Some(caps) = CONFIG_KV_RE.captures(line) else {
+            let (sanitized, line_fired) = redact_config_value(line);
+            fired.extend(line_fired);
+            out_lines.push(sanitized);
+            continue;
+        };
+
+        let indent = &caps["indent"];
+        let key = &caps["key"];
+        let sep = &caps["sep"];
+        let value = &caps["value"];
+
+        if value.trim().is_empty() {
+            out_lines.push(line.to_owned());
+            continue;
+        }
+
+        if CONFIG_SENSITIVE_KEY_RE.is_match(key) {
+            fired.push("CONFIG_SENSITIVE_KEY".to_string());
+            out_lines.push(format!("{indent}{key}{sep}[REDACTED_BY_MCP]"));
+        } else {
+            let (sanitized_value, value_fired) = redact_config_value(value);
+            fired.extend(value_fired);
+            out_lines.push(format!("{indent}{key}{sep}{sanitized_value}"));
+        }
+    }
+
+    (out_lines.join("\n"), fired)
 }
 
 /// Remove comments that contain sensitive metadata (employee data, etc.).
@@ -417,6 +537,73 @@ mod tests {
     fn handles_unicode_without_panic() {
         let (out, _) = sanitize_text("// コメント: password = \"日本語テスト12345678\"");
         assert!(out.contains("[REDACTED_BY_MCP]"));
+    }
+
+    #[test]
+    fn is_config_file_matches_known_extensions_and_dotenv_names() {
+        use std::path::Path;
+        assert!(is_config_file(Path::new("application.properties")));
+        assert!(is_config_file(Path::new("application-prod.yaml")));
+        assert!(is_config_file(Path::new("values.yml")));
+        assert!(is_config_file(Path::new("Cargo.toml")));
+        assert!(is_config_file(Path::new(".env")));
+        assert!(is_config_file(Path::new(".env.production")));
+        assert!(!is_config_file(Path::new("main.rs")));
+    }
+
+    #[test]
+    fn sanitize_config_text_redacts_sensitive_key_regardless_of_value() {
+        let (out, fired) = sanitize_config_text("spring.datasource.password=hunter2");
+        assert!(out.contains("spring.datasource.password=[REDACTED_BY_MCP]"));
+        assert!(fired.contains(&"CONFIG_SENSITIVE_KEY".to_string()));
+    }
+
+    #[test]
+    fn sanitize_config_text_redacts_public_ip_in_config_value() {
+        let (out, fired) = sanitize_config_text("server.host=8.8.8.8");
+        assert!(out.contains("server.host=[REDACTED_BY_MCP]"));
+        assert!(fired.contains(&"CONFIG_IPV4".to_string()));
+    }
+
+    #[test]
+    fn sanitize_config_text_keeps_loopback_and_any_address() {
+        let (out, _) = sanitize_config_text("server.host=127.0.0.1\nbind.addr=0.0.0.0");
+        assert!(out.contains("server.host=127.0.0.1"));
+        assert!(out.contains("bind.addr=0.0.0.0"));
+    }
+
+    #[test]
+    fn sanitize_config_text_redacts_db_uri_and_preserves_key() {
+        let (out, _) =
+            sanitize_config_text("spring.datasource.url=jdbc:mysql://user:pass@10.0.0.5:3306/prod");
+        assert!(out.starts_with("spring.datasource.url="));
+        assert!(out.contains("[REDACTED_BY_MCP]"));
+        assert!(!out.contains("pass@10.0.0.5"));
+    }
+
+    #[test]
+    fn sanitize_config_text_preserves_comments_and_non_sensitive_keys() {
+        let (out, fired) =
+            sanitize_config_text("# this is a comment\nserver.port=8080\n! bang comment");
+        assert!(out.contains("# this is a comment"));
+        assert!(out.contains("server.port=8080"));
+        assert!(out.contains("! bang comment"));
+        assert!(fired.is_empty());
+    }
+
+    #[test]
+    fn sanitize_config_text_handles_yaml_indentation() {
+        let (out, fired) = sanitize_config_text("spring:\n  datasource:\n    password: hunter2\n");
+        assert!(out.contains("spring:"));
+        assert!(out.contains("    password: [REDACTED_BY_MCP]"));
+        assert!(fired.contains(&"CONFIG_SENSITIVE_KEY".to_string()));
+    }
+
+    #[test]
+    fn sanitize_config_text_redacts_env_style_keys() {
+        let (out, fired) = sanitize_config_text("API_KEY=sk-abcdefghijklmnopqrstuvwxyz123456");
+        assert!(out.contains("API_KEY=[REDACTED_BY_MCP]"));
+        assert!(!fired.is_empty());
     }
 
     #[test]
