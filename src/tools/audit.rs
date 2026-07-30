@@ -14,10 +14,11 @@ pub(super) async fn audit_security_measures(state: &crate::state::ServerState) -
 
     #[derive(Default)]
     struct Report {
-        secrets: Vec<String>,       // (file, line, secret_type) — NO values
-        unsafe_blocks: Vec<String>, // Rust unsafe (AST-based)
-        eval_calls: Vec<String>,    // Python/JS eval/exec (AST-based)
-        sql_risks: Vec<String>,     // potential SQL injection (text heuristic)
+        secrets: Vec<String>,              // (file, line, secret_type) — NO values
+        unsafe_blocks: Vec<String>,        // Rust unsafe (AST-based)
+        eval_calls: Vec<String>,           // Python/JS eval/exec (AST-based)
+        insecure_assignments: Vec<String>, // Dangerous assignments (AST-based)
+        sql_risks: Vec<String>,            // potential SQL injection (text heuristic)
     }
 
     let mut report = Report::default();
@@ -65,6 +66,12 @@ pub(super) async fn audit_security_measures(state: &crate::state::ServerState) -
                 }
                 analyzer::AuditFindingKind::DynamicExecution => {
                     report.eval_calls.push(format!(
+                        "  ⚠ {} in {rel} at line {}",
+                        finding.description, finding.line
+                    ));
+                }
+                analyzer::AuditFindingKind::InsecureAssignment => {
+                    report.insecure_assignments.push(format!(
                         "  ⚠ {} in {rel} at line {}",
                         finding.description, finding.line
                     ));
@@ -134,6 +141,18 @@ pub(super) async fn audit_security_measures(state: &crate::state::ServerState) -
     }
     out.push('\n');
 
+    // insecure assignments
+    out.push_str("## Insecure Assignments\n");
+    if report.insecure_assignments.is_empty() {
+        out.push_str("  ✓ No insecure assignments detected.\n");
+    } else {
+        for s in &report.insecure_assignments {
+            out.push_str(s);
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+
     // SQL injection
     out.push_str("## SQL Injection Risks\n");
     if report.sql_risks.is_empty() {
@@ -149,6 +168,7 @@ pub(super) async fn audit_security_measures(state: &crate::state::ServerState) -
     let total_issues = report.secrets.len()
         + report.unsafe_blocks.len()
         + report.eval_calls.len()
+        + report.insecure_assignments.len()
         + report.sql_risks.len();
     let _ = write!(out, "\n## Summary\nTotal issues found: {total_issues}\n");
 

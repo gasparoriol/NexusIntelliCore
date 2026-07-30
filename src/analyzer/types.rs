@@ -129,6 +129,8 @@ pub enum AuditFindingKind {
     UnsafeCode,
     /// `eval()` / `exec()` / `compile()` dynamic execution call.
     DynamicExecution,
+    /// Assignment to a dangerous sink (for example `innerHTML = ...`).
+    InsecureAssignment,
 }
 
 /// A single AST-derived security finding with source location.

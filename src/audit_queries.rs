@@ -66,6 +66,24 @@ pub const JS_EVAL_QUERY: &str = r#"
   @eval_call
 "#;
 
+/// Detects `new Function(...)` constructor usage in JS/TS.
+pub const JS_NEW_FUNCTION_QUERY: &str = r#"
+  (new_expression
+    constructor: (identifier) @fn_name
+    (#eq? @fn_name "Function"))
+  @new_function_call
+"#;
+
+/// Detects assignments to `.innerHTML` in JS/TS.
+pub const JS_INNER_HTML_ASSIGN_QUERY: &str = r#"
+  (assignment_expression
+    left: (member_expression
+      property: (property_identifier) @prop
+      (#eq? @prop "innerHTML"))
+    right: (_))
+  @inner_html_assign
+"#;
+
 // ---------------------------------------------------------------------------
 // Python
 // ---------------------------------------------------------------------------
@@ -83,6 +101,22 @@ pub const PYTHON_EVAL_EXEC_QUERY: &str = r#"
     function: (identifier) @fn_name
     (#match? @fn_name "^(eval|exec)$"))
   @dangerous_call
+"#;
+
+/// Detects `subprocess.*(..., shell=True)` calls in Python.
+pub const PYTHON_SUBPROCESS_SHELL_TRUE_QUERY: &str = r#"
+  (call
+    function: (attribute
+      object: (identifier) @module
+      attribute: (identifier) @fn_name)
+    arguments: (argument_list
+      (keyword_argument
+        name: (identifier) @kw_name
+        value: (_) @kw_value
+        (#eq? @kw_name "shell")
+        (#match? @kw_value "^(True|true)$")))
+    (#eq? @module "subprocess"))
+  @subprocess_shell_true
 "#;
 
 // ---------------------------------------------------------------------------
@@ -155,5 +189,23 @@ mod tests {
     fn tsx_eval_query_is_valid() {
         let lang = tree_sitter_typescript::language_tsx();
         assert!(Query::new(&lang, JS_EVAL_QUERY).is_ok());
+    }
+
+    #[test]
+    fn js_new_function_query_is_valid() {
+        let lang = tree_sitter_javascript::language();
+        assert!(Query::new(&lang, JS_NEW_FUNCTION_QUERY).is_ok());
+    }
+
+    #[test]
+    fn ts_inner_html_assign_query_is_valid() {
+        let lang = tree_sitter_typescript::language_typescript();
+        assert!(Query::new(&lang, JS_INNER_HTML_ASSIGN_QUERY).is_ok());
+    }
+
+    #[test]
+    fn python_subprocess_shell_true_query_is_valid() {
+        let lang = tree_sitter_python::language();
+        assert!(Query::new(&lang, PYTHON_SUBPROCESS_SHELL_TRUE_QUERY).is_ok());
     }
 }

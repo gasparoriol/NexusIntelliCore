@@ -2,6 +2,31 @@ use super::lang::{EvalMode, LanguageGrammar};
 use super::types::{AuditFinding, AuditFindingKind};
 use tree_sitter::{Parser, Query, QueryCursor};
 
+fn push_findings_for_query(
+    findings: &mut Vec<AuditFinding>,
+    query_str: &str,
+    kind: AuditFindingKind,
+    description: &str,
+    ts_lang: &tree_sitter::Language,
+    root: tree_sitter::Node<'_>,
+    source_bytes: &[u8],
+) {
+    let Ok(query) = Query::new(ts_lang, query_str) else {
+        return;
+    };
+
+    let mut cursor = QueryCursor::new();
+    for m in cursor.matches(&query, root, source_bytes) {
+        if let Some(cap) = m.captures.first() {
+            findings.push(AuditFinding {
+                kind: kind.clone(),
+                line: cap.node.start_position().row + 1,
+                description: description.to_owned(),
+            });
+        }
+    }
+}
+
 /// Run AST-based security checks on `source` for the given `lang`.
 ///
 /// Returns only findings where the tree-sitter query matches an *actual*
@@ -59,27 +84,71 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
         }
     }
 
-    // --- Dynamic execution (eval/exec) ---
-    let eval_query_str = lang
-        .get_query(EvalMode::Exec)
-        .or_else(|| lang.get_query(EvalMode::Basic));
-    if let Some(qstr) = eval_query_str {
-        if let Ok(query) = Query::new(&ts_lang, qstr) {
-            let mut cursor = QueryCursor::new();
-            for m in cursor.matches(&query, tree.root_node(), source_bytes) {
-                if let Some(cap) = m.captures.first() {
-                    let line = cap.node.start_position().row + 1;
-                    let name = std::str::from_utf8(
-                        &source_bytes[cap.node.start_byte()..cap.node.end_byte()],
-                    )
-                    .unwrap_or("eval")
-                    .to_owned();
-                    findings.push(AuditFinding {
-                        kind: AuditFindingKind::DynamicExecution,
-                        line,
-                        description: format!("{name}() call"),
-                    });
-                }
+    // --- Dynamic execution and dangerous sinks ---
+    match lang.name() {
+        "javascript" | "typescript" | "tsx" => {
+            push_findings_for_query(
+                &mut findings,
+                crate::audit_queries::JS_EVAL_QUERY,
+                AuditFindingKind::DynamicExecution,
+                "eval() call",
+                &ts_lang,
+                tree.root_node(),
+                source_bytes,
+            );
+            push_findings_for_query(
+                &mut findings,
+                crate::audit_queries::JS_NEW_FUNCTION_QUERY,
+                AuditFindingKind::DynamicExecution,
+                "new Function() call",
+                &ts_lang,
+                tree.root_node(),
+                source_bytes,
+            );
+            push_findings_for_query(
+                &mut findings,
+                crate::audit_queries::JS_INNER_HTML_ASSIGN_QUERY,
+                AuditFindingKind::InsecureAssignment,
+                "innerHTML assignment",
+                &ts_lang,
+                tree.root_node(),
+                source_bytes,
+            );
+        }
+        "python" => {
+            push_findings_for_query(
+                &mut findings,
+                crate::audit_queries::PYTHON_EVAL_EXEC_QUERY,
+                AuditFindingKind::DynamicExecution,
+                "eval/exec call",
+                &ts_lang,
+                tree.root_node(),
+                source_bytes,
+            );
+            push_findings_for_query(
+                &mut findings,
+                crate::audit_queries::PYTHON_SUBPROCESS_SHELL_TRUE_QUERY,
+                AuditFindingKind::DynamicExecution,
+                "subprocess shell=True call",
+                &ts_lang,
+                tree.root_node(),
+                source_bytes,
+            );
+        }
+        _ => {
+            let eval_query_str = lang
+                .get_query(EvalMode::Exec)
+                .or_else(|| lang.get_query(EvalMode::Basic));
+            if let Some(qstr) = eval_query_str {
+                push_findings_for_query(
+                    &mut findings,
+                    qstr,
+                    AuditFindingKind::DynamicExecution,
+                    "dynamic execution call",
+                    &ts_lang,
+                    tree.root_node(),
+                    source_bytes,
+                );
             }
         }
     }

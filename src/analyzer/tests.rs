@@ -669,6 +669,77 @@ def run_user_code(user_input):
 }
 
 #[test]
+fn pr4_javascript_new_function_and_eval_generate_dynamic_execution_findings() {
+    let source = r#"
+function buildRunner(code) {
+    const runner = new Function(code);
+    return eval(code) + runner();
+}
+"#;
+    let findings = audit_file_ast(source, grammar("module.js"));
+    let dynamic_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.kind == AuditFindingKind::DynamicExecution)
+        .collect();
+
+    assert!(
+        dynamic_findings
+            .iter()
+            .any(|f| f.description.contains("new Function") && f.line == 3),
+        "expected new Function() finding at line 3, got: {dynamic_findings:?}"
+    );
+    assert!(
+        dynamic_findings
+            .iter()
+            .any(|f| f.description.contains("eval") && f.line == 4),
+        "expected eval() finding at line 4, got: {dynamic_findings:?}"
+    );
+}
+
+#[test]
+fn pr4_typescript_inner_html_assignment_generates_insecure_assignment_finding() {
+    let source = r#"
+function render(raw: string, node: HTMLElement) {
+    node.innerHTML = raw;
+}
+"#;
+    let findings = audit_file_ast(source, grammar("component.ts"));
+    let sink_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.kind == AuditFindingKind::InsecureAssignment)
+        .collect();
+
+    assert!(
+        sink_findings
+            .iter()
+            .any(|f| f.description.contains("innerHTML") && f.line == 3),
+        "expected innerHTML assignment finding at line 3, got: {sink_findings:?}"
+    );
+}
+
+#[test]
+fn pr4_python_subprocess_shell_true_generates_dynamic_execution_finding() {
+    let source = r#"
+import subprocess
+
+def run(user_input):
+    return subprocess.Popen(user_input, shell=True)
+"#;
+    let findings = audit_file_ast(source, grammar("module.py"));
+    let dynamic_findings: Vec<_> = findings
+        .iter()
+        .filter(|f| f.kind == AuditFindingKind::DynamicExecution)
+        .collect();
+
+    assert!(
+        dynamic_findings
+            .iter()
+            .any(|f| f.description.contains("shell=True") && f.line == 5),
+        "expected subprocess shell=True finding at line 5, got: {dynamic_findings:?}"
+    );
+}
+
+#[test]
 fn go_ast_extracts_functions_and_structs() {
     let dir = std::env::temp_dir();
     let path = dir.join("go_ast_extracts_functions_and_structs.go");
