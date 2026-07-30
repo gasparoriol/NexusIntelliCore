@@ -40,6 +40,12 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
             schema: schema_get_dependencies_graph,
         },
         ToolDefinition {
+            name: "query_ast",
+            cacheable: true,
+            expensive: false,
+            schema: schema_query_ast,
+        },
+        ToolDefinition {
             name: "search_design_patterns",
             cacheable: true,
             expensive: true,
@@ -247,6 +253,27 @@ fn schema_search_design_patterns() -> Value {
                 }
             },
             "required": []
+        }
+    })
+}
+
+fn schema_query_ast() -> Value {
+    json!({
+        "name": "query_ast",
+        "description": "Runs a custom tree-sitter S-expression query against a source file and returns sanitized capture matches with source ranges.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file to query"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Tree-sitter S-expression query string, for example: (call_expression) @call"
+                }
+            },
+            "required": ["file_path", "query"]
         }
     })
 }

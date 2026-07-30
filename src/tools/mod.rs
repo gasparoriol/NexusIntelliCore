@@ -17,6 +17,7 @@ mod outline;
 mod patterns;
 mod project;
 mod project_docs;
+mod query_ast;
 mod server;
 mod summary;
 mod symbol;
@@ -88,6 +89,11 @@ async fn dispatch_tool_uncached(
             lint::lint_file(state, &file).await
         }
         "get_dependencies_graph" => deps_graph::get_dependencies_graph(state, args).await,
+        "query_ast" => {
+            let file = require_file_path(args)?;
+            let query_source = require_str(args, "query")?;
+            query_ast::query_ast(state, &file, query_source).await
+        }
         "search_design_patterns" => patterns::search_design_patterns(state, args).await,
         "audit_security_measures" => audit::audit_security_measures(state).await,
         "refresh_index" => server::refresh_index(state).await,
@@ -373,6 +379,7 @@ mod tests {
             "inspect_symbol",
             "lint_file",
             "get_dependencies_graph",
+            "query_ast",
             "search_design_patterns",
             "audit_security_measures",
             "refresh_index",
@@ -407,6 +414,68 @@ mod tests {
         assert!(find("get_file_outline"));
         assert!(find("inspect_symbol"));
         assert!(find("get_dependencies_graph"));
+        assert!(find("query_ast"));
+    }
+
+    #[tokio::test]
+    async fn query_ast_route_executes_and_sanitizes_captures() {
+        ensure_state_init();
+
+        let root = env!("CARGO_MANIFEST_DIR");
+        let file = std::path::Path::new(root).join("tests/fixtures/query_ast_route_test.rs");
+        std::fs::create_dir_all(file.parent().expect("fixtures parent should exist"))
+            .expect("fixtures directory should exist");
+        std::fs::write(
+            &file,
+            r#"fn main() {
+    println!("sk-abcdefghijklmnopqrstuvwxyz123456");
+}"#,
+        )
+        .expect("fixture file should be written");
+
+        let args = json!({
+            "file_path": file.to_string_lossy(),
+            "query": "(macro_invocation) @call"
+        });
+
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(state, "query_ast", &args)
+            .await
+            .expect("dispatcher should execute query_ast route");
+
+        let text = response
+            .get("content")
+            .and_then(|v| v.as_array())
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        let payload: serde_json::Value =
+            serde_json::from_str(text).expect("query_ast should return JSON payload");
+        let captures = payload
+            .get("captures")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        assert!(
+            !captures.is_empty(),
+            "query_ast should return at least one capture"
+        );
+
+        let flattened = captures
+            .iter()
+            .filter_map(|c| c.get("text").and_then(serde_json::Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            flattened.contains("[REDACTED_BY_MCP]"),
+            "captured source should be sanitized by Privacy Gateway"
+        );
+
+        let _ = std::fs::remove_file(&file);
     }
 
     #[tokio::test]
