@@ -59,10 +59,27 @@ impl FileIndex {
 
     /// Returns `true` when `path` is covered by a `.mcpignore` rule.
     pub fn is_restricted(&self, path: &Path) -> bool {
-        let rel = path.strip_prefix(&self.root).unwrap_or(path);
+        let rel = path
+            .strip_prefix(&self.root)
+            .ok()
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                if !path.is_absolute() {
+                    return None;
+                }
+
+                let canonical_root = std::fs::canonicalize(&self.root).ok()?;
+                let canonical_path = std::fs::canonicalize(path).ok()?;
+                canonical_path
+                    .strip_prefix(canonical_root)
+                    .ok()
+                    .map(Path::to_path_buf)
+            })
+            .unwrap_or_else(|| path.to_path_buf());
+
         self.mcpignore_matcher
             .as_ref()
-            .is_some_and(|matcher| matcher.is_match(rel))
+            .is_some_and(|matcher| matcher.is_match(&rel))
     }
 
     /// Strip the root prefix so paths are relative for display.
@@ -282,4 +299,76 @@ fn walk_files(root: &Path, matcher: Option<&GlobSet>) -> Result<(Vec<PathBuf>, V
     }
 
     Ok((allowed, restricted))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FileIndex;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn make_temp_root(test_name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "nexusintellicore_{test_name}_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&root).expect("temp root should be created");
+        root
+    }
+
+    #[test]
+    fn rebuild_moves_file_from_allowed_to_restricted_after_mcpignore_change() {
+        let root = make_temp_root("rebuild_restriction");
+        let secret = root.join("src/secret.rs");
+        std::fs::create_dir_all(secret.parent().expect("parent should exist"))
+            .expect("src dir should be created");
+        std::fs::write(&secret, "fn hidden() {}\n").expect("fixture file should be written");
+
+        let initial = FileIndex::build(&root).expect("initial index should build");
+        assert!(
+            initial.allowed_files.iter().any(|p| p == &secret),
+            "secret file should start as allowed"
+        );
+        assert!(
+            !initial.restricted_files.iter().any(|p| p == &secret),
+            "secret file should not start as restricted"
+        );
+
+        std::fs::write(root.join(".mcpignore"), "src/secret.rs\n")
+            .expect(".mcpignore should be written");
+
+        let rebuilt = FileIndex::build(&root).expect("rebuilt index should build");
+        assert!(
+            rebuilt.restricted_files.iter().any(|p| p == &secret),
+            "secret file should become restricted after refresh"
+        );
+        assert!(
+            !rebuilt.allowed_files.iter().any(|p| p == &secret),
+            "secret file should leave allowed files after refresh"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn is_restricted_accepts_relative_paths() {
+        let root = make_temp_root("relative_path_check");
+        let secret = root.join("src/secret.rs");
+        std::fs::create_dir_all(secret.parent().expect("parent should exist"))
+            .expect("src dir should be created");
+        std::fs::write(&secret, "fn hidden() {}\n").expect("fixture file should be written");
+        std::fs::write(root.join(".mcpignore"), "src/secret.rs\n")
+            .expect(".mcpignore should be written");
+
+        let index = FileIndex::build(&root).expect("index should build");
+        assert!(index.is_restricted(std::path::Path::new("src/secret.rs")));
+        assert!(index.is_restricted(&secret));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

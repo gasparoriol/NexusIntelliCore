@@ -37,9 +37,18 @@ pub(crate) fn is_rename_modify_kind(kind: ModifyKind) -> bool {
     matches!(kind, ModifyKind::Name(_))
 }
 
+fn touches_mcpignore(paths: &[PathBuf]) -> bool {
+    paths
+        .iter()
+        .any(|path| path.file_name().is_some_and(|name| name == ".mcpignore"))
+}
+
 pub(crate) fn classify_event(event: &Event) -> WatchAction {
     match &event.kind {
         EventKind::Modify(kind) if is_rename_modify_kind(*kind) => {
+            WatchAction::ScheduleIndexRefresh
+        }
+        EventKind::Modify(_) if touches_mcpignore(&event.paths) => {
             WatchAction::ScheduleIndexRefresh
         }
         EventKind::Modify(_) => WatchAction::InvalidateCache(event.paths.clone()),
@@ -260,6 +269,18 @@ mod tests {
         assert!(matches!(
             classify_event(&ev),
             WatchAction::InvalidateCache(_)
+        ));
+    }
+
+    #[test]
+    fn modify_mcpignore_schedules_refresh() {
+        let ev = ev_with_paths(
+            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            vec![PathBuf::from("/tmp/project/.mcpignore")],
+        );
+        assert!(matches!(
+            classify_event(&ev),
+            WatchAction::ScheduleIndexRefresh
         ));
     }
 
