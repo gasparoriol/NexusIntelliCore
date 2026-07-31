@@ -322,6 +322,7 @@ High-level module responsibilities:
 - `src/transport.rs`: stdio framing/parsing and transport I/O
 - `src/protocol.rs`: JSON-RPC protocol types and response helpers
 - `src/tools/mod.rs`: tool registry and tool dispatch implementation
+- `src/tools/deps_graph/`: modular implementation of `get_dependencies_graph` split into import resolution, graph building, cycle detection, and rendering helpers
 - `src/state/mod.rs`: `ServerState` facade that composes cache, index, metrics, path-alias resolution, and watcher-refresh coordination
 - `src/state/cache.rs`: AST cache and tool-response cache management using `moka::future::Cache`, including selective invalidation of cached tool results when a file changes
 - `src/state/index.rs`: `FileIndex` lifecycle management and refresh orchestration
