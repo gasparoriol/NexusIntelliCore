@@ -10,15 +10,27 @@
 /// - Apply @mcp-strip filtering
 /// - Never expose actual secret values, only types + line numbers
 use serde_json::{json, Value};
+use std::sync::{Arc, LazyLock, Mutex};
 use tracing::warn;
 
 use crate::sanitizer;
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 struct DynamicSecurityOverrides {
     custom_redaction_patterns: Vec<String>,
     custom_strip_placeholder: Option<String>,
 }
+
+#[derive(Clone, Debug)]
+struct CompiledPrivacyRules {
+    custom_secret_regexes: Vec<(String, regex::Regex)>,
+    #[allow(dead_code)]
+    strip_placeholder: String,
+}
+
+static COMPILED_PRIVACY_RULES: LazyLock<
+    Mutex<Option<(DynamicSecurityOverrides, Arc<CompiledPrivacyRules>)>>,
+> = LazyLock::new(|| Mutex::new(None));
 
 fn load_dynamic_overrides() -> DynamicSecurityOverrides {
     let mut overrides = DynamicSecurityOverrides::default();
@@ -67,25 +79,56 @@ fn load_dynamic_overrides() -> DynamicSecurityOverrides {
     overrides
 }
 
+fn compile_privacy_rules(overrides: &DynamicSecurityOverrides) -> CompiledPrivacyRules {
+    let mut custom_secret_regexes = Vec::new();
+
+    for pattern in &overrides.custom_redaction_patterns {
+        match regex::Regex::new(pattern) {
+            Ok(re) => custom_secret_regexes.push((pattern.clone(), re)),
+            Err(e) => {
+                warn!(pattern = %pattern, error = %e, "Invalid custom redaction regex ignored");
+            }
+        }
+    }
+
+    CompiledPrivacyRules {
+        custom_secret_regexes,
+        strip_placeholder: overrides
+            .custom_strip_placeholder
+            .clone()
+            .unwrap_or_else(|| sanitizer::DEFAULT_STRIP_PLACEHOLDER.to_string()),
+    }
+}
+
+fn compiled_privacy_rules() -> Arc<CompiledPrivacyRules> {
+    let overrides = load_dynamic_overrides();
+    let mut cache = COMPILED_PRIVACY_RULES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some((cached_overrides, rules)) = &*cache {
+        if *cached_overrides == overrides {
+            return Arc::clone(rules);
+        }
+    }
+
+    let rules = Arc::new(compile_privacy_rules(&overrides));
+    *cache = Some((overrides, Arc::clone(&rules)));
+    rules
+}
+
 fn apply_custom_redaction_patterns(text: &str) -> (String, Vec<String>) {
-    let patterns = load_dynamic_overrides().custom_redaction_patterns;
-    if patterns.is_empty() {
+    let rules = compiled_privacy_rules();
+    if rules.custom_secret_regexes.is_empty() {
         return (text.to_string(), Vec::new());
     }
 
     let mut out = text.to_string();
     let mut fired = Vec::new();
-    for pattern in patterns {
-        match regex::Regex::new(&pattern) {
-            Ok(re) => {
-                if re.is_match(&out) {
-                    out = re.replace_all(&out, "[REDACTED_BY_MCP]").into_owned();
-                    fired.push(format!("CUSTOM_PATTERN:{pattern}"));
-                }
-            }
-            Err(e) => {
-                warn!(pattern = %pattern, error = %e, "Invalid custom redaction regex ignored");
-            }
+    for (pattern, re) in &rules.custom_secret_regexes {
+        if re.is_match(&out) {
+            out = re.replace_all(&out, "[REDACTED_BY_MCP]").into_owned();
+            fired.push(format!("CUSTOM_PATTERN:{pattern}"));
         }
     }
     (out, fired)
@@ -330,6 +373,9 @@ pub fn sanitize_json_args(value: &serde_json::Value, policy: &PrivacyPolicy) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    static PRIVACY_GATEWAY_ENV_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn sanitize_import_with_internal_hostname() {
@@ -495,6 +541,7 @@ mod tests {
 
     #[test]
     fn sanitize_output_text_applies_custom_redaction_pattern() {
+        let _guard = PRIVACY_GATEWAY_ENV_TEST_LOCK.lock().unwrap();
         let orig_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
         let temp_dir = std::env::temp_dir();
         let config_file = temp_dir.join("privacy_gateway_custom_pattern_test.json");
@@ -515,6 +562,50 @@ mod tests {
         let (sanitized, redactions) = sanitize_output_text("ticket=ACME-1234", &policy);
         assert!(sanitized.contains("[REDACTED_BY_MCP]"));
         assert!(redactions.iter().any(|r| r.contains("CUSTOM_PATTERN")));
+
+        let _ = std::fs::remove_file(config_file);
+        if let Some(v) = orig_config {
+            std::env::set_var("MCP_SECURITY_CONFIG_PATH", v);
+        } else {
+            std::env::remove_var("MCP_SECURITY_CONFIG_PATH");
+        }
+    }
+
+    #[test]
+    fn compiled_rules_refresh_when_override_source_changes() {
+        let _guard = PRIVACY_GATEWAY_ENV_TEST_LOCK.lock().unwrap();
+        let orig_config = std::env::var("MCP_SECURITY_CONFIG_PATH").ok();
+        let temp_dir = std::env::temp_dir();
+        let config_file = temp_dir.join("privacy_gateway_custom_pattern_refresh_test.json");
+
+        std::fs::write(
+            &config_file,
+            r#"{
+  "custom_redaction_patterns": ["ACME-[0-9]{4}"]
+}"#,
+        )
+        .unwrap();
+
+        std::env::set_var(
+            "MCP_SECURITY_CONFIG_PATH",
+            config_file.to_string_lossy().to_string(),
+        );
+
+        let policy = PrivacyPolicy::default();
+        let (first, _) = sanitize_output_text("ticket=ACME-1234", &policy);
+        assert!(first.contains("[REDACTED_BY_MCP]"));
+
+        std::fs::write(
+            &config_file,
+            r#"{
+  "custom_redaction_patterns": ["BETA-[0-9]{4}"]
+}"#,
+        )
+        .unwrap();
+
+        let (second, _) = sanitize_output_text("ticket=BETA-9999", &policy);
+        assert!(second.contains("[REDACTED_BY_MCP]"));
+        assert!(!second.contains("BETA-9999"));
 
         let _ = std::fs::remove_file(config_file);
         if let Some(v) = orig_config {
