@@ -1,109 +1,21 @@
 #![allow(clippy::match_same_arms)]
+mod common;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-fn read_single_framed_response(mut reader: std::process::ChildStdout) -> String {
-    let mut responses = Vec::new();
-    let mut buf = [0u8; 8192];
-    let mut accumulated = Vec::new();
-
-    while responses.is_empty() {
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                accumulated.extend_from_slice(&buf[..n]);
-
-                loop {
-                    if accumulated.len() < 4 {
-                        break;
-                    }
-
-                    let mut found_end = false;
-                    let mut header_end = 0;
-                    for i in 0..accumulated.len() - 3 {
-                        if accumulated[i] == b'\r'
-                            && accumulated[i + 1] == b'\n'
-                            && accumulated[i + 2] == b'\r'
-                            && accumulated[i + 3] == b'\n'
-                        {
-                            found_end = true;
-                            header_end = i;
-                            break;
-                        }
-                    }
-
-                    if !found_end {
-                        break;
-                    }
-
-                    let header_str = String::from_utf8_lossy(&accumulated[..header_end]);
-                    let mut content_length = 0;
-                    for line in header_str.lines() {
-                        if let Some(rest) = line.strip_prefix("Content-Length: ") {
-                            if let Ok(n) = rest.parse::<usize>() {
-                                content_length = n;
-                                break;
-                            }
-                        }
-                    }
-
-                    let body_start = header_end + 4;
-                    let body_end = body_start + content_length;
-
-                    if accumulated.len() >= body_end {
-                        let body = String::from_utf8_lossy(&accumulated[body_start..body_end]);
-                        responses.push(body.to_string());
-                        accumulated.drain(..body_end);
-                    } else {
-                        break;
-                    }
-                }
-            }
-            Err(_) => break,
-        }
-    }
-
-    responses.first().cloned().unwrap_or_default()
-}
 
 fn send_single_mcp_request_with_env(
     root: &str,
     request: &str,
     envs: &HashMap<&str, String>,
 ) -> String {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_nexusintellicore"));
-    cmd.arg(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env_remove("MCP_SECURITY_CONFIG_PATH")
-        .env_remove("MCP_AUTH_TOKEN")
-        .env_remove("MCP_ALLOWED_TOOLS")
-        .env_remove("MCP_AUDIT_LOG_PATH");
-
-    for (k, v) in envs {
-        cmd.env(k, v);
-    }
-
-    let mut child = cmd.spawn().expect("Failed to start MCP server");
-
-    let stdin = child.stdin.as_mut().unwrap();
-    let body = request.as_bytes();
-    let header = format!("Content-Length: {}\r\n\r\n", body.len());
-    stdin.write_all(header.as_bytes()).unwrap();
-    stdin.write_all(body).unwrap();
-    stdin.flush().unwrap();
-    drop(child.stdin.take());
-
-    let stdout = child.stdout.take().unwrap();
-    let response = read_single_framed_response(stdout);
-
-    let _ = child.wait(); // Ensure the child process is waited on
-    response
+    let client = envs
+        .iter()
+        .fold(common::TestMcpClient::new(root), |client, (key, value)| {
+            client.with_env(*key, value.as_str())
+        });
+    client.call(request)
 }
 
 fn unique_temp_log_path() -> PathBuf {

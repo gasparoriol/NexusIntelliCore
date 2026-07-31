@@ -408,6 +408,8 @@ Run tests:
 cargo test
 ```
 
+Integration tests share the MCP framing and temporary-workspace helpers in [tests/common/mod.rs](tests/common/mod.rs), which keeps the protocol setup consistent across test crates.
+
 Probe MCP handshake and tool response:
 
 ```bash
