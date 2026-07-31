@@ -155,14 +155,7 @@ pub(super) async fn inspect_symbol(
                     &strip_placeholder,
                 )
             } else {
-                #[allow(deprecated)]
-                {
-                    sanitizer::strip_function_body_with_placeholder(
-                        &func.body_source,
-                        &analysis.language,
-                        &strip_placeholder,
-                    )
-                }
+                func.body_source.clone()
             }
         } else {
             func.body_source.clone()

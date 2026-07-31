@@ -98,12 +98,6 @@ fn sanitize_text_with_dynamic_patterns(text: &str) -> (String, Vec<String>) {
     (sanitized_custom, redactions)
 }
 
-fn dynamic_strip_placeholder() -> String {
-    load_dynamic_overrides()
-        .custom_strip_placeholder
-        .unwrap_or_else(|| sanitizer::DEFAULT_STRIP_PLACEHOLDER.to_string())
-}
-
 /// Policy for what to do when a secret or sensitive pattern is found
 #[derive(Clone, Debug)]
 pub struct PrivacyPolicy {
@@ -113,6 +107,7 @@ pub struct PrivacyPolicy {
     /// If true, redact secret VALUES but show [REDACTED: TYPE]
     pub redact_secrets: bool,
     /// If true, apply @mcp-strip filtering
+    #[allow(dead_code)]
     pub apply_strip_marks: bool,
 
     pub sensitive_keys: Vec<String>,
@@ -195,31 +190,15 @@ pub fn sanitize_doc_comment(comment: &str, policy: &PrivacyPolicy) -> (String, V
 pub fn sanitize_function_source(
     source: &str,
     _signature: &str,
-    language: &str,
-    policy: &PrivacyPolicy,
+    _language: &str,
+    _policy: &PrivacyPolicy,
 ) -> (String, Vec<String>) {
-    let mut sanitized = source.to_string();
     let mut redactions = Vec::new();
 
-    // Step 1: Strip body only when the function is annotated with @mcp-strip.
-    // The check is language-aware: Rust/JS/TS use `// @mcp-strip`,
-    // Python uses `# @mcp-strip`. Stripping unconditionally would hide all
-    // function bodies, defeating the purpose of inspect_symbol.
-    if policy.apply_strip_marks && sanitizer::has_mcp_strip(&sanitized) {
-        #[allow(deprecated)]
-        {
-            sanitized = sanitizer::strip_function_body_with_placeholder(
-                &sanitized,
-                language,
-                &dynamic_strip_placeholder(),
-            );
-        }
-    }
+    // Step 1: Remove sensitive comments
+    let sanitized = sanitizer::strip_sensitive_comments(source);
 
-    // Step 2: Remove sensitive comments
-    sanitized = sanitizer::strip_sensitive_comments(&sanitized);
-
-    // Step 3: Redact secrets
+    // Step 2: Redact secrets
     let (final_sanitized, secret_redactions) = sanitize_text_with_dynamic_patterns(&sanitized);
     redactions.extend(secret_redactions.iter().cloned());
 
@@ -415,8 +394,15 @@ mod tests {
     #[test]
     fn sanitize_function_source_strips_marked_python() {
         let source = "def secret():  # @mcp-strip\n    return os.environ['DB_PASS']\n";
+        // Stripping occurs via AST body byte range before calling sanitize_function_source
+        let stripped = sanitizer::strip_body_by_range(
+            source,
+            (14, source.len()),
+            "python",
+            sanitizer::DEFAULT_STRIP_PLACEHOLDER,
+        );
         let policy = PrivacyPolicy::default();
-        let (sanitized, _) = sanitize_function_source(source, "secret", "python", &policy);
+        let (sanitized, _) = sanitize_function_source(&stripped, "secret", "python", &policy);
         assert!(
             sanitized.contains("def secret"),
             "def line must be preserved. Got: {sanitized}"
