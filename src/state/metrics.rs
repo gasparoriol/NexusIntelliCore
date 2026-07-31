@@ -49,6 +49,7 @@ impl MetricsCollector {
     }
 
     pub fn record_concurrency_rejection(&self) {
-        self.tool_concurrency_rejections.fetch_add(1, Ordering::Relaxed);
+        self.tool_concurrency_rejections
+            .fetch_add(1, Ordering::Relaxed);
     }
 }

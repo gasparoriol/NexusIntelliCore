@@ -28,9 +28,10 @@ struct CompiledPrivacyRules {
     strip_placeholder: String,
 }
 
-static COMPILED_PRIVACY_RULES: LazyLock<
-    Mutex<Option<(DynamicSecurityOverrides, Arc<CompiledPrivacyRules>)>>,
-> = LazyLock::new(|| Mutex::new(None));
+type CachedPrivacyRules = Option<(DynamicSecurityOverrides, Arc<CompiledPrivacyRules>)>;
+
+static COMPILED_PRIVACY_RULES: LazyLock<Mutex<CachedPrivacyRules>> =
+    LazyLock::new(|| Mutex::new(None));
 
 fn load_dynamic_overrides() -> DynamicSecurityOverrides {
     let mut overrides = DynamicSecurityOverrides::default();
