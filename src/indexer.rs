@@ -18,6 +18,7 @@ const MAX_RENDER_DIRS: usize = 8;
 // Public types
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct FileIndex {
     pub root: PathBuf,
     /// Files accessible for analysis.
@@ -34,6 +35,7 @@ impl FileIndex {
     /// This allows the server to start and respond to MCP lifecycle requests
     /// immediately, while the full filesystem walk can be deferred until the
     /// first tool that actually needs indexed files.
+    #[allow(dead_code)]
     pub fn empty(root: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -272,7 +274,9 @@ fn walk_files(root: &Path, matcher: Option<&GlobSet>) -> Result<(Vec<PathBuf>, V
         .build();
 
     for entry in walker {
-        let entry = entry?;
+        let Ok(entry) = entry else {
+            continue;
+        };
         let Some(ft) = entry.file_type() else {
             continue;
         };

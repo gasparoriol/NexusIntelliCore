@@ -48,7 +48,7 @@ fn tool_is_cacheable(name: &str) -> bool {
 
 #[allow(clippy::too_many_lines)] // Routing match table; splitting by sub-groups would only add indirection
 async fn dispatch_tool_uncached(
-    state: &crate::state::ServerState,
+    state: &std::sync::Arc<crate::state::ServerState>,
     name: &str,
     args: &Value,
 ) -> Result<Value> {
@@ -190,34 +190,35 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     // automatically release the permit at the final of the function
 
     if !tool_is_cacheable(name) {
-        return dispatch_tool_uncached(state, name, &args).await;
+        return dispatch_tool_uncached(&state, name, &args).await;
     }
 
     let key = state.make_tool_cache_key(name, &args);
     let args_for_compute = args.clone();
     let name_for_compute = name.to_owned();
 
-    let cache = state.tool_cache();
-    if cache.contains_key(&key) {
+    if state.get_tool_cache(&key).await.is_some() {
         state.record_tool_cache_hit();
     } else {
         state.record_tool_cache_miss();
     }
 
-    let result = cache
-        .get_with(key.clone(), async move {
-            // Inside the cache closure we still need state — re-acquire it here.
-            // This is the one remaining call to get() that cannot be avoided because
-            // the Moka closure is 'static and cannot capture a borrowed &ServerState.
-            let s = crate::state::ServerState::get();
-            dispatch_tool_uncached(s, &name_for_compute, &args_for_compute)
-                .await
-                .unwrap_or_else(|e| error_response(format!("Internal tool error: {e}")))
-        })
-        .await;
+    let result = if let Some(cached) = state.get_tool_cache(&key).await {
+        cached
+    } else {
+        let computed = dispatch_tool_uncached(&state, &name_for_compute, &args_for_compute)
+            .await
+            .unwrap_or_else(|e| error_response(format!("Internal tool error: {e}")));
+
+        if computed.get("isError").and_then(Value::as_bool) != Some(true) {
+            state.insert_tool_cache(key.clone(), computed.clone()).await;
+        }
+
+        computed
+    };
 
     if result.get("isError").and_then(Value::as_bool) == Some(true) {
-        cache.invalidate(&key).await;
+        state.invalidate_tool_cache_for_file(state.root());
     }
 
     Ok(result)
@@ -305,7 +306,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "generate_project_docs", &args)
+        let response = super::dispatch_tool_uncached(&state, "generate_project_docs", &args)
             .await
             .expect("dispatcher should execute generate_project_docs route");
 
@@ -325,7 +326,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "analyze_angular_component", &args)
+        let response = super::dispatch_tool_uncached(&state, "analyze_angular_component", &args)
             .await
             .expect("dispatcher should execute analyze_angular_component route");
 
@@ -352,7 +353,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "analyze_angular_component", &args)
+        let response = super::dispatch_tool_uncached(&state, "analyze_angular_component", &args)
             .await
             .expect("dispatcher should execute analyze_angular_component route");
 
@@ -446,7 +447,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "query_ast", &args)
+        let response = super::dispatch_tool_uncached(&state, "query_ast", &args)
             .await
             .expect("dispatcher should execute query_ast route");
 
@@ -505,7 +506,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "read_config_file", &args)
+        let response = super::dispatch_tool_uncached(&state, "read_config_file", &args)
             .await
             .expect("dispatcher should execute read_config_file route");
 
@@ -541,7 +542,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "lint_file", &args)
+        let response = super::dispatch_tool_uncached(&state, "lint_file", &args)
             .await
             .expect("dispatcher should execute lint_file route");
 
@@ -568,7 +569,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "lint_file", &args)
+        let response = super::dispatch_tool_uncached(&state, "lint_file", &args)
             .await
             .expect("dispatcher should execute lint_file route");
 
@@ -595,7 +596,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(state, "get_file_outline", &args)
+        let response = super::dispatch_tool_uncached(&state, "get_file_outline", &args)
             .await
             .expect("dispatcher should execute get_file_outline route");
 

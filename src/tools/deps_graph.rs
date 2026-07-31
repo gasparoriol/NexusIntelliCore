@@ -759,7 +759,7 @@ fn resolve_ts_alias_import(
         return None;
     }
 
-    let alias_target = state.and_then(|s| s.resolve_ts_path_alias(from_file, path))?;
+    let alias_target = state.and_then(|s| s.resolve_ts_path_alias(path, from_file))?;
     if let Some((rel, kind, resolved)) =
         classify_project_path(&alias_target, allowed_files, restricted_files)
     {
