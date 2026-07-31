@@ -24,7 +24,7 @@ impl LanguageGrammar for GoGrammar {
     }
 
     fn class_query(&self) -> Option<&'static str> {
-        Some("(type_spec name: (type_identifier) @name) @cls")
+        Some("(type_declaration (type_spec name: (type_identifier) @name)) @cls")
     }
 
     fn import_query(&self) -> Option<&'static str> {

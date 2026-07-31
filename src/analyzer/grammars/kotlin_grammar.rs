@@ -20,7 +20,9 @@ impl LanguageGrammar for KotlinGrammar {
         Some("(function_declaration (simple_identifier) @name) @fn")
     }
     fn class_query(&self) -> Option<&'static str> {
-        Some("(class_declaration (type_identifier) @name) @cls")
+        Some(
+            "(class_declaration (type_identifier) @name) @cls\n(object_declaration (type_identifier) @name) @cls",
+        )
     }
 
     fn import_query(&self) -> Option<&'static str> {

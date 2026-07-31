@@ -749,19 +749,56 @@ fn go_ast_extracts_functions_and_structs() {
 
 import "fmt"
 
+// Service handles background work.
 type Service struct {}
 
+// PublicRun executes the public entrypoint.
 func PublicRun() {
     fmt.Println("ok")
 }
+
+// DoWork executes the service action.
+func (s *Service) DoWork() {}
 "#,
     )
     .unwrap();
 
     let analysis = analyze_file(&path).expect("analyze_file failed");
     assert_eq!(analysis.language, "go");
-    assert!(analysis.functions.iter().any(|f| f.name == "PublicRun"));
-    assert!(analysis.classes.iter().any(|c| c.name == "Service"));
+    let service = analysis
+        .classes
+        .iter()
+        .find(|c| c.name == "Service")
+        .expect("Service class not found");
+    assert_eq!(service.kind, "struct");
+    assert!(service
+        .doc_comment
+        .as_deref()
+        .unwrap_or("")
+        .contains("Service handles background work"));
+
+    let public_run = analysis
+        .functions
+        .iter()
+        .find(|f| f.name == "PublicRun")
+        .expect("PublicRun function not found");
+    assert!(public_run
+        .doc_comment
+        .as_deref()
+        .unwrap_or("")
+        .contains("PublicRun executes the public entrypoint"));
+
+    let do_work = analysis
+        .functions
+        .iter()
+        .find(|f| f.name == "DoWork")
+        .expect("DoWork method not found");
+    assert_eq!(do_work.qualified_name, "Service.DoWork");
+    assert!(do_work
+        .doc_comment
+        .as_deref()
+        .unwrap_or("")
+        .contains("DoWork executes the service action"));
 
     let _ = std::fs::remove_file(&path);
 }
@@ -774,9 +811,17 @@ fn kotlin_ast_extracts_functions_and_classes() {
         &path,
         r#"package demo
 
+/** Worker class docs */
 class Worker {
+    /** Runs task */
     fun runTask() {
         println("ok")
+    }
+
+    /** Helper object docs */
+    object Helper {
+        /** Helper docs */
+        fun assist() {}
     }
 }
 "#,
@@ -785,8 +830,53 @@ class Worker {
 
     let analysis = analyze_file(&path).expect("analyze_file failed");
     assert_eq!(analysis.language, "kotlin");
-    assert!(analysis.functions.iter().any(|f| f.name == "runTask"));
-    assert!(analysis.classes.iter().any(|c| c.name == "Worker"));
+    let worker = analysis
+        .classes
+        .iter()
+        .find(|c| c.name == "Worker")
+        .expect("Worker class not found");
+    assert_eq!(worker.kind, "class");
+    assert!(worker
+        .doc_comment
+        .as_deref()
+        .unwrap_or("")
+        .contains("Worker class docs"));
+
+    let helper = analysis
+        .classes
+        .iter()
+        .find(|c| c.name == "Helper")
+        .expect("Helper object not found");
+    assert_eq!(helper.kind, "object");
+    assert!(helper
+        .doc_comment
+        .as_deref()
+        .unwrap_or("")
+        .contains("Helper object docs"));
+
+    let run_task = analysis
+        .functions
+        .iter()
+        .find(|f| f.name == "runTask")
+        .expect("runTask function not found");
+    assert_eq!(run_task.qualified_name, "Worker.runTask");
+    assert!(run_task
+        .doc_comment
+        .as_deref()
+        .unwrap_or("")
+        .contains("Runs task"));
+
+    let assist = analysis
+        .functions
+        .iter()
+        .find(|f| f.name == "assist")
+        .expect("assist function not found");
+    assert_eq!(assist.qualified_name, "Worker.Helper.assist");
+    assert!(assist
+        .doc_comment
+        .as_deref()
+        .unwrap_or("")
+        .contains("Helper docs"));
 
     let _ = std::fs::remove_file(&path);
 }

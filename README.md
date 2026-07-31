@@ -329,7 +329,7 @@ High-level module responsibilities:
 - `src/state/metrics.rs`: server counters and operational metrics (cache hits/misses, invocation counts, concurrency rejections)
 - `src/state/resolver.rs`: path validation, JSON canonicalization for cache keys, and TS/JS path-alias discovery/resolution
 - `src/indexer.rs`: file discovery, tree rendering, restriction matching
-- `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, JS, TS, Java, C, C#, CSS, HTML); entry-point detection and use-case inference for `generate_project_docs`
+- `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, Go, Kotlin, JS, TS, Java, C, C#, CSS, HTML); entry-point detection and use-case inference for `generate_project_docs`
 - `src/relations.rs`: Angular `@Component` decorator parser — resolves `templateUrl` and `styleUrls` to filesystem paths
 - `src/watcher.rs`: file-system watcher (FSEvents/inotify via `notify`); classifies events into cache invalidation or index refresh, with 500 ms debounce for topological changes, operating against the shared `ServerState`
 - `src/privacy_gateway.rs`: policy-driven sanitization layer

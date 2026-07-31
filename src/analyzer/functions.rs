@@ -113,6 +113,15 @@ fn extract_owner_chain(
     lang: &dyn LanguageGrammar,
 ) -> Option<String> {
     let mut owners: Vec<String> = Vec::new();
+
+    if lang.name() == "go" && node.kind() == "method_declaration" {
+        if let Some(receiver) = node.child_by_field_name("receiver") {
+            if let Some(owner) = extract_go_receiver_owner(source[receiver.byte_range()].trim()) {
+                owners.push(owner);
+            }
+        }
+    }
+
     let mut current = node.parent();
 
     while let Some(parent) = current {
@@ -133,6 +142,18 @@ fn extract_owner_chain(
                         let text = source[name.byte_range()].trim();
                         if !text.is_empty() {
                             owners.push(text.to_owned());
+                        }
+                    }
+                }
+            }
+            "kotlin" => {
+                if parent.kind() == "class_body" {
+                    if let Some(owner) = parent
+                        .parent()
+                        .filter(|n| matches!(n.kind(), "class_declaration" | "object_declaration"))
+                    {
+                        if let Some(text) = extract_kotlin_owner_name(owner, source) {
+                            owners.push(text);
                         }
                     }
                 }
@@ -192,6 +213,34 @@ fn extract_owner_chain(
         let sep = if lang.name() == "rust" { "::" } else { "." };
         Some(owners.join(sep))
     }
+}
+
+fn extract_go_receiver_owner(receiver_text: &str) -> Option<String> {
+    let trimmed = receiver_text
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')');
+    let ty = trimmed.split_whitespace().last()?;
+    let ty = ty.trim_start_matches('*');
+    let ty = ty.rsplit('.').next().unwrap_or(ty).trim();
+    if ty.is_empty() {
+        None
+    } else {
+        Some(ty.to_owned())
+    }
+}
+
+fn extract_kotlin_owner_name(node: tree_sitter::Node<'_>, source: &str) -> Option<String> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(child.kind(), "type_identifier" | "simple_identifier") {
+            let text = source[child.byte_range()].trim();
+            if !text.is_empty() {
+                return Some(text.to_owned());
+            }
+        }
+    }
+    None
 }
 
 fn build_qualified_name(

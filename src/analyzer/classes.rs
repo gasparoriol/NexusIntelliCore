@@ -22,27 +22,37 @@ pub(crate) fn extract_classes(
 
         let ts_node = cls_node.1;
         let raw_kind = ts_node.kind();
+        let start_line = ts_node.start_position().row + 1;
+        let line_text = if start_line > 0 && start_line <= source_lines.len() {
+            source_lines[start_line - 1].trim()
+        } else {
+            ""
+        };
         let kind = match raw_kind {
             "struct_item" | "struct_specifier" | "struct_declaration" => "struct",
             "enum_item" | "enum_declaration" | "enum_specifier" => "enum",
             "impl_item" => "impl",
             "trait_item" => "trait",
             "class_definition" | "class_declaration" => "class",
+            "object_declaration" => "object",
             "interface_declaration" => "interface",
             "record_declaration" => "record",
             "annotation_type_declaration" => "@interface",
+            "type_declaration" => {
+                if line_text.contains(" interface") {
+                    "interface"
+                } else if line_text.contains(" struct") {
+                    "struct"
+                } else {
+                    "type"
+                }
+            }
             // C
             "union_specifier" => "union",
             _ => raw_kind,
         };
 
-        let start_line = ts_node.start_position().row + 1;
         let doc_comment = extract_preceding_comment(&source_lines, start_line);
-        let line_text = if start_line > 0 && start_line <= source_lines.len() {
-            source_lines[start_line - 1].trim()
-        } else {
-            ""
-        };
         let is_public = lang.is_public_class(line_text, &name_cap.2);
 
         Some(ClassInfo {
