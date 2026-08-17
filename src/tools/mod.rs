@@ -52,7 +52,7 @@ async fn dispatch_tool_uncached(
     name: &str,
     args: &Value,
 ) -> Result<Value> {
-    match name {
+    let raw = match name {
         "get_project_structure" => project::get_project_structure(state).await,
         "get_file_outline" => {
             let file = require_file_path(args)?;
@@ -161,7 +161,18 @@ async fn dispatch_tool_uncached(
             .await
         }
         other => Ok(error_response(format!("Unknown tool: {other}"))),
-    }
+    };
+    // Single output boundary: every tool result passes through the privacy gateway
+    // regardless of whether the handler applied its own specialised sanitiser.
+    raw.map(apply_final_privacy_pass)
+}
+
+/// Applies a defensive privacy pass to the full JSON tool result. Handlers may
+/// apply domain-specific sanitizers first, but this is the final boundary gate
+/// before a result is inserted into cache or returned to the client.
+fn apply_final_privacy_pass(result: Value) -> Value {
+    let policy = crate::privacy_gateway::PrivacyPolicy::default();
+    crate::privacy_gateway::sanitize_json_args(&result, &policy)
 }
 
 /// Dispatch a `tools/call` request to the appropriate handler.
@@ -423,6 +434,48 @@ mod tests {
         assert!(find("get_dependencies_graph"));
         assert!(find("query_ast"));
         assert!(find("read_config_file"));
+    }
+
+    #[test]
+    fn final_privacy_pass_redacts_nested_payloads_and_errors() {
+        let payload = json!({
+            "content": [{
+                "type": "text",
+                "text": "visible note; token=ghp_1234567890abcdef"
+            }],
+            "isError": true,
+            "error": {
+                "message": "db password=secret123",
+                "details": {
+                    "api_key": "sk-abcdefghijklmnopqrstuvwxyz123456",
+                    "nested": ["private IP 10.0.0.5", "safe value"]
+                }
+            }
+        });
+
+        let sanitized = super::apply_final_privacy_pass(payload);
+        let rendered = sanitized.to_string();
+
+        assert!(!rendered.contains("ghp_1234567890abcdef"));
+        assert!(!rendered.contains("secret123"));
+        assert!(!rendered.contains("sk-abcdefghijklmnopqrstuvwxyz123456"));
+        assert!(!rendered.contains("10.0.0.5"));
+        assert!(rendered.contains("[REDACTED") || rendered.contains("[REDACTED_BY_MCP]"));
+    }
+
+    #[test]
+    fn final_privacy_pass_is_idempotent() {
+        let payload = json!({
+            "content": [{ "type": "text", "text": "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz123456" }],
+            "metadata": { "token": "ghp_1234567890abcdef" }
+        });
+
+        let once = super::apply_final_privacy_pass(payload);
+        let twice = super::apply_final_privacy_pass(once.clone());
+        assert_eq!(once, twice);
+        let rendered = once.to_string();
+        assert!(!rendered.contains("sk-abcdefghijklmnopqrstuvwxyz123456"));
+        assert!(!rendered.contains("ghp_1234567890abcdef"));
     }
 
     #[tokio::test]

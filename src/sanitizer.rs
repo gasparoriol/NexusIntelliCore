@@ -45,10 +45,12 @@ static SECRET_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| 
             )
             .unwrap(),
         ),
-        // GitHub fine-grained / classic personal access tokens
+        // GitHub fine-grained / classic personal access tokens. Real tokens vary in
+        // length, so we redact the common prefixes even when the value is shorter
+        // than the longer classic examples.
         (
             "GITHUB_TOKEN",
-            Regex::new(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b").unwrap(),
+            Regex::new(r"\bgh[pousr]_[A-Za-z0-9_]{8,}\b").unwrap(),
         ),
         // Generic password / secret / token variable assignments
         (
