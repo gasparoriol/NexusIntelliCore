@@ -152,3 +152,61 @@ fn audit_log_file_is_written_when_configured() {
 
     let _ = fs::remove_file(log_path);
 }
+
+/// Plan 04: audit output must not expose secret values; production risk must be
+/// separated from test/fixture evidence; JSON summary must be present and valid.
+#[test]
+fn audit_report_separates_contexts_and_contains_no_secret_values() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = common::TestMcpClient::new(root)
+        .call_tool("audit_security_measures", serde_json::json!({}));
+    let text = {
+        let v: serde_json::Value = serde_json::from_str(&response).unwrap_or_default();
+        v.pointer("/result/content/0/text")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_owned()
+    };
+
+    // The report must contain the structured section headers.
+    assert!(
+        text.contains("Production Risk"),
+        "audit report must have a Production Risk section; got: {}",
+        &text[..text.len().min(500)]
+    );
+    assert!(
+        text.contains("JSON Summary"),
+        "audit report must embed a JSON Summary section"
+    );
+
+    // The embedded JSON must parse and carry the schema version.
+    let json_start = text.find("```json\n").map(|i| i + 8).unwrap_or(0);
+    let json_end = text[json_start..]
+        .find("\n```")
+        .map(|i| i + json_start)
+        .unwrap_or(0);
+    if json_start > 0 && json_end > json_start {
+        let json_str = &text[json_start..json_end];
+        let v: serde_json::Value =
+            serde_json::from_str(json_str).expect("embedded JSON summary must be valid JSON");
+        assert_eq!(
+            v["schema_version"], "1",
+            "JSON summary must carry schema_version=1"
+        );
+        assert!(
+            v["by_context"]["production"].is_object(),
+            "JSON summary must have by_context.production"
+        );
+    }
+
+    // Privacy gateway must have stripped any real credentials that may appear in
+    // the project (fixtures, test constants).  These are the known fake values.
+    assert!(
+        !text.contains("sk-abcdefghijklmnopqrstuvwxyz123456"),
+        "audit report must not expose API key value"
+    );
+    assert!(
+        !text.contains("secret123"),
+        "audit report must not expose DB password"
+    );
+}
