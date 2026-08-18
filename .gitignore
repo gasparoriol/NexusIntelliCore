@@ -4,3 +4,6 @@ Cargo.lock
 *.log
 *.md
 *.yaml
+
+# The current MCP API contract is validated by tests and must be versioned.
+!docs/API.md
