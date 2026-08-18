@@ -28,10 +28,27 @@ pub(crate) struct QueryParams {
     max_nodes: usize,
     max_edges_per_node: usize,
     sort_by: String,
+    limit_adjustments: Vec<String>,
 }
 
 impl QueryParams {
     fn from_args(args: &Value) -> Self {
+        let mut limit_adjustments = Vec::new();
+        let max_nodes = bounded_limit(
+            args,
+            "max_nodes",
+            DEFAULT_MAX_NODES,
+            200,
+            &mut limit_adjustments,
+        );
+        let max_edges_per_node = bounded_limit(
+            args,
+            "max_edges_per_node",
+            MAX_EDGES_PER_NODE,
+            100,
+            &mut limit_adjustments,
+        );
+
         Self {
             mode: args
                 .get("mode")
@@ -60,22 +77,41 @@ impl QueryParams {
                 .get("include_unresolved")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
-            max_nodes: args
-                .get("max_nodes")
-                .and_then(Value::as_u64)
-                .and_then(|n| usize::try_from(n).ok())
-                .map_or(DEFAULT_MAX_NODES, |n| n.min(200)),
-            max_edges_per_node: args
-                .get("max_edges_per_node")
-                .and_then(Value::as_u64)
-                .and_then(|n| usize::try_from(n).ok())
-                .map_or(MAX_EDGES_PER_NODE, |n| n.min(100)),
+            max_nodes,
+            max_edges_per_node,
             sort_by: args
                 .get("sort_by")
                 .and_then(Value::as_str)
                 .unwrap_or("fanout")
                 .to_string(),
+            limit_adjustments,
         }
+    }
+}
+
+fn bounded_limit(
+    args: &Value,
+    field: &str,
+    default: usize,
+    maximum: usize,
+    adjustments: &mut Vec<String>,
+) -> usize {
+    let Some(value) = args.get(field) else {
+        return default;
+    };
+    let Some(raw) = value.as_u64() else {
+        adjustments.push(format!("{field}: invalid value; using default {default}"));
+        return default;
+    };
+    let Ok(requested) = usize::try_from(raw) else {
+        adjustments.push(format!("{field}: overflow; using default {default}"));
+        return default;
+    };
+    if requested > maximum {
+        adjustments.push(format!("{field}: clamped from {requested} to {maximum}"));
+        maximum
+    } else {
+        requested
     }
 }
 
@@ -133,6 +169,7 @@ pub(super) async fn get_dependencies_graph(
             "applied_limits": {
                 "max_nodes": params.max_nodes,
                 "max_edges_per_node": params.max_edges_per_node,
+                "adjustments": &params.limit_adjustments,
                 "response_budget_bytes": if summary_mode { MAX_RESPONSE_BYTES } else { MAX_GRAPH_RESPONSE_BYTES },
             },
             "summary": summary,
@@ -358,6 +395,23 @@ mod tests {
             params.max_edges_per_node <= 100,
             "max_edges should be clamped to 100"
         );
+        assert_eq!(params.limit_adjustments.len(), 2);
+        assert!(params.limit_adjustments[0].contains("max_nodes: clamped"));
+        assert!(params.limit_adjustments[1].contains("max_edges_per_node: clamped"));
+    }
+
+    #[test]
+    fn test_extract_params_reports_invalid_limits() {
+        let params = QueryParams::from_args(&json!({
+            "max_nodes": -1,
+            "max_edges_per_node": "many"
+        }));
+
+        assert_eq!(params.max_nodes, DEFAULT_MAX_NODES);
+        assert_eq!(params.max_edges_per_node, MAX_EDGES_PER_NODE);
+        assert_eq!(params.limit_adjustments.len(), 2);
+        assert!(params.limit_adjustments[0].contains("max_nodes: invalid value"));
+        assert!(params.limit_adjustments[1].contains("max_edges_per_node: invalid value"));
     }
 
     #[test]
@@ -437,6 +491,7 @@ mod tests {
                 max_nodes: 10,
                 max_edges_per_node: 5,
                 sort_by: "fanout".to_string(),
+                limit_adjustments: vec![],
             },
         );
 
@@ -512,6 +567,7 @@ mod tests {
                 max_nodes: 3,
                 max_edges_per_node: 5,
                 sort_by: "fanout".to_string(),
+                limit_adjustments: vec![],
             },
         );
         let truncated = summary.get("truncated").and_then(Value::as_bool);
@@ -612,6 +668,7 @@ mod tests {
             max_nodes: 100,
             max_edges_per_node: 50,
             sort_by: "fanout".to_string(),
+            limit_adjustments: vec![],
         };
 
         let limited = builder::apply_depth_limit(&file_deps, &params);
