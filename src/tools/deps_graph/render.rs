@@ -60,14 +60,11 @@ pub(crate) fn generate_summary(
             unresolved_actionable += obj
                 .get("unresolved_actionable")
                 .and_then(Value::as_u64)
-                .map_or_else(
-                    || {
-                        obj.get("unresolved_details")
-                            .and_then(Value::as_array)
-                            .map_or(0, std::vec::Vec::len) as u64
-                    },
-                    |count| count,
-                ) as usize;
+                .unwrap_or_else(|| {
+                    obj.get("unresolved_details")
+                        .and_then(Value::as_array)
+                        .map_or(0, std::vec::Vec::len) as u64
+                }) as usize;
 
             let fanout = internal_count + restricted_count + external_count + unresolved_count;
             if fanout > 0 || dependents_count > 0 {
