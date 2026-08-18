@@ -23,6 +23,76 @@ const MAX_HEADER_COUNT: usize = 64;
 /// Environment variable that enables verbose stdio framing diagnostics.
 const STDIN_TRACE_ENV: &str = "NEXUS_MCP_STDIN_TRACE";
 
+/// Typed transport limits — single source of truth for framing constraints.
+///
+/// Field units are stated in the name; override via `from_env` or keep defaults.
+// Not yet wired into the hot path; here for configuration-as-code completeness.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct TransportLimits {
+    /// Maximum accepted `Content-Length` value in bytes.
+    pub max_message_bytes: usize,
+    /// Maximum bytes allowed for a single header line.
+    pub max_header_line_bytes: usize,
+    /// Maximum number of headers per message.
+    pub max_headers: usize,
+}
+
+// Not yet wired into the hot path; here for configuration-as-code completeness.
+#[allow(dead_code)]
+impl TransportLimits {
+    pub const fn defaults() -> Self {
+        Self {
+            max_message_bytes: MAX_MESSAGE_SIZE,
+            max_header_line_bytes: MAX_HEADER_LINE_BYTES,
+            max_headers: MAX_HEADER_COUNT,
+        }
+    }
+
+    /// Loads overrides from environment variables; returns Err for invalid values.
+    pub fn from_env() -> Result<Self> {
+        let mut limits = Self::defaults();
+        if let Ok(val) = env::var("NEXUS_MAX_MESSAGE_BYTES") {
+            limits.max_message_bytes = val
+                .parse()
+                .map_err(|_| anyhow!("NEXUS_MAX_MESSAGE_BYTES must be a positive integer"))?;
+        }
+        if limits.max_message_bytes == 0 {
+            return Err(anyhow!("max_message_bytes must be greater than 0"));
+        }
+        Ok(limits)
+    }
+}
+
+#[cfg(test)]
+mod limits_tests {
+    use super::*;
+
+    #[test]
+    fn transport_limits_defaults_are_valid() {
+        let l = TransportLimits::defaults();
+        assert!(l.max_message_bytes > 0);
+        assert!(l.max_header_line_bytes > 0);
+        assert!(l.max_headers > 0);
+    }
+
+    #[test]
+    fn transport_limits_from_env_invalid_value() {
+        std::env::set_var("NEXUS_MAX_MESSAGE_BYTES", "not_a_number");
+        let result = TransportLimits::from_env();
+        std::env::remove_var("NEXUS_MAX_MESSAGE_BYTES");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn transport_limits_from_env_zero_rejected() {
+        std::env::set_var("NEXUS_MAX_MESSAGE_BYTES", "0");
+        let result = TransportLimits::from_env();
+        std::env::remove_var("NEXUS_MAX_MESSAGE_BYTES");
+        assert!(result.is_err());
+    }
+}
+
 /// MCP transport backed by a `BufReader<R>`.
 ///
 /// `BufReader` maintains an internal byte buffer that survives across calls to
@@ -514,5 +584,84 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("not a valid number"));
+    }
+
+    // -----------------------------------------------------------------------
+    // B5 — extended framing matrix
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_truncated_body_returns_error() {
+        // Content-Length says 50 bytes but only 10 are provided.
+        let header = b"Content-Length: 50\r\n\r\n";
+        let body = b"0123456789"; // only 10 bytes
+        let mut input = header.to_vec();
+        input.extend_from_slice(body);
+        let mut transport = McpTransport::new(Cursor::new(input), Vec::new());
+        let result = transport.read_message().await;
+        assert!(result.is_err(), "Truncated body must produce an error");
+    }
+
+    #[tokio::test]
+    async fn test_empty_body_zero_content_length_rejected() {
+        let input = b"Content-Length: 0\r\n\r\n".to_vec();
+        let mut transport = McpTransport::new(Cursor::new(input), Vec::new());
+        let err = transport.read_message().await.unwrap_err();
+        assert!(
+            err.to_string().contains("greater than 0"),
+            "Zero Content-Length must be rejected: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_content_length_different_case_rejected() {
+        // RFC 7230 says duplicate header fields are only permitted for
+        // headers defined to allow that. Content-Length must not be duplicated.
+        let input = b"Content-Length: 10\r\ncontent-length: 20\r\n\r\n".to_vec();
+        let mut transport = McpTransport::new(Cursor::new(input), Vec::new());
+        let err = transport.read_message().await.unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("duplicate"),
+            "Duplicate Content-Length (different case) must be rejected: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extra_unknown_headers_before_body_are_tolerated() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}"#;
+        let mut input = format!(
+            "X-Custom-Header: value\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes();
+        // Also test: an extra blank header before the CRLF-CRLF terminator.
+        let mut transport = McpTransport::new(Cursor::new(input.clone()), Vec::new());
+        let msg = transport.read_message().await.unwrap().unwrap();
+        assert_eq!(msg["id"], 1);
+
+        // Multiple unknown headers before Content-Length.
+        input = format!(
+            "A: 1\r\nB: 2\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes();
+        let mut transport2 = McpTransport::new(Cursor::new(input), Vec::new());
+        let msg2 = transport2.read_message().await.unwrap().unwrap();
+        assert_eq!(msg2["method"], "ping");
+    }
+
+    #[tokio::test]
+    async fn test_chained_messages_with_and_without_crlf() {
+        // Two back-to-back messages in the same byte stream.
+        let body1 = r#"{"jsonrpc":"2.0","id":10,"method":"ping","params":{}}"#;
+        let body2 = r#"{"jsonrpc":"2.0","id":11,"method":"ping","params":{}}"#;
+        let mut input = make_frame(body1);
+        input.extend_from_slice(&make_frame(body2));
+
+        let mut transport = McpTransport::new(Cursor::new(input), Vec::new());
+        let m1 = transport.read_message().await.unwrap().unwrap();
+        let m2 = transport.read_message().await.unwrap().unwrap();
+        assert_eq!(m1["id"], 10);
+        assert_eq!(m2["id"], 11);
     }
 }

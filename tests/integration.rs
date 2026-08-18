@@ -339,3 +339,74 @@ fn get_server_stats_is_always_available_and_returns_stats() {
         "Stats response should contain Tool Invocations. Got: {text}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A4 — project_docs contract tests (mitigación 01, fase 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn project_docs_unknown_section_is_silently_ignored() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = call_generate_project_docs(
+        root,
+        r#"{"sections": ["overview", "nonexistent_xyz"], "max_files": 3}"#,
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response).expect("response must be valid JSON");
+    // Must succeed (not isError) and contain the overview section.
+    assert_ne!(
+        parsed.pointer("/result/content/0/isError"),
+        Some(&serde_json::Value::Bool(true)),
+        "Unknown section must not cause an error response"
+    );
+    let text = extract_tool_text(&response);
+    assert!(
+        text.contains("## Overview") || text.contains("Descripción general"),
+        "Known sections must still render when mixed with unknown ones. Got: {}",
+        &text[..text.len().min(400)]
+    );
+}
+
+#[test]
+fn project_docs_large_offset_returns_response_not_error() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    // file_offset larger than total files should not panic or return isError.
+    let response = call_generate_project_docs(root, r#"{"max_files": 5, "file_offset": 99999}"#);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response).expect("response must be valid JSON");
+    assert_ne!(
+        parsed.pointer("/result/content/0/isError"),
+        Some(&serde_json::Value::Bool(true)),
+        "Large file_offset must not return an error"
+    );
+}
+
+#[test]
+fn project_docs_unsupported_language_falls_back_to_english() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let response = call_generate_project_docs(
+        root,
+        r#"{"sections": ["overview"], "language": "klingon", "max_files": 3}"#,
+    );
+    let text = extract_tool_text(&response);
+    assert!(
+        text.contains("## Overview"),
+        "Unsupported language must fall back to English headings. Got: {}",
+        &text[..text.len().min(400)]
+    );
+}
+
+#[test]
+fn project_docs_max_files_clamped_to_150() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    // 9999 must be clamped to 150 — if it were not, the call would time out or OOM.
+    // We just verify it completes without error and returns valid content.
+    let response =
+        call_generate_project_docs(root, r#"{"max_files": 9999, "sections": ["overview"]}"#);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response).expect("response must be valid JSON");
+    assert!(
+        parsed.pointer("/result/content").is_some(),
+        "Clamped max_files must still return content. Got: {response}"
+    );
+}

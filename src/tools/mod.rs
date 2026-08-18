@@ -188,10 +188,10 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
         } else {
             state.record_tool_concurrency_rejection();
             tracing::warn!(tool = %name, "Tool rejected: concurrency limit exceeded");
-            return Ok(error_response(format!(
+            return Ok(apply_final_privacy_pass(error_response(format!(
                 "Tool '{name}' is temporarily unavailable: server is processing too many \
                  concurrent requests. Please retry in a few seconds."
-            )));
+            ))));
         }
     } else {
         None
@@ -217,7 +217,15 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     } else {
         let computed = dispatch_tool_uncached(&state, &name_for_compute, &args_for_compute)
             .await
-            .unwrap_or_else(|e| error_response(format!("Internal tool error: {e}")));
+            // error text from anyhow may contain paths/values; sanitize before surfacing
+            .unwrap_or_else(|e| {
+                let policy = crate::privacy_gateway::PrivacyPolicy::default();
+                let sanitized_msg =
+                    crate::privacy_gateway::sanitize_output_text(&e.to_string(), &policy).0;
+                apply_final_privacy_pass(error_response(format!(
+                    "Internal tool error: {sanitized_msg}"
+                )))
+            });
 
         if computed.get("isError").and_then(Value::as_bool) != Some(true) {
             state.insert_tool_cache(key.clone(), computed.clone()).await;
@@ -660,6 +668,94 @@ mod tests {
         assert!(
             !text.contains("Missing required argument"),
             "get_file_outline should accept FilePath alias without argument errors"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // A1 — error paths must not leak unsanitized values
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn error_paths_do_not_leak_secrets() {
+        ensure_state_init();
+
+        // A tool name that triggers the "unknown tool" error path; the sentinel
+        // value must not survive as-is in the response text.
+        let sentinel = "sk-proj-FAKEOPENAIKEY12345abcdefghijklmnop";
+        let args = json!({ "file_path": format!("/tmp/{sentinel}.rs") });
+        let state = crate::state::ServerState::get();
+        let response = super::dispatch_tool_uncached(&state, "unknown_tool_for_test", &args)
+            .await
+            .expect("dispatch should not propagate Err for unknown tools");
+
+        let rendered = response.to_string();
+        assert!(
+            !rendered.contains(sentinel),
+            "Unknown-tool error must not echo raw argument values: {rendered}"
+        );
+
+        // The "argument error" path: require_str propagates Err directly.
+        // apply_final_privacy_pass must be applied on the Ok path; Err values
+        // are plain anyhow errors whose to_string() does not contain the sentinel.
+        let args2 = json!({ "file_path": format!("/tmp/{sentinel}.rs") });
+        let result2 = super::dispatch_tool_uncached(&state, "inspect_symbol", &args2).await;
+        match result2 {
+            Ok(response2) => {
+                let rendered2 = response2.to_string();
+                assert!(
+                    !rendered2.contains(sentinel),
+                    "Argument-error path must not leak sentinel from file_path: {rendered2}"
+                );
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains(sentinel),
+                    "Propagated Err must not contain sentinel: {msg}"
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // A2 — extensibility gate: every registered tool output crosses the boundary
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn all_registered_tools_are_covered_by_sentinel_gate() {
+        use crate::tools::definitions::{all_tool_definitions, angular_tool_definitions};
+        // This test freezes the set of tool names that exist in the registry.
+        // If a new tool is added, the developer must also add a sentinel test
+        // in tests/privacy_adversarial.rs and update this baseline.
+        let mut names: Vec<&str> = all_tool_definitions()
+            .iter()
+            .map(|d| d.name)
+            .chain(std::iter::once(angular_tool_definitions().name))
+            .collect();
+        names.sort_unstable();
+
+        // Baseline — must be updated when the registry changes.
+        let mut expected = vec![
+            "analyze_angular_component",
+            "audit_security_measures",
+            "generate_project_docs",
+            "get_dependencies_graph",
+            "get_file_outline",
+            "get_module_summary",
+            "get_project_structure",
+            "get_server_stats",
+            "inspect_symbol",
+            "lint_file",
+            "query_ast",
+            "read_config_file",
+            "refresh_index",
+            "search_design_patterns",
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(
+            names, expected,
+            "Registry changed — update the sentinel baseline and add a privacy test for new tools"
         );
     }
 }

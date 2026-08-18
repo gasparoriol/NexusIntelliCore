@@ -115,11 +115,39 @@ jobs:
       - name: Check formatting
         run: cargo fmt -- --check
 
-  # Job 6: Report security status
+  # Job 6: MCP handshake probe — validates the compiled server speaks valid MCP
+  mcp-probe:
+    name: MCP handshake probe (debug + release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build debug binary
+        run: cargo build --bin nexusintellicore
+
+      - name: Build release binary
+        run: cargo build --release --bin nexusintellicore
+
+      - name: Probe debug binary — tools/list
+        run: bash scripts/mcp_handshake_probe.sh --server ./target/debug/nexusintellicore --root "$PWD" --tool tools/list --timeout 15
+
+      - name: Probe release binary — get_dependencies_graph
+        run: bash scripts/mcp_handshake_probe.sh --server ./target/release/nexusintellicore --root "$PWD" --tool get_dependencies_graph --timeout 20
+
+  # Job 7: Report security status
   security-summary:
     name: Security Audit Summary
     runs-on: ubuntu-latest
-    needs: [secrets-scan, dependency-audit, security-linting, test-suite, format-check]
+    needs: [secrets-scan, dependency-audit, security-linting, test-suite, format-check, mcp-probe]
     if: always()
     steps:
       - name: Check job status
@@ -130,14 +158,16 @@ jobs:
           echo "  ✓ Security linting: ${{ needs.security-linting.result }}"
           echo "  ✓ Test suite: ${{ needs.test-suite.result }}"
           echo "  ✓ Format check: ${{ needs.format-check.result }}"
-          
+          echo "  ✓ MCP probe: ${{ needs.mcp-probe.result }}"
+
           if [[ "${{ needs.secrets-scan.result }}" != "success" || \
                 "${{ needs.dependency-audit.result }}" != "success" || \
                 "${{ needs.security-linting.result }}" != "success" || \
                 "${{ needs.test-suite.result }}" != "success" || \
-                "${{ needs.format-check.result }}" != "success" ]]; then
+                "${{ needs.format-check.result }}" != "success" || \
+                "${{ needs.mcp-probe.result }}" != "success" ]]; then
             echo "❌ Security audit FAILED"
             exit 1
           fi
-          
+
           echo "✅ All security checks PASSED"

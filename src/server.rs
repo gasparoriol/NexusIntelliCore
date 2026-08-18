@@ -134,21 +134,25 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
         return JsonRpcResponse::error(id, -32602, "Missing 'name' in tool call".to_owned());
     };
 
+    // Sanitize the caller-controlled tool name before using it in any error messages.
+    let policy = privacy_gateway::PrivacyPolicy::default();
+    let (safe_name, _) = privacy_gateway::sanitize_output_text(&name, &policy);
+
     let state = state::ServerState::get();
     if let Some(ref allowed) = state.security_config().allowed_tools {
         if !allowed.contains(&name) {
-            warn!(tool = %name, "Access denied: tool not in allowed list");
+            warn!(tool = %safe_name, "Access denied: tool not in allowed list");
             security::log_audit_event(
                 "tool_denied",
                 json!({
-                    "tool": name,
+                    "tool": safe_name,
                     "reason": "tool not allowed in security configuration"
                 }),
             );
             return JsonRpcResponse::error(
                 id,
                 -32003,
-                format!("Access denied: tool '{name}' is not allowed"),
+                format!("Access denied: tool '{safe_name}' is not allowed"),
             );
         }
     }
@@ -158,16 +162,15 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let policy = privacy_gateway::PrivacyPolicy::default();
     let sanitized_args = privacy_gateway::sanitize_json_args(&args, &policy);
 
     let start = std::time::Instant::now();
-    info!(tool = %name, "Tool call received");
+    info!(tool = %safe_name, "Tool call received");
 
     security::log_audit_event(
         "tool_call_start",
         json!({
-            "tool": name,
+            "tool": safe_name,
             "arguments": sanitized_args
         }),
     );
@@ -175,30 +178,24 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
     match tools::dispatch_tool(&name, args).await {
         Ok(result) => {
             let elapsed = start.elapsed().as_millis();
-            info!(tool = %name, elapsed_ms = %elapsed, "Tool call completed successfully");
+            info!(tool = %safe_name, elapsed_ms = %elapsed, "Tool call completed successfully");
             security::log_audit_event(
                 "tool_call_success",
                 json!({
-                    "tool": name,
+                    "tool": safe_name,
                     "elapsed_ms": elapsed
                 }),
             );
             JsonRpcResponse::success(id, result)
         }
         Err(e) => {
-            let error_msg = e.to_string();
-            error!(tool = %name, error = %error_msg, "Tool call failed with internal error");
-            security::log_audit_event(
-                "tool_call_failure",
-                json!({
-                    "tool": name,
-                    "error": error_msg
-                }),
-            );
+            error!(tool = %safe_name, "Tool call failed with internal error");
+            let (sanitized_msg, _) = privacy_gateway::sanitize_output_text(&e.to_string(), &policy);
+            security::log_audit_event("tool_call_failure", json!({ "tool": safe_name }));
             JsonRpcResponse::success(
                 id,
                 json!({
-                    "content": [{ "type": "text", "text": format!("Internal error: {e}") }],
+                    "content": [{ "type": "text", "text": format!("Internal error: {sanitized_msg}") }],
                     "isError": true
                 }),
             )

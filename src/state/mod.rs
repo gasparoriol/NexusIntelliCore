@@ -17,6 +17,7 @@ use crate::linter::LintPool;
 use crate::security::SecurityConfig;
 
 pub use cache::{AstCacheStats, CachedAnalysis, ToolCacheKey};
+pub use metrics::OperationalMetrics;
 pub use resolver::TsPathAliasConfig;
 
 /// Global server state, initialised once at startup.
@@ -196,16 +197,17 @@ impl ServerState {
         self.metrics.record_concurrency_rejection();
     }
 
-    pub fn operational_metrics(&self) -> (u64, u64, u64, u64, u64) {
-        (
-            self.metrics.ast_cache_hits.load(Ordering::Relaxed),
-            self.metrics.ast_cache_misses.load(Ordering::Relaxed),
-            self.metrics.tool_cache_hits.load(Ordering::Relaxed),
-            self.metrics.tool_cache_misses.load(Ordering::Relaxed),
-            self.metrics
+    pub fn operational_metrics(&self) -> OperationalMetrics {
+        OperationalMetrics {
+            ast_cache_hits: self.metrics.ast_cache_hits.load(Ordering::Relaxed),
+            ast_cache_misses: self.metrics.ast_cache_misses.load(Ordering::Relaxed),
+            tool_cache_hits: self.metrics.tool_cache_hits.load(Ordering::Relaxed),
+            tool_cache_misses: self.metrics.tool_cache_misses.load(Ordering::Relaxed),
+            tool_concurrency_rejections: self
+                .metrics
                 .tool_concurrency_rejections
                 .load(Ordering::Relaxed),
-        )
+        }
     }
 
     pub fn record_ast_cache_hit(&self) {
@@ -244,7 +246,7 @@ impl ServerState {
         self.uptime().as_secs()
     }
 
-    pub fn get_operational_metrics(&self) -> (u64, u64, u64, u64, u64) {
+    pub fn get_operational_metrics(&self) -> OperationalMetrics {
         self.operational_metrics()
     }
 

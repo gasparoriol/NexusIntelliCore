@@ -29,8 +29,7 @@ pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Resul
     let index = state.index().await?;
     let invocation_counts = state.get_tool_invocation_counts();
     let uptime_secs = state.uptime_seconds();
-    let (ast_hits, ast_misses, tool_hits, tool_misses, rejections) =
-        state.get_operational_metrics();
+    let metrics = state.get_operational_metrics();
 
     let stats_json = json!({
         "uptime_seconds": uptime_secs,
@@ -38,18 +37,18 @@ pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Resul
             "entries": cache_stats.ast_entries,
             "max_entries": cache_stats.ast_max,
             "utilization_percent": utilization(cache_stats.ast_entries, cache_stats.ast_max),
-            "hits": ast_hits,
-            "misses": ast_misses
+            "hits": metrics.ast_cache_hits,
+            "misses": metrics.ast_cache_misses
         },
         "tool_cache": {
             "entries": cache_stats.tool_entries,
             "max_entries": cache_stats.tool_max,
             "utilization_percent": utilization(cache_stats.tool_entries, cache_stats.tool_max),
-            "hits": tool_hits,
-            "misses": tool_misses
+            "hits": metrics.tool_cache_hits,
+            "misses": metrics.tool_cache_misses
         },
         "concurrency": {
-            "rejections": rejections
+            "rejections": metrics.tool_concurrency_rejections
         },
         "index": {
             "allowed_files": index.allowed_files.len(),
@@ -80,14 +79,14 @@ pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Resul
         cache_stats.ast_entries,
         cache_stats.ast_max,
         utilization_f64(cache_stats.ast_entries, cache_stats.ast_max),
-        ast_hits,
-        ast_misses,
+        metrics.ast_cache_hits,
+        metrics.ast_cache_misses,
         cache_stats.tool_entries,
         cache_stats.tool_max,
         utilization_f64(cache_stats.tool_entries, cache_stats.tool_max),
-        tool_hits,
-        tool_misses,
-        rejections,
+        metrics.tool_cache_hits,
+        metrics.tool_cache_misses,
+        metrics.tool_concurrency_rejections,
         index.allowed_files.len(),
         index.restricted_files.len(),
         format_invocation_table(&invocation_counts),
@@ -138,7 +137,24 @@ mod tests {
         counts.insert("get_file_outline".to_owned(), 5u64);
         counts.insert("inspect_symbol".to_owned(), 10u64);
         let table = format_invocation_table(&counts);
-        // inspect_symbol (10) must appear before get_file_outline (5)
         assert!(table.find("inspect_symbol").unwrap() < table.find("get_file_outline").unwrap());
+    }
+
+    #[test]
+    fn operational_metrics_fields_are_stable() {
+        // Verify field names via serialization — position-independent access.
+        let m = crate::state::OperationalMetrics {
+            ast_cache_hits: 1,
+            ast_cache_misses: 2,
+            tool_cache_hits: 3,
+            tool_cache_misses: 4,
+            tool_concurrency_rejections: 5,
+        };
+        let v = serde_json::to_value(&m).expect("serialization must succeed");
+        assert_eq!(v["ast_cache_hits"], 1);
+        assert_eq!(v["ast_cache_misses"], 2);
+        assert_eq!(v["tool_cache_hits"], 3);
+        assert_eq!(v["tool_cache_misses"], 4);
+        assert_eq!(v["tool_concurrency_rejections"], 5);
     }
 }

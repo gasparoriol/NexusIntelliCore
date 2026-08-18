@@ -3,6 +3,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
+/// Named operational counters exposed by `ServerState::operational_metrics`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OperationalMetrics {
+    pub ast_cache_hits: u64,
+    pub ast_cache_misses: u64,
+    pub tool_cache_hits: u64,
+    pub tool_cache_misses: u64,
+    pub tool_concurrency_rejections: u64,
+}
+
 pub struct MetricsCollector {
     pub started_at: Instant,
     pub ast_cache_hits: AtomicU64,

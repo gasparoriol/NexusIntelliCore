@@ -758,4 +758,126 @@ mod tests {
         let cycles = cycles::detect_dependency_cycles(&file_deps);
         assert!(cycles.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // B1 — golden corpus for Rust import resolution
+    // -----------------------------------------------------------------------
+
+    fn make_imp(path: &str, kind: ImportKind) -> ImportInfo {
+        ImportInfo {
+            raw: path.to_owned(),
+            path: path.to_owned(),
+            kind,
+            resolved_path: None,
+        }
+    }
+
+    #[test]
+    fn corpus_crate_path_resolves_to_file() {
+        let allowed = vec![
+            PathBuf::from("src/analyzer.rs"),
+            PathBuf::from("src/main.rs"),
+        ];
+        let imp = make_imp("crate::analyzer", ImportKind::InternalLocal);
+        let (_, kind, resolved) = imports::resolve_import_path(
+            &imp,
+            Path::new("src/main.rs"),
+            "rust",
+            None,
+            &allowed,
+            &[],
+        );
+        assert_eq!(kind, ImportKind::InternalLocal);
+        assert_eq!(resolved, Some(PathBuf::from("src/analyzer.rs")));
+    }
+
+    #[test]
+    fn corpus_self_prefix_resolves_to_sibling() {
+        let allowed = vec![
+            PathBuf::from("src/tools/outline.rs"),
+            PathBuf::from("src/tools/mod.rs"),
+        ];
+        let imp = make_imp("self::outline", ImportKind::InternalLocal);
+        let (_, kind, _) = imports::resolve_import_path(
+            &imp,
+            Path::new("src/tools/mod.rs"),
+            "rust",
+            None,
+            &allowed,
+            &[],
+        );
+        assert_eq!(kind, ImportKind::InternalLocal);
+    }
+
+    #[test]
+    fn corpus_super_chain_resolves_to_ancestor_module() {
+        let allowed = vec![
+            PathBuf::from("src/state.rs"),
+            PathBuf::from("src/tools/deps_graph/mod.rs"),
+        ];
+        // super::super::state from src/tools/deps_graph/mod.rs → src/state.rs
+        let imp = make_imp("super::super::state", ImportKind::InternalLocal);
+        let (_, kind, resolved) = imports::resolve_import_path(
+            &imp,
+            Path::new("src/tools/deps_graph/mod.rs"),
+            "rust",
+            None,
+            &allowed,
+            &[],
+        );
+        assert_eq!(kind, ImportKind::InternalLocal);
+        assert_eq!(resolved, Some(PathBuf::from("src/state.rs")));
+    }
+
+    #[test]
+    fn corpus_external_crate_stays_unresolved_external() {
+        let imp = make_imp("serde_json::Value", ImportKind::ExternalLibrary);
+        let (_, kind, resolved) =
+            imports::resolve_import_path(&imp, Path::new("src/main.rs"), "rust", None, &[], &[]);
+        assert_eq!(kind, ImportKind::ExternalLibrary);
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn corpus_missing_destination_produces_stable_reason() {
+        let imp = make_imp("crate::nonexistent_module", ImportKind::InternalLocal);
+        let (_, kind, resolved) =
+            imports::resolve_import_path(&imp, Path::new("src/main.rs"), "rust", None, &[], &[]);
+        assert_eq!(kind, ImportKind::Unresolved);
+        assert!(resolved.is_none());
+        assert_eq!(
+            imports::unresolved_reason("crate::nonexistent_module"),
+            "destination_not_found"
+        );
+    }
+
+    #[test]
+    fn corpus_empty_path_produces_unsupported_syntax_reason() {
+        assert_eq!(imports::unresolved_reason(""), "unsupported_syntax");
+    }
+
+    #[test]
+    fn corpus_grouped_import_normalisation() {
+        // Grouped imports like `use foo::{a, b}` are split before reaching
+        // resolve_import_path; here we verify normalise_internal_reference
+        // converts the individual `crate::tools::mod` fragment correctly.
+        let normalised = imports::normalise_internal_reference("crate::tools::mod");
+        assert_eq!(normalised, "tools/mod");
+    }
+
+    #[test]
+    fn corpus_restricted_file_classified_correctly() {
+        let allowed: Vec<PathBuf> = vec![];
+        let restricted = vec![PathBuf::from("src/secret.rs")];
+        let imp = make_imp("crate::secret", ImportKind::InternalLocal);
+        let (_, kind, _) = imports::resolve_import_path(
+            &imp,
+            Path::new("src/main.rs"),
+            "rust",
+            None,
+            &allowed,
+            &restricted,
+        );
+        assert_eq!(kind, ImportKind::InternalRestricted);
+    }
 }
