@@ -92,6 +92,7 @@ fn classify_context(rel_path: &str) -> AuditContext {
         || p.ends_with("src/analyzer/audit.rs")
         || p.ends_with("sanitizer.rs")
         || p.ends_with("privacy_gateway.rs")
+        || p.ends_with(".md")
     {
         return AuditContext::DetectorDefinition;
     }
@@ -424,6 +425,10 @@ mod tests {
         );
         assert_eq!(
             classify_context("src/sanitizer.rs"),
+            AuditContext::DetectorDefinition
+        );
+        assert_eq!(
+            classify_context("docs/SECURITY.md"),
             AuditContext::DetectorDefinition
         );
     }
