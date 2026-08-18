@@ -144,9 +144,9 @@ fn render_context_group(out: &mut String, title: &str, findings: &[&RichFinding]
                 Confidence::High => "",
                 Confidence::Medium => " *(heuristic)*",
             };
-            let _ = write!(
+            let _ = writeln!(
                 out,
-                "  ⚠ `{}` — {} in `{}` at line {}{}\n",
+                "  ⚠ `{}` — {} in `{}` at line {}{}",
                 f.rule_id, f.description, f.file, f.line, conf_tag
             );
         }
@@ -169,9 +169,9 @@ fn render_summary_table(out: &mut String, findings: &[RichFinding]) {
         ("fixture", AuditContext::Fixture),
         ("detector_definition", AuditContext::DetectorDefinition),
     ] {
-        let _ = write!(
+        let _ = writeln!(
             out,
-            "| {label:<20} | {:>8} | {:>4} | {:>6} |\n",
+            "| {label:<20} | {:>8} | {:>4} | {:>6} |",
             count(*ctx, Severity::Critical),
             count(*ctx, Severity::High),
             count(*ctx, Severity::Medium),

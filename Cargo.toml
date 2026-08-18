@@ -51,4 +51,4 @@ undocumented_unsafe_blocks = "warn"
 panic = "warn"
 
 [lints.rust]
-unsafe_code = "warn"
+unsafe_code = "forbid"
