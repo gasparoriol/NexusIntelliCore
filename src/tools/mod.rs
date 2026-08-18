@@ -38,10 +38,8 @@ struct FilePathArgs {
 }
 
 fn tool_is_cacheable(name: &str) -> bool {
-    use crate::tools::definitions::{all_tool_definitions, angular_tool_definitions};
-    all_tool_definitions()
+    definitions::registered_tool_definitions()
         .into_iter()
-        .chain(std::iter::once(angular_tool_definitions()))
         .find(|def| def.name == name)
         .is_some_and(|def| def.cacheable)
 }
@@ -263,10 +261,8 @@ fn require_file_path_or_component_path(args: &Value) -> Result<String> {
 }
 
 fn is_expensive_tool(name: &str) -> bool {
-    use crate::tools::definitions::{all_tool_definitions, angular_tool_definitions};
-    all_tool_definitions()
+    definitions::registered_tool_definitions()
         .into_iter()
-        .chain(std::iter::once(angular_tool_definitions()))
         .find(|def| def.name == name)
         .is_some_and(|def| def.expensive)
 }

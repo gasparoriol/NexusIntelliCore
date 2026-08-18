@@ -99,6 +99,18 @@ pub fn angular_tool_definitions() -> ToolDefinition {
     }
 }
 
+pub fn registered_tool_definitions() -> Vec<ToolDefinition> {
+    let is_angular = crate::state::ServerState::get_opt()
+        .map(|s| s.is_angular_project())
+        .unwrap_or(true);
+
+    let mut definitions = all_tool_definitions();
+    if is_angular {
+        definitions.push(angular_tool_definitions());
+    }
+    definitions
+}
+
 pub fn schema_get_project_structure() -> Value {
     json!({
         "name": "get_project_structure",
@@ -435,15 +447,7 @@ fn schema_lint_file() -> Value {
 
 /// JSON Schema definitions returned by `tools/list`.
 pub fn tool_definitions() -> Value {
-    let is_angular = crate::state::ServerState::get_opt()
-        .map(|s| s.is_angular_project())
-        .unwrap_or(true);
-
-    let mut defs = all_tool_definitions();
-    if is_angular {
-        defs.push(angular_tool_definitions());
-    }
-
+    let defs = registered_tool_definitions();
     Value::Array(defs.iter().map(|d| (d.schema)()).collect())
 }
 
