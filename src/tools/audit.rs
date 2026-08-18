@@ -91,6 +91,7 @@ fn classify_context(rel_path: &str) -> AuditContext {
     if p.ends_with("audit_queries.rs")
         || p.ends_with("src/analyzer/audit.rs")
         || p.ends_with("sanitizer.rs")
+        || p.ends_with("privacy_gateway.rs")
     {
         return AuditContext::DetectorDefinition;
     }
@@ -98,6 +99,8 @@ fn classify_context(rel_path: &str) -> AuditContext {
         || p.contains("/tests/")
         || p.contains("_test.")
         || p.contains("/test_")
+        // Inline test modules inside src/ (e.g. src/analyzer/tests.rs, src/transport.rs' inline #[cfg(test)])
+        || p.ends_with("/tests.rs")
     {
         return AuditContext::Test;
     }

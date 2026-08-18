@@ -143,11 +143,31 @@ jobs:
       - name: Probe release binary — get_dependencies_graph
         run: bash scripts/mcp_handshake_probe.sh --server ./target/release/nexusintellicore --root "$PWD" --tool get_dependencies_graph --timeout 20
 
-  # Job 7: Report security status
+  # Job 7: Internal documentation link checker (relative links only)
+  docs-links:
+    name: Docs link checker (internal only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run lychee on internal Markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Exclude all http(s) links; validate only relative paths and anchors.
+          args: >-
+            --no-progress
+            --exclude '^https?://'
+            --exclude-path target
+            --exclude-path node_modules
+            './**/*.md'
+          fail: true
+          jobSummary: true
+
+  # Job 8: Report security status
   security-summary:
     name: Security Audit Summary
     runs-on: ubuntu-latest
-    needs: [secrets-scan, dependency-audit, security-linting, test-suite, format-check, mcp-probe]
+    needs: [secrets-scan, dependency-audit, security-linting, test-suite, format-check, mcp-probe, docs-links]
     if: always()
     steps:
       - name: Check job status
@@ -159,13 +179,15 @@ jobs:
           echo "  ✓ Test suite: ${{ needs.test-suite.result }}"
           echo "  ✓ Format check: ${{ needs.format-check.result }}"
           echo "  ✓ MCP probe: ${{ needs.mcp-probe.result }}"
+          echo "  ✓ Docs links: ${{ needs.docs-links.result }}"
 
           if [[ "${{ needs.secrets-scan.result }}" != "success" || \
                 "${{ needs.dependency-audit.result }}" != "success" || \
                 "${{ needs.security-linting.result }}" != "success" || \
                 "${{ needs.test-suite.result }}" != "success" || \
                 "${{ needs.format-check.result }}" != "success" || \
-                "${{ needs.mcp-probe.result }}" != "success" ]]; then
+                "${{ needs.mcp-probe.result }}" != "success" || \
+                "${{ needs.docs-links.result }}" != "success" ]]; then
             echo "❌ Security audit FAILED"
             exit 1
           fi

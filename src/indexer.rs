@@ -14,6 +14,27 @@ const MAX_RENDER_DEPTH: usize = 2;
 const MAX_RENDER_FILES: usize = 8;
 const MAX_RENDER_DIRS: usize = 8;
 
+/// Typed indexer rendering limits — governs the depth and breadth of
+/// `render_tree` and related summarisation.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct IndexerLimits {
+    pub max_render_depth: usize,
+    pub max_render_files_per_dir: usize,
+    pub max_render_dirs_per_dir: usize,
+}
+
+#[allow(dead_code)]
+impl IndexerLimits {
+    pub const fn defaults() -> Self {
+        Self {
+            max_render_depth: MAX_RENDER_DEPTH,
+            max_render_files_per_dir: MAX_RENDER_FILES,
+            max_render_dirs_per_dir: MAX_RENDER_DIRS,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -374,5 +395,13 @@ mod tests {
         assert!(index.is_restricted(&secret));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn indexer_limits_defaults_match_constants() {
+        let l = super::IndexerLimits::defaults();
+        assert_eq!(l.max_render_depth, super::MAX_RENDER_DEPTH);
+        assert_eq!(l.max_render_files_per_dir, super::MAX_RENDER_FILES);
+        assert_eq!(l.max_render_dirs_per_dir, super::MAX_RENDER_DIRS);
     }
 }

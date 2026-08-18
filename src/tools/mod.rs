@@ -758,4 +758,48 @@ mod tests {
             "Registry changed — update the sentinel baseline and add a privacy test for new tools"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Overhead p95 of the final privacy pass (mitigación 02, métrica)
+    // -----------------------------------------------------------------------
+
+    /// Baseline captured 2026-08-18 on Apple Silicon (debug build). Purely
+    /// informational — regression is flagged only if p95 exceeds 10× baseline.
+    const PRIVACY_PASS_P95_BASELINE_US: u128 = 500;
+
+    #[test]
+    fn benchmark_final_privacy_pass_p95_stays_within_budget() {
+        let payload = json!({
+            "content": [
+                { "type": "text", "text": "hello token=abc IP=10.0.0.1" },
+                { "type": "text", "text": "safe body without secrets" },
+            ],
+            "meta": {
+                "nested": {
+                    "note": "no sensitive material here",
+                    "list": ["a", "b", "c", "d", "e"]
+                }
+            }
+        });
+
+        let iterations = 200usize;
+        let mut samples_us: Vec<u128> = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            let start = std::time::Instant::now();
+            let _ = super::apply_final_privacy_pass(payload.clone());
+            samples_us.push(start.elapsed().as_micros());
+        }
+        samples_us.sort_unstable();
+        let p95_index = (iterations * 95) / 100;
+        let p95 = samples_us[p95_index];
+
+        // 10× the baseline gives generous headroom for CI machines while still
+        // catching any 100× regression.
+        let ceiling = PRIVACY_PASS_P95_BASELINE_US * 10;
+        assert!(
+            p95 <= ceiling,
+            "privacy pass p95 regression: {p95} µs > ceiling {ceiling} µs (baseline {} µs)",
+            PRIVACY_PASS_P95_BASELINE_US
+        );
+    }
 }

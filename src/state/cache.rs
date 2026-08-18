@@ -13,6 +13,44 @@ pub const ENV_TOOL_CACHE_LIMIT: &str = "MCP_TOOL_CACHE_ENTRIES";
 /// Default maximum number of entries in Tool cache.
 pub const DEFAULT_TOOL_CACHE_ENTRIES: usize = 100 * 1024 * 1024;
 
+/// Typed cache configuration — single source of truth for capacity defaults.
+#[derive(Debug, Clone)]
+pub struct ToolCacheLimits {
+    pub ast_cache_entries: usize,
+    pub tool_cache_entries: usize,
+}
+
+impl ToolCacheLimits {
+    pub const fn defaults() -> Self {
+        Self {
+            ast_cache_entries: DEFAULT_AST_CACHE_ENTRIES,
+            tool_cache_entries: DEFAULT_TOOL_CACHE_ENTRIES,
+        }
+    }
+
+    /// Loads overrides from environment variables; ignored if invalid.
+    pub fn from_env() -> Self {
+        let mut limits = Self::defaults();
+        if let Some(v) = std::env::var(ENV_AST_CACHE_LIMIT)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .and_then(NonZeroUsize::new)
+            .map(|n| n.get())
+        {
+            limits.ast_cache_entries = v;
+        }
+        if let Some(v) = std::env::var(ENV_TOOL_CACHE_LIMIT)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .and_then(NonZeroUsize::new)
+            .map(|n| n.get())
+        {
+            limits.tool_cache_entries = v;
+        }
+        limits
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CachedAnalysis {
     pub analysis: FileAnalysis,
@@ -41,22 +79,11 @@ pub struct CacheManager {
 
 impl CacheManager {
     pub fn new() -> Self {
-        let ast_limit = std::env::var(ENV_AST_CACHE_LIMIT)
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .and_then(NonZeroUsize::new)
-            .map(|n| n.get())
-            .unwrap_or(DEFAULT_AST_CACHE_ENTRIES);
+        let limits = ToolCacheLimits::from_env();
+        let ast_limit = limits.ast_cache_entries;
+        let tool_limit = limits.tool_cache_entries;
 
         let ast_cache = Cache::builder().max_capacity(ast_limit as u64).build();
-
-        let tool_limit = std::env::var(ENV_TOOL_CACHE_LIMIT)
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .and_then(NonZeroUsize::new)
-            .map(|n| n.get())
-            .unwrap_or(DEFAULT_TOOL_CACHE_ENTRIES);
-
         let tool_cache = Cache::builder()
             .max_capacity(tool_limit as u64)
             .support_invalidation_closures()
@@ -123,5 +150,38 @@ fn json_contains_path(value: &serde_json::Value, absolute: &str, relative: Optio
             .values()
             .any(|item| json_contains_path(item, absolute, relative)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod limits_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn tool_cache_limits_defaults_are_positive() {
+        let l = ToolCacheLimits::defaults();
+        assert!(l.ast_cache_entries > 0);
+        assert!(l.tool_cache_entries > 0);
+    }
+
+    #[test]
+    fn tool_cache_limits_from_env_reads_ast_override() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(ENV_AST_CACHE_LIMIT, "512");
+        let l = ToolCacheLimits::from_env();
+        std::env::remove_var(ENV_AST_CACHE_LIMIT);
+        assert_eq!(l.ast_cache_entries, 512);
+    }
+
+    #[test]
+    fn tool_cache_limits_from_env_ignores_invalid_value() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(ENV_AST_CACHE_LIMIT, "not_a_number");
+        let l = ToolCacheLimits::from_env();
+        std::env::remove_var(ENV_AST_CACHE_LIMIT);
+        assert_eq!(l.ast_cache_entries, DEFAULT_AST_CACHE_ENTRIES);
     }
 }

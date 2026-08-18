@@ -26,8 +26,6 @@ const STDIN_TRACE_ENV: &str = "NEXUS_MCP_STDIN_TRACE";
 /// Typed transport limits — single source of truth for framing constraints.
 ///
 /// Field units are stated in the name; override via `from_env` or keep defaults.
-// Not yet wired into the hot path; here for configuration-as-code completeness.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TransportLimits {
     /// Maximum accepted `Content-Length` value in bytes.
@@ -38,8 +36,6 @@ pub struct TransportLimits {
     pub max_headers: usize,
 }
 
-// Not yet wired into the hot path; here for configuration-as-code completeness.
-#[allow(dead_code)]
 impl TransportLimits {
     pub const fn defaults() -> Self {
         Self {
@@ -50,6 +46,7 @@ impl TransportLimits {
     }
 
     /// Loads overrides from environment variables; returns Err for invalid values.
+    #[allow(dead_code)]
     pub fn from_env() -> Result<Self> {
         let mut limits = Self::defaults();
         if let Ok(val) = env::var("NEXUS_MAX_MESSAGE_BYTES") {
@@ -104,6 +101,7 @@ pub struct McpTransport<R, W> {
     reader: BufReader<R>,
     writer: W,
     line_delimited_json_mode: bool,
+    limits: TransportLimits,
 }
 
 impl<R, W> McpTransport<R, W>
@@ -116,6 +114,7 @@ where
             reader: BufReader::new(reader),
             writer,
             line_delimited_json_mode: false,
+            limits: TransportLimits::defaults(),
         }
     }
 
@@ -152,7 +151,7 @@ where
             warn!(headers = ?headers, content_length, "MCP stdin trace: parsed headers");
         }
 
-        validate_content_length(content_length)?;
+        validate_content_length(content_length, &self.limits)?;
         let msg = self.read_body(content_length, trace_enabled).await?;
 
         debug!("Message received via MCP transport");
@@ -206,10 +205,9 @@ where
                 warn!(bytes = n, line = %escaped, "MCP stdin trace: header chunk");
             }
 
-            if line.len() > MAX_HEADER_LINE_BYTES {
-                return Err(anyhow!(
-                    "Header line exceeds maximum size ({MAX_HEADER_LINE_BYTES} bytes)"
-                ));
+            if line.len() > self.limits.max_header_line_bytes {
+                let max = self.limits.max_header_line_bytes;
+                return Err(anyhow!("Header line exceeds maximum size ({max} bytes)"));
             }
 
             let is_first_header_line = !saw_first_line;
@@ -238,8 +236,9 @@ where
                 break;
             }
 
-            if headers.len() >= MAX_HEADER_COUNT {
-                return Err(anyhow!("Too many headers (max {MAX_HEADER_COUNT})"));
+            if headers.len() >= self.limits.max_headers {
+                let max = self.limits.max_headers;
+                return Err(anyhow!("Too many headers (max {max})"));
             }
 
             Self::parse_header_line(trimmed, &mut headers)?;
@@ -350,13 +349,14 @@ fn extract_content_length(headers: &HashMap<String, String>) -> Result<usize> {
 
 /// Rejects a `Content-Length` value that would produce an empty or
 /// oversized allocation before any I/O is attempted.
-fn validate_content_length(content_length: usize) -> Result<()> {
+fn validate_content_length(content_length: usize, limits: &TransportLimits) -> Result<()> {
     if content_length == 0 {
         return Err(anyhow!("Content-Length must be greater than 0"));
     }
-    if content_length > MAX_MESSAGE_SIZE {
+    if content_length > limits.max_message_bytes {
+        let max = limits.max_message_bytes;
         return Err(anyhow!(
-            "Content-Length exceeds maximum: {content_length} > {MAX_MESSAGE_SIZE}"
+            "Content-Length exceeds maximum: {content_length} > {max}"
         ));
     }
     Ok(())

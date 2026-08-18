@@ -28,6 +28,32 @@ const ENV_TOOL_CONCURRENCY: &str = "NEXUS_TOOL_MAX_CONCURRENCY";
 /// Default maximum number of concurrent tool executions.
 const DEFAULT_TOOL_MAX_CONCURRENCY: usize = 4;
 
+/// Typed concurrency configuration for tool execution.
+#[derive(Debug, Clone)]
+pub struct ConcurrencyLimits {
+    pub max_tool_concurrency: usize,
+}
+
+impl ConcurrencyLimits {
+    #[allow(dead_code)]
+    pub const fn defaults() -> Self {
+        Self {
+            max_tool_concurrency: DEFAULT_TOOL_MAX_CONCURRENCY,
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let max = std::env::var(ENV_TOOL_CONCURRENCY)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&v| v > 0)
+            .unwrap_or(DEFAULT_TOOL_MAX_CONCURRENCY);
+        Self {
+            max_tool_concurrency: max,
+        }
+    }
+}
+
 pub struct ServerState {
     /// Canonical, absolute project root — immutable after init.
     root: PathBuf,
@@ -67,11 +93,8 @@ impl ServerState {
         let ts_path_aliases = resolver::PathResolver::discover_ts_path_aliases(&root);
         let lint_pool = LintPool::init(&root);
 
-        let max_concurrency = std::env::var(ENV_TOOL_CONCURRENCY)
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&v| v > 0)
-            .unwrap_or(DEFAULT_TOOL_MAX_CONCURRENCY);
+        let concurrency_limits = ConcurrencyLimits::from_env();
+        let max_concurrency = concurrency_limits.max_tool_concurrency;
 
         let security_config = SecurityConfig::load();
         let client_authenticated = AtomicBool::new(security_config.auth_token.is_none());
@@ -601,5 +624,33 @@ mod tests {
             resolver::expand_ts_alias_candidates(PathBuf::from("src/components/button"));
         assert!(candidates.iter().any(|p| p.ends_with("button.ts")));
         assert!(candidates.iter().any(|p| p.ends_with("button/index.ts")));
+    }
+
+    #[test]
+    fn concurrency_limits_defaults_are_positive() {
+        let l = super::ConcurrencyLimits::defaults();
+        assert!(l.max_tool_concurrency > 0);
+    }
+
+    #[test]
+    fn concurrency_limits_from_env_reads_override() {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(super::ENV_TOOL_CONCURRENCY, "8");
+        let l = super::ConcurrencyLimits::from_env();
+        std::env::remove_var(super::ENV_TOOL_CONCURRENCY);
+        assert_eq!(l.max_tool_concurrency, 8);
+    }
+
+    #[test]
+    fn concurrency_limits_from_env_ignores_zero() {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var(super::ENV_TOOL_CONCURRENCY, "0");
+        let l = super::ConcurrencyLimits::from_env();
+        std::env::remove_var(super::ENV_TOOL_CONCURRENCY);
+        assert_eq!(l.max_tool_concurrency, super::DEFAULT_TOOL_MAX_CONCURRENCY);
     }
 }

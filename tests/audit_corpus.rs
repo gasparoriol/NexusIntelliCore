@@ -191,6 +191,69 @@ fn audit_corpus_parametrized() {
     }
 }
 
+/// Precision and recall computed over the labelled corpus.
+///
+/// Counts are taken from the JSON summary's `findings_total` and per-context
+/// breakdown, not from the free-form Markdown, to avoid double-counting
+/// occurrences that also appear in headings.
+#[test]
+fn audit_corpus_precision_and_recall_meet_thresholds() {
+    let mut true_positives: usize = 0;
+    let mut false_positives: usize = 0;
+    let mut false_negatives: usize = 0;
+
+    for case in CASES {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file_path = write_corpus_file(&dir, case.name, case.extension, case.source);
+        let response = run_audit_on_file(&file_path.to_string_lossy());
+        let text = extract_text(&response);
+        let summary = extract_json_summary(&text);
+
+        let expected_count: usize = case.expected.iter().map(|(_, _, n)| *n).sum();
+        // findings_total is the deduplicated count across all detectors.
+        let detected_count: usize = summary
+            .get("findings_total")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
+        if expected_count == 0 {
+            false_positives += detected_count;
+        } else {
+            let tp = detected_count.min(expected_count);
+            true_positives += tp;
+            if detected_count > expected_count {
+                false_positives += detected_count - expected_count;
+            }
+            if expected_count > detected_count {
+                false_negatives += expected_count - detected_count;
+            }
+        }
+    }
+
+    let precision = if true_positives + false_positives == 0 {
+        1.0
+    } else {
+        true_positives as f64 / (true_positives + false_positives) as f64
+    };
+    let recall = if true_positives + false_negatives == 0 {
+        1.0
+    } else {
+        true_positives as f64 / (true_positives + false_negatives) as f64
+    };
+
+    // Thresholds dictated by mitigación 04 (fase 4).
+    assert!(
+        precision >= 0.95,
+        "audit corpus precision {precision:.3} below 0.95 threshold. \
+         tp={true_positives}, fp={false_positives}, fn={false_negatives}"
+    );
+    assert!(
+        recall >= 0.90,
+        "audit corpus recall {recall:.3} below 0.90 threshold. \
+         tp={true_positives}, fp={false_positives}, fn={false_negatives}"
+    );
+}
+
 /// Deduplication: two identical findings in the same file → count once.
 #[test]
 fn audit_dedup_removes_identical_fingerprints() {
