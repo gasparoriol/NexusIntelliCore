@@ -31,6 +31,7 @@ pub(crate) fn apply_dependency_type_filters(
             }
             if !params.include_unresolved {
                 obj.insert("unresolved".to_string(), Value::Array(Vec::new()));
+                obj.insert("unresolved_details".to_string(), Value::Array(Vec::new()));
             }
         }
     }
@@ -62,6 +63,7 @@ pub(crate) async fn build_file_dependencies(
         let mut restricted: Vec<String> = Vec::new();
         let mut external: Vec<String> = Vec::new();
         let mut unresolved_list: Vec<String> = Vec::new();
+        let mut unresolved_details: Vec<Value> = Vec::new();
 
         for imp in &analysis.imports {
             let (resolved_str, kind, _) = resolve_import_path(
@@ -76,7 +78,13 @@ pub(crate) async fn build_file_dependencies(
                 analyzer::ImportKind::InternalLocal => internal.push(resolved_str),
                 analyzer::ImportKind::InternalRestricted => restricted.push(resolved_str),
                 analyzer::ImportKind::ExternalLibrary => external.push(imp.path.clone()),
-                analyzer::ImportKind::Unresolved => unresolved_list.push(imp.path.clone()),
+                analyzer::ImportKind::Unresolved => {
+                    unresolved_list.push(imp.path.clone());
+                    unresolved_details.push(json!({
+                        "import": imp.path,
+                        "reason": super::imports::unresolved_reason(&imp.path),
+                    }));
+                }
             }
         }
 
@@ -84,19 +92,26 @@ pub(crate) async fn build_file_dependencies(
         restricted = deduplicate_deps(restricted);
         external = deduplicate_deps(external);
         unresolved_list = deduplicate_deps(unresolved_list);
+        let resolved_internal = internal.len();
+        let unresolved_actionable = unresolved_details.len();
 
         internal.truncate(params.max_edges_per_node);
         restricted.truncate(params.max_edges_per_node);
         external.truncate(params.max_edges_per_node);
         unresolved_list.truncate(params.max_edges_per_node);
+        unresolved_details.truncate(params.max_edges_per_node);
 
         file_deps.insert(
             rel,
             json!({
+                "imports_total": analysis.imports.len(),
+                "resolved_internal": resolved_internal,
+                "unresolved_actionable": unresolved_actionable,
                 "internal": internal,
                 "restricted": restricted,
                 "external": external,
                 "unresolved": unresolved_list,
+                "unresolved_details": unresolved_details,
             }),
         );
 

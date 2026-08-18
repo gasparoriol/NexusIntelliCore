@@ -295,6 +295,15 @@ mod tests {
     }
 
     #[test]
+    fn test_unresolved_reason_is_stable() {
+        assert_eq!(
+            imports::unresolved_reason("crate::missing"),
+            "destination_not_found"
+        );
+        assert_eq!(imports::unresolved_reason(""), "unsupported_syntax");
+    }
+
+    #[test]
     fn test_find_matching_file_strictness() {
         let files = vec![
             PathBuf::from("src/state.rs"),
@@ -389,19 +398,30 @@ mod tests {
         file_deps.insert(
             "file1.rs".to_string(),
             json!({
+                "imports_total": 4,
+                "resolved_internal": 2,
+                "unresolved_actionable": 0,
                 "internal": ["mod1", "mod2"],
                 "restricted": ["priv1"],
                 "external": ["tokio"],
-                "unresolved": []
+                "unresolved": [],
+                "unresolved_details": []
             }),
         );
         file_deps.insert(
             "file2.rs".to_string(),
             json!({
+                "imports_total": 4,
+                "resolved_internal": 1,
+                "unresolved_actionable": 1,
                 "internal": ["mod1"],
                 "restricted": [],
                 "external": ["serde", "tokio"],
-                "unresolved": ["unknown"]
+                "unresolved": ["unknown"],
+                "unresolved_details": [{
+                    "import": "unknown",
+                    "reason": "destination_not_found"
+                }]
             }),
         );
 
@@ -448,6 +468,19 @@ mod tests {
         assert_eq!(
             stats.get("total_unresolved").and_then(Value::as_u64),
             Some(1)
+        );
+        assert_eq!(stats.get("imports_total").and_then(Value::as_u64), Some(8));
+        assert_eq!(
+            stats.get("resolved_internal").and_then(Value::as_u64),
+            Some(3)
+        );
+        assert_eq!(
+            stats.get("unresolved_actionable").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            stats.get("resolution_coverage").and_then(Value::as_f64),
+            Some(0.75)
         );
     }
 

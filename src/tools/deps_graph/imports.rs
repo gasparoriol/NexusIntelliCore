@@ -150,6 +150,14 @@ pub(crate) fn resolve_non_relative_import_path(
     (normalised, ImportKind::Unresolved, None)
 }
 
+pub(crate) fn unresolved_reason(path: &str) -> &'static str {
+    if path.trim().is_empty() {
+        "unsupported_syntax"
+    } else {
+        "destination_not_found"
+    }
+}
+
 pub(crate) fn normalise_internal_reference(path: &str) -> String {
     let normalised = if path.contains("::") {
         path.replace("::", "/")

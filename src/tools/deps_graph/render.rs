@@ -18,10 +18,21 @@ pub(crate) fn generate_summary(
     let mut total_restricted = 0;
     let mut total_external: HashSet<String> = HashSet::new();
     let mut total_unresolved = 0;
+    let mut imports_total = 0;
+    let mut resolved_internal = 0;
+    let mut unresolved_actionable = 0;
     let mut hotspot_counts: Vec<(String, usize, usize)> = Vec::new();
 
     for (file, deps_obj) in file_deps.iter().take(params.max_nodes) {
         if let Some(obj) = deps_obj.as_object() {
+            imports_total += obj
+                .get("imports_total")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            resolved_internal += obj
+                .get("resolved_internal")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
             let internal_count = obj
                 .get("internal")
                 .and_then(Value::as_array)
@@ -46,6 +57,17 @@ pub(crate) fn generate_summary(
             total_internal += internal_count;
             total_restricted += restricted_count;
             total_unresolved += unresolved_count;
+            unresolved_actionable += obj
+                .get("unresolved_actionable")
+                .and_then(Value::as_u64)
+                .map_or_else(
+                    || {
+                        obj.get("unresolved_details")
+                            .and_then(Value::as_array)
+                            .map_or(0, std::vec::Vec::len) as u64
+                    },
+                    |count| count,
+                ) as usize;
 
             let fanout = internal_count + restricted_count + external_count + unresolved_count;
             if fanout > 0 || dependents_count > 0 {
@@ -83,6 +105,14 @@ pub(crate) fn generate_summary(
             "total_restricted_deps": total_restricted,
             "total_external_libs": total_external.len(),
             "total_unresolved": total_unresolved,
+            "imports_total": imports_total,
+            "resolved_internal": resolved_internal,
+            "unresolved_actionable": unresolved_actionable,
+            "resolution_coverage": if resolved_internal + unresolved_actionable == 0 {
+                1.0
+            } else {
+                resolved_internal as f64 / (resolved_internal + unresolved_actionable) as f64
+            },
         },
         "top_hotspots": top_hotspots
             .iter()
