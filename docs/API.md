@@ -789,5 +789,5 @@ API is in active development. Breaking changes may occur in minor versions durin
 For more information, see:
 
 - [README.md](./README.md) - Project overview
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - System architecture
+- [architecture.md](./architecture.md) - System architecture
 - [SECURITY.md](./SECURITY.md) - Security guidelines

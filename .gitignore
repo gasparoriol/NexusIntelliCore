@@ -7,3 +7,6 @@ Cargo.lock
 
 # The current MCP API contract is validated by tests and must be versioned.
 !docs/API.md
+!docs/README.md
+!docs/SECURITY.md
+!docs/architecture.md
