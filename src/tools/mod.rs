@@ -18,6 +18,7 @@ mod outline;
 mod patterns;
 mod project;
 mod project_docs;
+mod projects_tool;
 mod query_ast;
 mod server;
 mod summary;
@@ -51,7 +52,7 @@ async fn dispatch_tool_uncached(
     args: &Value,
 ) -> Result<Value> {
     let raw = match name {
-        "get_project_structure" => project::get_project_structure(state).await,
+        "get_project_structure" => project::get_project_structure(state, args).await,
         "get_file_outline" => {
             let file = require_file_path(args)?;
             outline::get_file_outline(state, &file).await
@@ -158,6 +159,9 @@ async fn dispatch_tool_uncached(
             )
             .await
         }
+        "list_projects" => projects_tool::list_projects(state).await,
+        "register_project" => projects_tool::register_project(state, args).await,
+        "unregister_project" => projects_tool::unregister_project(state, args).await,
         other => Ok(error_response(format!("Unknown tool: {other}"))),
     };
     // Single output boundary: every tool result passes through the privacy gateway
@@ -235,7 +239,7 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     };
 
     if result.get("isError").and_then(Value::as_bool) == Some(true) {
-        state.invalidate_tool_cache_for_file(state.root());
+        state.invalidate_tool_cache_for_file(&state.root());
     }
 
     Ok(result)
@@ -409,6 +413,9 @@ mod tests {
             "analyze_angular_component",
             "get_module_summary",
             "generate_project_docs",
+            "list_projects",
+            "register_project",
+            "unregister_project",
         ];
 
         for name in dispatched {
@@ -746,10 +753,13 @@ mod tests {
             "get_server_stats",
             "inspect_symbol",
             "lint_file",
+            "list_projects",
             "query_ast",
             "read_config_file",
             "refresh_index",
+            "register_project",
             "search_design_patterns",
+            "unregister_project",
         ];
         expected.sort_unstable();
 

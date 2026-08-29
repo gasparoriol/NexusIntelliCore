@@ -11,7 +11,8 @@ use common::TestMcpClient;
 /// Update these values only when the resolver, detectors, or the codebase
 /// change legitimately. Each increase requires a comment in the PR
 /// explaining the new finding.
-const BASELINE_RUST_UNSAFE: usize = 79;
+/// Baseline updated for multi-project state decomposition and project management tools.
+const BASELINE_RUST_UNSAFE: usize = 90;
 const BASELINE_SECRET_DETECTION: usize = 17;
 
 fn extract_json_summary(text: &str) -> serde_json::Value {

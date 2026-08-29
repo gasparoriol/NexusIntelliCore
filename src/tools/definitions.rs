@@ -87,6 +87,24 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
             expensive: true,
             schema: schema_generate_project_docs,
         },
+        ToolDefinition {
+            name: "list_projects",
+            cacheable: false,
+            expensive: false,
+            schema: schema_list_projects,
+        },
+        ToolDefinition {
+            name: "register_project",
+            cacheable: false,
+            expensive: true,
+            schema: schema_register_project,
+        },
+        ToolDefinition {
+            name: "unregister_project",
+            cacheable: false,
+            expensive: false,
+            schema: schema_unregister_project,
+        },
     ]
 }
 
@@ -441,6 +459,56 @@ fn schema_lint_file() -> Value {
                 }
             },
             "required": ["file_path"]
+        }
+    })
+}
+
+fn schema_list_projects() -> Value {
+    json!({
+        "name": "list_projects",
+        "description": "Lists all registered projects managed by this NexusIntelliCore instance, including their IDs, root paths, and index status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    })
+}
+
+fn schema_register_project() -> Value {
+    json!({
+        "name": "register_project",
+        "description": "Registers a new project root directory dynamically with NexusIntelliCore.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the project root directory"
+                },
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional custom alias/ID for the project"
+                }
+            },
+            "required": ["path"]
+        }
+    })
+}
+
+fn schema_unregister_project() -> Value {
+    json!({
+        "name": "unregister_project",
+        "description": "Unregisters a project root directory from NexusIntelliCore and invalidates its associated caches.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project ID or root path of the project to unregister"
+                }
+            },
+            "required": ["project_id"]
         }
     })
 }

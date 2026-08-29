@@ -2,7 +2,6 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use std::path::Path;
 
 use crate::linter::render_lint_summary_scoped;
 use crate::privacy_gateway;
@@ -20,12 +19,12 @@ pub(super) async fn inspect_symbol(
     return_all_matches: bool,
     signature_hint: Option<&str>,
 ) -> Result<Value> {
-    let path = match state.validate_path(Path::new(file_path)) {
+    let (proj, path) = match state.resolve_project_for_path(file_path) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
-    let index = state.index().await?;
+    let index = proj.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
             "⚠ Access denied: {file_path} is protected by .mcpignore.\n\

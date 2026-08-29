@@ -138,6 +138,13 @@ impl CacheManager {
     pub fn invalidate_tool_cache_for_root(&self, _root: &Path) {
         self.tool_cache.invalidate_all();
     }
+
+    pub fn invalidate_ast_cache_for_root(&self, root: &Path) -> u64 {
+        let count = self.ast_cache.entry_count();
+        let root_buf = root.to_path_buf();
+        let _ = self.ast_cache.invalidate_entries_if(move |key, _| key.starts_with(&root_buf));
+        count
+    }
 }
 
 fn json_contains_path(value: &serde_json::Value, absolute: &str, relative: Option<&str>) -> bool {

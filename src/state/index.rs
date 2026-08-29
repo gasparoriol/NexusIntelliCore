@@ -47,4 +47,9 @@ impl IndexManager {
         self.index_ready.store(true, Ordering::Release);
         Ok(new_index)
     }
+
+    pub async fn file_index(&self, root: &Path) -> Result<FileIndex> {
+        self.ensure_ready(root).await?;
+        Ok(self.index.read().await.clone())
+    }
 }

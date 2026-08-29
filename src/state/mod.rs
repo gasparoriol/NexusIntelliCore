@@ -1,15 +1,17 @@
 pub mod cache;
 pub mod index;
 pub mod metrics;
+pub mod project;
 pub mod resolver;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use tracing::{debug, info, warn};
+use tracing::info;
 
 use crate::analyzer;
 use crate::indexer::FileIndex;
@@ -18,6 +20,7 @@ use crate::security::SecurityConfig;
 
 pub use cache::{AstCacheStats, CachedAnalysis, ToolCacheKey};
 pub use metrics::OperationalMetrics;
+pub use project::ProjectContext;
 pub use resolver::TsPathAliasConfig;
 
 /// Global server state, initialised once at startup.
@@ -55,66 +58,56 @@ impl ConcurrencyLimits {
 }
 
 pub struct ServerState {
-    /// Canonical, absolute project root — immutable after init.
-    root: PathBuf,
-    /// Hybrid linting pool used by `lint_file` and `inspect_symbol`.
-    lint_pool: LintPool,
+    /// Registered projects mapped by project ID.
+    projects: std::sync::RwLock<HashMap<String, Arc<ProjectContext>>>,
+    /// Default project ID used when tool calls don't specify a project.
+    default_project_id: std::sync::RwLock<Option<String>>,
     /// Security configuration loaded at startup.
     security_config: SecurityConfig,
     /// Whether the client connection has been authenticated.
     client_authenticated: AtomicBool,
-    /// True if the project is detected to be an Angular project.
-    is_angular_project: bool,
-    /// Parsed JS/TS path aliases from discovered `tsconfig`/`jsconfig` files.
-    ts_path_aliases: Vec<TsPathAliasConfig>,
     /// Semaphore to control concurrent execution of expensive tools.
     tool_concurrency: tokio::sync::Semaphore,
 
     // Sub-components
     cache: cache::CacheManager,
-    index_mgr: index::IndexManager,
     metrics: metrics::MetricsCollector,
 }
 
 impl ServerState {
-    pub fn new(root_str: &str) -> Result<Arc<Self>> {
-        let root = std::fs::canonicalize(root_str)
-            .with_context(|| format!("Failed to canonicalise project root: {root_str}"))?;
-
-        let index_mgr = index::IndexManager::new(&root)?;
-        let is_angular = index_mgr
-            .index
-            .try_read()
-            .expect("freshly constructed index lock should not be contended")
-            .allowed_files
-            .iter()
-            .any(|p| p.to_string_lossy().contains("angular.json"));
-
-        let ts_path_aliases = resolver::PathResolver::discover_ts_path_aliases(&root);
-        let lint_pool = LintPool::init(&root);
-
+    pub fn empty() -> Result<Arc<Self>> {
         let concurrency_limits = ConcurrencyLimits::from_env();
         let max_concurrency = concurrency_limits.max_tool_concurrency;
-
         let security_config = SecurityConfig::load();
         let client_authenticated = AtomicBool::new(security_config.auth_token.is_none());
 
         Ok(Arc::new(Self {
-            root,
-            lint_pool,
+            projects: std::sync::RwLock::new(HashMap::new()),
+            default_project_id: std::sync::RwLock::new(None),
             security_config,
             client_authenticated,
-            is_angular_project: is_angular,
-            ts_path_aliases,
             tool_concurrency: tokio::sync::Semaphore::new(max_concurrency),
             cache: cache::CacheManager::new(),
-            index_mgr,
             metrics: metrics::MetricsCollector::new(),
         }))
     }
 
+    pub fn new(root_str: &str) -> Result<Arc<Self>> {
+        let state = Self::empty()?;
+        state.register_project(root_str, None)?;
+        Ok(state)
+    }
+
     pub fn init(root: &str) -> Result<Arc<Self>> {
         let instance = Self::new(root)?;
+        STATE
+            .set(instance.clone())
+            .map_err(|_| anyhow::anyhow!("ServerState already initialised"))?;
+        Ok(instance)
+    }
+
+    pub fn init_empty() -> Result<Arc<Self>> {
+        let instance = Self::empty()?;
         STATE
             .set(instance.clone())
             .map_err(|_| anyhow::anyhow!("ServerState already initialised"))?;
@@ -132,12 +125,120 @@ impl ServerState {
         STATE.get().cloned()
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
+    pub fn register_project(&self, root_str: &str, id: Option<String>) -> Result<Arc<ProjectContext>> {
+        let project = ProjectContext::new(root_str, id)?;
+        let mut projects = self.projects.write().unwrap();
+        projects.insert(project.id.clone(), project.clone());
+
+        let mut def_lock = self.default_project_id.write().unwrap();
+        if def_lock.is_none() {
+            *def_lock = Some(project.id.clone());
+        }
+
+        info!(project_id = %project.id, root = %project.root.display(), "Project registered");
+        Ok(project)
     }
 
-    pub fn lint_pool(&self) -> &LintPool {
-        &self.lint_pool
+    pub fn unregister_project(&self, id_or_path: &str) -> Result<bool> {
+        let mut projects = self.projects.write().unwrap();
+        let target_id = if projects.contains_key(id_or_path) {
+            Some(id_or_path.to_string())
+        } else if let Ok(canonical) = std::fs::canonicalize(id_or_path) {
+            projects.iter().find(|(_, p)| p.root == canonical).map(|(k, _)| k.clone())
+        } else {
+            None
+        };
+
+        let Some(id) = target_id else {
+            return Ok(false);
+        };
+
+        if let Some(removed) = projects.remove(&id) {
+            self.invalidate_tool_cache_for_root(&removed.root);
+            self.invalidate_ast_cache_for_root(&removed.root);
+
+            let mut def_lock = self.default_project_id.write().unwrap();
+            if def_lock.as_deref() == Some(&id) {
+                *def_lock = projects.keys().next().cloned();
+            }
+            info!(project_id = %id, "Project unregistered");
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn get_project(&self, id_or_path: Option<&str>) -> Result<Arc<ProjectContext>> {
+        let projects = self.projects.read().unwrap();
+
+        if let Some(key) = id_or_path {
+            if let Some(proj) = projects.get(key) {
+                return Ok(proj.clone());
+            }
+            if let Ok(canonical) = std::fs::canonicalize(key) {
+                if let Some((_, proj)) = projects.iter().find(|(_, p)| p.root == canonical) {
+                    return Ok(proj.clone());
+                }
+            }
+            anyhow::bail!("Project '{key}' not found");
+        }
+
+        let def_id = self.default_project_id.read().unwrap();
+        let Some(ref id) = *def_id else {
+            anyhow::bail!("No project registered in ServerState");
+        };
+
+        projects
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Default project '{id}' not found"))
+    }
+
+    pub fn resolve_project_for_path(&self, file_path: &str) -> Result<(Arc<ProjectContext>, PathBuf)> {
+        let requested_path = Path::new(file_path);
+        let projects = self.projects.read().unwrap();
+
+        let absolute_candidate = std::fs::canonicalize(requested_path).ok();
+
+        if let Some(ref canonical) = absolute_candidate {
+            let mut matched: Vec<&Arc<ProjectContext>> = projects
+                .values()
+                .filter(|p| canonical.starts_with(&p.root))
+                .collect();
+            matched.sort_by_key(|p| std::cmp::Reverse(p.root.components().count()));
+            if let Some(best) = matched.first() {
+                return Ok(((*best).clone(), canonical.clone()));
+            }
+        }
+
+        drop(projects);
+        let default_proj = self.get_project(None)?;
+        let validated = default_proj.validate_path(requested_path)?;
+        Ok((default_proj, validated))
+    }
+
+    pub fn list_projects(&self) -> Vec<(String, PathBuf)> {
+        let projects = self.projects.read().unwrap();
+        projects
+            .iter()
+            .map(|(id, p)| (id.clone(), p.root.clone()))
+            .collect()
+    }
+
+    pub fn default_project(&self) -> Result<Arc<ProjectContext>> {
+        self.get_project(None)
+    }
+
+    pub fn root(&self) -> PathBuf {
+        self.default_project()
+            .map(|p| p.root.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn lint_pool(&self) -> LintPool {
+        self.default_project()
+            .map(|p| p.lint_pool.clone())
+            .unwrap_or_else(|_| LintPool::init(Path::new(".")))
     }
 
     pub fn security_config(&self) -> &SecurityConfig {
@@ -191,12 +292,14 @@ impl ServerState {
     }
 
     pub fn is_angular_project(&self) -> bool {
-        self.is_angular_project
+        self.default_project()
+            .is_ok_and(|p| p.is_angular_project)
     }
 
     #[allow(dead_code)]
-    pub fn ts_path_aliases(&self) -> &[TsPathAliasConfig] {
-        &self.ts_path_aliases
+    pub fn ts_path_aliases(&self) -> Vec<TsPathAliasConfig> {
+        self.default_project()
+            .map_or_else(|_| vec![], |p| p.ts_path_aliases.clone())
     }
 
     pub fn resolve_ts_path_alias(
@@ -204,8 +307,9 @@ impl ServerState {
         import_path: &str,
         importer_path: &Path,
     ) -> Option<PathBuf> {
+        let (proj, _) = self.resolve_project_for_path(&importer_path.to_string_lossy()).ok()?;
         resolver::PathResolver::resolve_ts_path_alias(
-            &self.ts_path_aliases,
+            &proj.ts_path_aliases,
             import_path,
             importer_path,
         )
@@ -284,8 +388,16 @@ impl ServerState {
     }
 
     pub fn make_tool_cache_key(&self, tool_name: &str, args: &serde_json::Value) -> ToolCacheKey {
+        let root = if let Some(path_str) = args.get("file_path").and_then(|v| v.as_str()) {
+            self.resolve_project_for_path(path_str)
+                .map(|(p, _)| p.root.clone())
+                .unwrap_or_else(|_| self.root())
+        } else {
+            self.root()
+        };
+
         ToolCacheKey {
-            root_path: self.root.clone(),
+            root_path: root,
             tool_name: tool_name.to_string(),
             canonical_args: resolver::canonicalize_json(args),
         }
@@ -295,23 +407,26 @@ impl ServerState {
         self.cache.invalidate_tool_cache_for_root(root);
     }
 
+    pub fn invalidate_ast_cache_for_root(&self, root: &Path) -> u64 {
+        self.cache.invalidate_ast_cache_for_root(root)
+    }
+
     pub fn invalidate_tool_cache_for_file(&self, path: &Path) {
-        self.cache.invalidate_tool_cache_for_file(&self.root, path);
+        let root = self
+            .resolve_project_for_path(&path.to_string_lossy())
+            .map(|(p, _)| p.root.clone())
+            .unwrap_or_else(|_| self.root());
+        self.cache.invalidate_tool_cache_for_file(&root, path);
     }
 
-    pub async fn index(&self) -> Result<tokio::sync::RwLockReadGuard<'_, FileIndex>> {
-        self.index_mgr.ensure_ready(&self.root).await?;
-        Ok(self.index_mgr.index.read().await)
-    }
-
-    #[allow(dead_code)]
-    pub async fn rebuild_index(&self) -> Result<()> {
-        self.index_mgr.rebuild(&self.root).await?;
-        Ok(())
+    pub async fn index(&self) -> Result<FileIndex> {
+        let proj = self.default_project()?;
+        proj.index().await
     }
 
     pub fn validate_path(&self, requested: &Path) -> Result<PathBuf> {
-        resolver::PathResolver::validate_path(&self.root, requested)
+        let (_proj, validated) = self.resolve_project_for_path(&requested.to_string_lossy())?;
+        Ok(validated)
     }
 
     pub async fn get_analysis(&self, path: &Path) -> Result<analyzer::FileAnalysis> {
@@ -341,82 +456,8 @@ impl ServerState {
     }
 
     pub async fn refresh_index(&self) -> Result<(usize, u64)> {
-        let new_index = self.index_mgr.rebuild(&self.root).await?;
-        let files_found = new_index.allowed_files.len() + new_index.restricted_files.len();
-
-        self.invalidate_tool_cache_for_root(&self.root);
-
-        let count = self.cache.ast_cache.entry_count();
-        self.cache.ast_cache.invalidate_all();
-        let cleared_count = count;
-
-        Ok((files_found, cleared_count))
-    }
-
-    pub fn request_watcher_refresh(self: &Arc<Self>) {
-        self.index_mgr
-            .watch_refresh_pending
-            .store(true, Ordering::Release);
-
-        let was_running = self
-            .index_mgr
-            .watch_refresh_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok();
-
-        if was_running {
-            debug!("Watcher refresh requested; loop claimed by this thread");
-            let state = Arc::clone(self);
-            tokio::spawn(async move {
-                state.run_watcher_refresh_loop().await;
-            });
-        } else {
-            debug!("Watcher refresh requested; coalesced with active refresh loop");
-        }
-    }
-
-    async fn run_watcher_refresh_loop(&self) {
-        loop {
-            let pending = self
-                .index_mgr
-                .watch_refresh_pending
-                .swap(false, Ordering::AcqRel);
-            if !pending {
-                debug!("No watcher refreshes pending; releasing running flag");
-                self.index_mgr
-                    .watch_refresh_running
-                    .store(false, Ordering::Release);
-
-                if self.index_mgr.watch_refresh_pending.load(Ordering::Acquire)
-                    && self
-                        .index_mgr
-                        .watch_refresh_running
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                {
-                    debug!("Re-claimed running flag in close-race check; continuing loop");
-                    continue;
-                }
-                break;
-            }
-
-            info!("Executing watcher-triggered index refresh pass");
-            match self.refresh_index().await {
-                Ok((files, ast_cleared)) => {
-                    info!(
-                        files_found = files,
-                        ast_entries_cleared = ast_cleared,
-                        "Watcher-triggered index refresh completed successfully"
-                    );
-                }
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "Watcher-triggered index refresh failed; will retry on next file event"
-                    );
-                }
-            }
-        }
+        let proj = self.default_project()?;
+        proj.refresh_index().await
     }
 }
 
@@ -652,5 +693,27 @@ mod tests {
         let l = super::ConcurrencyLimits::from_env();
         std::env::remove_var(super::ENV_TOOL_CONCURRENCY);
         assert_eq!(l.max_tool_concurrency, super::DEFAULT_TOOL_MAX_CONCURRENCY);
+    }
+
+    #[test]
+    fn multi_project_registration_and_lookup() {
+        let dir1 = std::env::temp_dir().join("nexus_test_proj1");
+        let dir2 = std::env::temp_dir().join("nexus_test_proj2");
+        let _ = std::fs::create_dir_all(&dir1);
+        let _ = std::fs::create_dir_all(&dir2);
+
+        let state = ServerState::empty().unwrap();
+        let p1 = state.register_project(dir1.to_str().unwrap(), Some("proj1".into())).unwrap();
+        let p2 = state.register_project(dir2.to_str().unwrap(), Some("proj2".into())).unwrap();
+
+        assert_eq!(state.list_projects().len(), 2);
+        assert_eq!(state.get_project(Some("proj1")).unwrap().root, p1.root);
+        assert_eq!(state.get_project(Some("proj2")).unwrap().root, p2.root);
+
+        assert!(state.unregister_project("proj1").unwrap());
+        assert_eq!(state.list_projects().len(), 1);
+
+        let _ = std::fs::remove_dir_all(dir1);
+        let _ = std::fs::remove_dir_all(dir2);
     }
 }

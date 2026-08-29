@@ -40,6 +40,13 @@ All tool outputs pass through a centralized Privacy Gateway.
 - Compatibility support for line-delimited JSON mode
 - Structured logging through `tracing`
 
+### Multi-Project Architecture
+
+- **Multi-Root Support**: Run a single instance of `NexusIntelliCore` to concurrently analyze and manage multiple independent code repositories.
+- **Automatic Project Resolution**: File-based tool calls (`get_file_outline`, `lint_file`, `query_ast`, etc.) automatically resolve which registered project owns the target file path.
+- **Dynamic Project Registration**: Register or unregister project roots dynamically at runtime using `register_project` and `unregister_project`.
+- **Isolated State & Shared Caches**: Per-project file indices, TS path aliases, and linters are kept strictly isolated in `ProjectContext`, while AST and tool caches are shared globally at the server level with zero cross-project leakage.
+
 ### Optimization & Caching
 
 - **Tool Query Cache**: Caches final outputs of deterministic tools using `moka::future::Cache` to avoid re-analysing files when project code is unchanged. Purgings are immediate on file watcher events and concurrent misses are deduplicated.
@@ -54,9 +61,9 @@ All tool outputs pass through a centralized Privacy Gateway.
 
 ### Analysis Tools
 
-The server exposes fourteen MCP tools:
+The server exposes seventeen MCP tools:
 
-1. `get_project_structure` — directory tree with access-control markers
+1. `get_project_structure` — directory tree with access-control markers (accepts optional `project` ID)
 2. `get_file_outline` — structural map of a file (signatures, types, imports, doc-comments)
 3. `get_module_summary` — module-level doc-comments and public API
 4. `inspect_symbol` — sanitized source of a specific function or method
@@ -70,6 +77,9 @@ The server exposes fourteen MCP tools:
 12. `lint_file` — hybrid linting for a file (tree-sitter checks always available; external linters are opt-in)
 13. `query_ast` — ad-hoc tree-sitter query against any supported source file, captures sanitized through the Privacy Gateway
 14. `read_config_file` — safe read of configuration files (`.properties`, `.yaml`, `.yml`, `.toml`, `.env`) with automatic secret and IP redaction
+15. `list_projects` — list all active projects managed by this server instance
+16. `register_project` — dynamically register a new project root directory at runtime
+17. `unregister_project` — unregister a project root and flush its associated caches
 
 #### Dependency Graph Cycle Detection
 
@@ -151,6 +161,16 @@ The response JSON contains:
 - `redactions`: list of pattern labels that fired (e.g. `CONFIG_SENSITIVE_KEY`, `DB_CONNECTION_URI`, `CONFIG_IPV4`)
 
 `get_file_outline` applies the same sanitization defensively when called on a config file, returning the key structure without exposing values.
+
+#### Multi-Project Management (`list_projects`, `register_project`, `unregister_project`)
+
+NexusIntelliCore supports hosting multiple project roots within a single server instance.
+
+- **`list_projects`**: returns all registered projects, their canonical paths, angular detection status, and file counts.
+- **`register_project`**: registers a new project root directory dynamically at runtime. Accepts `path` (required) and optional `project_id` alias.
+- **`unregister_project`**: removes a project from the server instance and purges its cached entries. Accepts `project_id` or `path`.
+
+File-based tool calls (`get_file_outline`, `inspect_symbol`, `lint_file`, `query_ast`, etc.) automatically map the provided `file_path` to the correct project root without needing manual project selection. Structural tools like `get_project_structure` accept an optional `project` parameter to target a specific project.
 
 ### Documentation Generation
 
@@ -318,20 +338,22 @@ Requests received prior to successful initialization will be rejected with an au
 
 High-level module responsibilities:
 
-- `src/main.rs`: server bootstrap, MCP lifecycle handling, request dispatch
+- `src/main.rs`: server bootstrap, CLI multi-root handling, MCP lifecycle dispatch
 - `src/transport.rs`: stdio framing/parsing and transport I/O
 - `src/protocol.rs`: JSON-RPC protocol types and response helpers
 - `src/tools/mod.rs`: tool registry and tool dispatch implementation
+- `src/tools/projects_tool.rs`: multi-project management handlers (`list_projects`, `register_project`, `unregister_project`)
 - `src/tools/deps_graph/`: modular implementation of `get_dependencies_graph` split into import resolution, graph building, cycle detection, and rendering helpers
-- `src/state/mod.rs`: `ServerState` facade that composes cache, index, metrics, path-alias resolution, and watcher-refresh coordination
-- `src/state/cache.rs`: AST cache and tool-response cache management using `moka::future::Cache`, including selective invalidation of cached tool results when a file changes
+- `src/state/mod.rs`: `ServerState` facade managing global AST/tool caches, security config, metrics, and project registry (`HashMap<String, Arc<ProjectContext>>`)
+- `src/state/project.rs`: `ProjectContext` encapsulating per-project state (`FileIndex`, `LintPool`, `TsPathAliasConfig`, `FileWatcher`)
+- `src/state/cache.rs`: shared AST cache and tool-response cache management using `moka::future::Cache`, including selective invalidation of cached tool results per project root
 - `src/state/index.rs`: `FileIndex` lifecycle management and refresh orchestration
 - `src/state/metrics.rs`: server counters and operational metrics (cache hits/misses, invocation counts, concurrency rejections)
 - `src/state/resolver.rs`: path validation, JSON canonicalization for cache keys, and TS/JS path-alias discovery/resolution
 - `src/indexer.rs`: file discovery, tree rendering, restriction matching
 - `src/analyzer.rs`: language detection and syntax/AST extraction with Tree-sitter (Rust, Python, Go, Kotlin, JS, TS, Java, C, C#, CSS, HTML); entry-point detection and use-case inference for `generate_project_docs`
 - `src/relations.rs`: Angular `@Component` decorator parser — resolves `templateUrl` and `styleUrls` to filesystem paths
-- `src/watcher.rs`: file-system watcher (FSEvents/inotify via `notify`); classifies events into cache invalidation or index refresh, with 500 ms debounce for topological changes, operating against the shared `ServerState`
+- `src/watcher.rs`: file-system watcher (FSEvents/inotify via `notify`) bound per `ProjectContext`; classifies events into cache invalidation or index refresh with 500 ms debounce
 - `src/privacy_gateway.rs`: policy-driven sanitization layer
 - `src/sanitizer.rs`: secret detection/redaction utilities; `sanitize_config_text` for key-value config files; `is_config_file` for format detection
 
@@ -364,7 +386,7 @@ Binary output:
 
 ## Run Locally
 
-Use a project root as argument:
+### Single Project Mode
 
 ```bash
 target/release/nexusintellicore /absolute/path/to/project
@@ -374,6 +396,22 @@ Alternative (environment variable):
 
 ```bash
 MCP_ROOT_PATH=/absolute/path/to/project target/release/nexusintellicore
+```
+
+### Multi-Project Mode
+
+Specify multiple project roots on startup:
+
+```bash
+target/release/nexusintellicore /path/to/project1 /path/to/project2 /path/to/project3
+```
+
+### Dynamic Registration Mode
+
+Start empty and register projects on demand via the MCP `register_project` tool:
+
+```bash
+target/release/nexusintellicore
 ```
 
 ## VS Code MCP Configuration Example

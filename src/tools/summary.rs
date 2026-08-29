@@ -1,7 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::fmt::Write as _;
-use std::path::Path;
 
 use crate::analyzer;
 use crate::privacy_gateway;
@@ -123,12 +122,12 @@ pub(super) async fn get_module_summary(
     file_path: &str,
     public_only: bool,
 ) -> Result<Value> {
-    let path = match state.validate_path(Path::new(file_path)) {
+    let (proj, path) = match state.resolve_project_for_path(file_path) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
-    let index = state.index().await?;
+    let index = proj.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
             "⚠ Access denied by .mcpignore policy: {file_path}\n\

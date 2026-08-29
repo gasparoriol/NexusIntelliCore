@@ -1,17 +1,16 @@
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::path::Path;
 
 use crate::privacy_gateway;
 use crate::protocol::{error_response, text_content, tool_response};
 
 pub(super) async fn lint_file(state: &crate::state::ServerState, file_path: &str) -> Result<Value> {
-    let path = match state.validate_path(Path::new(file_path)) {
+    let (proj, path) = match state.resolve_project_for_path(file_path) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
-    let index = state.index().await?;
+    let index = proj.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
             "⚠ Access denied by .mcpignore policy: {file_path}"
@@ -24,7 +23,7 @@ pub(super) async fn lint_file(state: &crate::state::ServerState, file_path: &str
         Err(e) => return Ok(error_response(format!("Analysis error: {e}"))),
     };
 
-    let lint_result = state.lint_pool().run_sync(&path, &analysis).await;
+    let lint_result = proj.lint_pool.run_sync(&path, &analysis).await;
     let summary = crate::linter::render_lint_summary(&lint_result)
         .unwrap_or_else(|| "\n\n// Lint: no diagnostics reported".to_string());
 
@@ -33,7 +32,7 @@ pub(super) async fn lint_file(state: &crate::state::ServerState, file_path: &str
     let payload = json!({
         "file_path": file_path,
         "language": analysis.language,
-        "enabled": state.lint_pool().enabled(),
+        "enabled": proj.lint_pool.enabled(),
         "diagnostics": lint_result.diagnostics,
         "sources": lint_result.sources,
         "summary": summary,

@@ -39,27 +39,51 @@ async fn main() {
         )
         .init();
 
-    // Determine project root from CLI arg or environment variable
-    let root = std::env::args()
-        .nth(1)
-        .or_else(|| std::env::var("MCP_ROOT_PATH").ok())
-        .unwrap_or_else(|| {
-            eprintln!("Usage: nexusintellicore <project-root>");
-            eprintln!("   or: MCP_ROOT_PATH=/path/to/project nexusintellicore");
-            std::process::exit(1);
-        });
+    // Collect project roots from CLI args (skip binary name) or environment variable
+    let cli_roots: Vec<String> = std::env::args().skip(1).collect();
+    let roots = if !cli_roots.is_empty() {
+        cli_roots
+    } else if let Ok(env_root) = std::env::var("MCP_ROOT_PATH") {
+        vec![env_root]
+    } else {
+        vec![]
+    };
 
-    if let Err(e) = state::ServerState::init(&root) {
-        error!("Fatal: failed to initialise server state: {e}");
-        std::process::exit(1);
+    if roots.is_empty() {
+        if let Err(e) = state::ServerState::init_empty() {
+            error!("Fatal: failed to initialise server state: {e}");
+            std::process::exit(1);
+        }
+        info!("NexusIntelliCore MCP server started (waiting for project registration via MCP)");
+    } else {
+        if let Err(e) = state::ServerState::init(&roots[0]) {
+            error!("Fatal: failed to initialise server state: {e}");
+            std::process::exit(1);
+        }
+        let state = state::ServerState::get();
+        for additional in &roots[1..] {
+            if let Err(e) = state.register_project(additional, None) {
+                warn!(root = %additional, "Failed to register initial project root: {e}");
+            }
+        }
     }
 
     let state = state::ServerState::get();
-    info!(root = %state.root().display(), "NexusIntelliCore MCP server started");
+    let registered = state.list_projects();
+    info!(
+        project_count = registered.len(),
+        "NexusIntelliCore MCP server initialised with projects"
+    );
 
-    // Start the file watcher for automatic cache invalidation.
-    // The result is intentionally kept alive for the duration of the process.
-    let _file_watcher = watcher::FileWatcher::start(state.root());
+    // Start file watchers for all registered initial projects
+    let mut _file_watchers = Vec::new();
+    for (id, _) in registered {
+        if let Ok(proj) = state.get_project(Some(&id)) {
+            if let Some(w) = watcher::FileWatcher::start(proj) {
+                _file_watchers.push(w);
+            }
+        }
+    }
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -67,21 +91,6 @@ async fn main() {
     let mut transport = transport::McpTransport::new(stdin, stdout);
 
     loop {
-        /*/
-        let read_result = if !seen_first_message {
-            match timeout(Duration::from_secs(5), transport.read_message()).await {
-                Ok(result) => result,
-                Err(_) => {
-                    warn!(
-                        "Still waiting for first MCP frame on stdin (client may be running but not wired to stdio transport)"
-                    );
-                    continue;
-                }
-            }
-        } else {
-            transport.read_message().await
-        };
-        */
         let read_result = transport.read_message().await;
 
         match read_result {

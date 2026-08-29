@@ -12,7 +12,7 @@
 //!   OS limit for inotify watches is reached) the server continues without
 //!   automatic invalidation. Users can always call `refresh_index` manually.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,9 +68,10 @@ pub struct FileWatcher {
 }
 
 impl FileWatcher {
-    /// Start watching `root` recursively. Returns `None` if the watcher cannot
+    /// Start watching `project` recursively. Returns `None` if the watcher cannot
     /// be initialised (non-fatal — the server continues without it).
-    pub fn start(root: &Path) -> Option<Self> {
+    pub fn start(project: Arc<crate::state::ProjectContext>) -> Option<Self> {
+        let root = &project.root;
         // Notify emits events via the callback channel. We read them in a
         // blocking loop and forward actions to server state.
         let (tx, rx) = std::sync::mpsc::channel();
@@ -96,11 +97,12 @@ impl FileWatcher {
             return None;
         }
 
-        tracing::info!(root = %root.display(), "File watcher started");
+        tracing::info!(project = %project.id, root = %root.display(), "File watcher started");
 
         // Move receiver to an Arc so the Tokio task can hold it via blocking.
         let rx = Arc::new(std::sync::Mutex::new(rx));
         let refresh_debounce_active = Arc::new(AtomicBool::new(false));
+        let project_ref = Arc::clone(&project);
 
         let task = tokio::task::spawn_blocking(move || {
             let rt_handle = tokio::runtime::Handle::current();
@@ -115,23 +117,25 @@ impl FileWatcher {
                     Ok(Ok(ev)) => {
                         match classify_event(&ev) {
                             WatchAction::InvalidateCache(paths) => {
-                                let state = ServerState::get();
-                                let root = state.root().to_owned();
+                                let root_clone = project_ref.root.clone();
                                 rt_handle.spawn(async move {
-                                    ServerState::get().invalidate_tool_cache_for_root(&root);
+                                    if let Some(state) = ServerState::get_opt() {
+                                        state.invalidate_tool_cache_for_root(&root_clone);
+                                    }
                                 });
                                 for path in &paths {
                                     debug!(path = %path.display(), "Cache invalidation triggered");
-                                    // Evict single entry; errors are silently
-                                    // ignored (entry may not be cached yet).
-                                    rt_handle.block_on(state.evict_cache_entry(path));
+                                    if let Some(state) = ServerState::get_opt() {
+                                        rt_handle.block_on(state.evict_cache_entry(path));
+                                    }
                                 }
                             }
                             WatchAction::ScheduleIndexRefresh => {
-                                let state = ServerState::get();
-                                let root = state.root().to_owned();
+                                let root_clone = project_ref.root.clone();
                                 rt_handle.spawn(async move {
-                                    ServerState::get().invalidate_tool_cache_for_root(&root);
+                                    if let Some(state) = ServerState::get_opt() {
+                                        state.invalidate_tool_cache_for_root(&root_clone);
+                                    }
                                 });
                                 if refresh_debounce_active
                                     .compare_exchange(
@@ -144,16 +148,12 @@ impl FileWatcher {
                                 {
                                     let refresh_debounce_active =
                                         Arc::clone(&refresh_debounce_active);
+                                    let project_inner = Arc::clone(&project_ref);
                                     rt_handle.spawn(async move {
                                         tokio::time::sleep(INDEX_REFRESH_DEBOUNCE).await;
 
-                                        // Clear the debounce flag BEFORE signalling state.
-                                        // Any topological event that arrives in this narrow
-                                        // window will then succeed its CAS and arm a fresh
-                                        // debounce timer rather than being silently coalesced
-                                        // with no pending request outstanding.
                                         refresh_debounce_active.store(false, Ordering::Release);
-                                        ServerState::get().request_watcher_refresh();
+                                        project_inner.request_watcher_refresh();
                                     });
                                 } else {
                                     debug!("Index refresh already scheduled, coalescing event");
