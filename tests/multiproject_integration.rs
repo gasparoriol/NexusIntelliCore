@@ -30,8 +30,10 @@ fn read_frame(stdout: &mut std::process::ChildStdout) -> String {
             }
             let body_start = pos + 4;
             if accumulated.len() >= body_start + content_length {
-                return String::from_utf8_lossy(&accumulated[body_start..body_start + content_length])
-                    .to_string();
+                return String::from_utf8_lossy(
+                    &accumulated[body_start..body_start + content_length],
+                )
+                .to_string();
             }
         }
     }

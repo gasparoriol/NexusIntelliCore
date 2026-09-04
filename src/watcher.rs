@@ -114,54 +114,46 @@ impl FileWatcher {
                 };
 
                 match event {
-                    Ok(Ok(ev)) => {
-                        match classify_event(&ev) {
-                            WatchAction::InvalidateCache(paths) => {
-                                let root_clone = project_ref.root.clone();
-                                rt_handle.spawn(async move {
-                                    if let Some(state) = ServerState::get_opt() {
-                                        state.invalidate_tool_cache_for_root(&root_clone);
-                                    }
-                                });
-                                for path in &paths {
-                                    debug!(path = %path.display(), "Cache invalidation triggered");
-                                    if let Some(state) = ServerState::get_opt() {
-                                        rt_handle.block_on(state.evict_cache_entry(path));
-                                    }
+                    Ok(Ok(ev)) => match classify_event(&ev) {
+                        WatchAction::InvalidateCache(paths) => {
+                            let root_clone = project_ref.root.clone();
+                            rt_handle.spawn(async move {
+                                if let Some(state) = ServerState::get_opt() {
+                                    state.invalidate_tool_cache_for_root(&root_clone);
+                                }
+                            });
+                            for path in &paths {
+                                debug!(path = %path.display(), "Cache invalidation triggered");
+                                if let Some(state) = ServerState::get_opt() {
+                                    rt_handle.block_on(state.evict_cache_entry(path));
                                 }
                             }
-                            WatchAction::ScheduleIndexRefresh => {
-                                let root_clone = project_ref.root.clone();
-                                rt_handle.spawn(async move {
-                                    if let Some(state) = ServerState::get_opt() {
-                                        state.invalidate_tool_cache_for_root(&root_clone);
-                                    }
-                                });
-                                if refresh_debounce_active
-                                    .compare_exchange(
-                                        false,
-                                        true,
-                                        Ordering::AcqRel,
-                                        Ordering::Acquire,
-                                    )
-                                    .is_ok()
-                                {
-                                    let refresh_debounce_active =
-                                        Arc::clone(&refresh_debounce_active);
-                                    let project_inner = Arc::clone(&project_ref);
-                                    rt_handle.spawn(async move {
-                                        tokio::time::sleep(INDEX_REFRESH_DEBOUNCE).await;
-
-                                        refresh_debounce_active.store(false, Ordering::Release);
-                                        project_inner.request_watcher_refresh();
-                                    });
-                                } else {
-                                    debug!("Index refresh already scheduled, coalescing event");
-                                }
-                            }
-                            WatchAction::Ignore => {}
                         }
-                    }
+                        WatchAction::ScheduleIndexRefresh => {
+                            let root_clone = project_ref.root.clone();
+                            rt_handle.spawn(async move {
+                                if let Some(state) = ServerState::get_opt() {
+                                    state.invalidate_tool_cache_for_root(&root_clone);
+                                }
+                            });
+                            if refresh_debounce_active
+                                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                                .is_ok()
+                            {
+                                let refresh_debounce_active = Arc::clone(&refresh_debounce_active);
+                                let project_inner = Arc::clone(&project_ref);
+                                rt_handle.spawn(async move {
+                                    tokio::time::sleep(INDEX_REFRESH_DEBOUNCE).await;
+
+                                    refresh_debounce_active.store(false, Ordering::Release);
+                                    project_inner.request_watcher_refresh();
+                                });
+                            } else {
+                                debug!("Index refresh already scheduled, coalescing event");
+                            }
+                        }
+                        WatchAction::Ignore => {}
+                    },
                     Ok(Err(e)) => {
                         warn!("Watcher error: {}", e);
                     }

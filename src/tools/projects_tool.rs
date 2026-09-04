@@ -77,9 +77,7 @@ pub(super) async fn unregister_project(state: &ServerState, args: &Value) -> Res
         Ok(true) => Ok(tool_response(vec![text_content(format!(
             "Successfully unregistered project: {id_or_path}"
         ))])),
-        Ok(false) => Ok(error_response(format!(
-            "Project not found: {id_or_path}"
-        ))),
+        Ok(false) => Ok(error_response(format!("Project not found: {id_or_path}"))),
         Err(e) => Ok(error_response(format!("Failed to unregister project: {e}"))),
     }
 }

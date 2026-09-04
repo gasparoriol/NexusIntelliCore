@@ -125,7 +125,11 @@ impl ServerState {
         STATE.get().cloned()
     }
 
-    pub fn register_project(&self, root_str: &str, id: Option<String>) -> Result<Arc<ProjectContext>> {
+    pub fn register_project(
+        &self,
+        root_str: &str,
+        id: Option<String>,
+    ) -> Result<Arc<ProjectContext>> {
         let project = ProjectContext::new(root_str, id)?;
         let mut projects = self.projects.write().unwrap();
         projects.insert(project.id.clone(), project.clone());
@@ -144,7 +148,10 @@ impl ServerState {
         let target_id = if projects.contains_key(id_or_path) {
             Some(id_or_path.to_string())
         } else if let Ok(canonical) = std::fs::canonicalize(id_or_path) {
-            projects.iter().find(|(_, p)| p.root == canonical).map(|(k, _)| k.clone())
+            projects
+                .iter()
+                .find(|(_, p)| p.root == canonical)
+                .map(|(k, _)| k.clone())
         } else {
             None
         };
@@ -194,7 +201,10 @@ impl ServerState {
             .ok_or_else(|| anyhow::anyhow!("Default project '{id}' not found"))
     }
 
-    pub fn resolve_project_for_path(&self, file_path: &str) -> Result<(Arc<ProjectContext>, PathBuf)> {
+    pub fn resolve_project_for_path(
+        &self,
+        file_path: &str,
+    ) -> Result<(Arc<ProjectContext>, PathBuf)> {
         let requested_path = Path::new(file_path);
         let projects = self.projects.read().unwrap();
 
@@ -292,8 +302,7 @@ impl ServerState {
     }
 
     pub fn is_angular_project(&self) -> bool {
-        self.default_project()
-            .is_ok_and(|p| p.is_angular_project)
+        self.default_project().is_ok_and(|p| p.is_angular_project)
     }
 
     #[allow(dead_code)]
@@ -307,7 +316,9 @@ impl ServerState {
         import_path: &str,
         importer_path: &Path,
     ) -> Option<PathBuf> {
-        let (proj, _) = self.resolve_project_for_path(&importer_path.to_string_lossy()).ok()?;
+        let (proj, _) = self
+            .resolve_project_for_path(&importer_path.to_string_lossy())
+            .ok()?;
         resolver::PathResolver::resolve_ts_path_alias(
             &proj.ts_path_aliases,
             import_path,
@@ -703,8 +714,12 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir2);
 
         let state = ServerState::empty().unwrap();
-        let p1 = state.register_project(dir1.to_str().unwrap(), Some("proj1".into())).unwrap();
-        let p2 = state.register_project(dir2.to_str().unwrap(), Some("proj2".into())).unwrap();
+        let p1 = state
+            .register_project(dir1.to_str().unwrap(), Some("proj1".into()))
+            .unwrap();
+        let p2 = state
+            .register_project(dir2.to_str().unwrap(), Some("proj2".into()))
+            .unwrap();
 
         assert_eq!(state.list_projects().len(), 2);
         assert_eq!(state.get_project(Some("proj1")).unwrap().root, p1.root);

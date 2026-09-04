@@ -142,7 +142,9 @@ impl CacheManager {
     pub fn invalidate_ast_cache_for_root(&self, root: &Path) -> u64 {
         let count = self.ast_cache.entry_count();
         let root_buf = root.to_path_buf();
-        let _ = self.ast_cache.invalidate_entries_if(move |key, _| key.starts_with(&root_buf));
+        let _ = self
+            .ast_cache
+            .invalidate_entries_if(move |key, _| key.starts_with(&root_buf));
         count
     }
 }
