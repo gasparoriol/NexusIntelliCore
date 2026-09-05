@@ -99,7 +99,8 @@ pub fn compute_token_digest(token: &str) -> [u8; 32] {
     use std::hash::{Hash, Hasher};
     let bytes = token.as_bytes();
     let mut digest = [0u8; 32];
-    for (i, chunk) in digest.chunks_exact_mut(8).enumerate() {
+    let (chunks, _remainder) = digest.as_chunks_mut::<8>();
+    for (i, chunk) in chunks.iter_mut().enumerate() {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         i.hash(&mut hasher);
         bytes.hash(&mut hasher);
