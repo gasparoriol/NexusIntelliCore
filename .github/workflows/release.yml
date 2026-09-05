@@ -26,8 +26,8 @@ jobs:
             asset_name: nexusintellicore-windows.exe
           - os: macos-latest
             task: mac-universal-release
-            source_path: target/aarch64-apple-darwin/release/nexusintellicore
-            asset_name: nexusintellicore-macos
+            source_path: nexusintellicore
+            asset_name: nexusintellicore-macos-universal
 
     permissions:
       contents: write
@@ -38,7 +38,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl, x86_64-pc-windows-msvc, aarch64-apple-darwin
+          targets: x86_64-unknown-linux-musl, x86_64-pc-windows-msvc, aarch64-apple-darwin, x86_64-apple-darwin
 
       - name: Install musl-tools (Linux only)
         if: matrix.os == 'ubuntu-latest'
@@ -52,15 +52,19 @@ jobs:
       - name: Run Build Task
         run: cargo make ${{ matrix.task }}
       
-      - name: Prepare asset
+      - name: Prepare asset and checksum
         shell: bash
         run: |
           mkdir -p dist
           cp ${{ matrix.source_path }} dist/${{ matrix.asset_name }}
+          cd dist
+          shasum -a 256 ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
 
-      - name: Upload Binaries
+      - name: Upload Binaries and Checksums
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/${{ matrix.asset_name }}
+          files: |
+            dist/${{ matrix.asset_name }}
+            dist/${{ matrix.asset_name }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

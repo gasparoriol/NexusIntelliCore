@@ -100,6 +100,22 @@ jobs:
       - name: Run all tests
         run: cargo test --all --verbose
 
+  # Job 4b: Code Coverage Measurement
+  code-coverage:
+    name: Measure Code Coverage (cargo-tarpaulin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Generate Coverage Report
+        run: cargo tarpaulin --ignore-tests --out Xml
+
   # Job 5: Check code formatting
   format-check:
     name: Check code formatting

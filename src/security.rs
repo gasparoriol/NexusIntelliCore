@@ -1,7 +1,8 @@
 #[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct SecurityConfig {
-    // Token required for authenticate cliients
-    pub auth_token: Option<String>,
+    // Hash of token required to authenticate clients (raw token is never stored in memory)
+    #[serde(skip)]
+    pub auth_token_hash: Option<[u8; 32]>,
 
     // Allowed tools (if it's None, all tools are allowed)
     pub allowed_tools: Option<Vec<String>>,
@@ -17,9 +18,20 @@ pub struct SecurityConfig {
     pub custom_strip_placeholder: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct SecurityConfigRaw {
+    pub auth_token: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
+    pub audit_log_path: Option<std::path::PathBuf>,
+    pub custom_redaction_patterns: Option<Vec<String>>,
+    pub custom_strip_placeholder: Option<String>,
+}
+
 impl SecurityConfig {
     fn load_from_env() -> Self {
-        let auth_token = std::env::var("MCP_AUTH_TOKEN").ok();
+        let auth_token_hash = std::env::var("MCP_AUTH_TOKEN")
+            .ok()
+            .map(|t| compute_token_digest(&t));
         let allowed_tools = std::env::var("MCP_ALLOWED_TOOLS")
             .ok()
             .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
@@ -41,7 +53,7 @@ impl SecurityConfig {
             .filter(|s| !s.is_empty());
 
         SecurityConfig {
-            auth_token,
+            auth_token_hash,
             allowed_tools,
             audit_log_path,
             custom_redaction_patterns,
@@ -58,10 +70,16 @@ impl SecurityConfig {
         let file = std::fs::File::open(&config_path)
             .map_err(|e| format!("Cannot open security config file at '{config_path}': {e}"))?;
 
-        let config: Self = serde_json::from_reader(&file)
+        let raw: SecurityConfigRaw = serde_json::from_reader(&file)
             .map_err(|e| format!("Invalid JSON in security config at '{config_path}': {e}"))?;
 
-        Ok(config)
+        Ok(SecurityConfig {
+            auth_token_hash: raw.auth_token.map(|t| compute_token_digest(&t)),
+            allowed_tools: raw.allowed_tools,
+            audit_log_path: raw.audit_log_path,
+            custom_redaction_patterns: raw.custom_redaction_patterns,
+            custom_strip_placeholder: raw.custom_strip_placeholder,
+        })
     }
 
     pub fn load() -> Self {
@@ -76,22 +94,46 @@ impl SecurityConfig {
     }
 }
 
-/// Compare two strings in constant time to prevent timing attacks.
-pub fn constant_time_compare(a: &str, b: &str) -> bool {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
-
-    if a_bytes.len() != b_bytes.len() {
-        return false;
+/// Compute a fixed 32-byte digest of a string for constant-time comparisons without length leakage.
+pub fn compute_token_digest(token: &str) -> [u8; 32] {
+    use std::hash::{Hash, Hasher};
+    let bytes = token.as_bytes();
+    let mut digest = [0u8; 32];
+    for (i, chunk) in digest.chunks_exact_mut(8).enumerate() {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        i.hash(&mut hasher);
+        bytes.hash(&mut hasher);
+        let val = hasher.finish();
+        chunk.copy_from_slice(&val.to_le_bytes());
     }
-
-    let mut result = 0;
-    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
-        result |= x ^ y;
-    }
-
-    result == 0
+    digest
 }
+
+/// Compare two 32-byte digests in constant time.
+pub fn constant_time_compare_hashes(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut diff = 0;
+    for i in 0..32 {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
+/// Compare two strings in constant time to prevent timing attacks, eliminating length-based early return.
+#[allow(dead_code)]
+pub fn constant_time_compare(a: &str, b: &str) -> bool {
+    let digest_a = compute_token_digest(a);
+    let digest_b = compute_token_digest(b);
+
+    let mut diff = a.len() ^ b.len();
+    for i in 0..32 {
+        diff |= usize::from(digest_a[i] ^ digest_b[i]);
+    }
+
+    diff == 0
+}
+
+static PREV_AUDIT_HASH: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0xcafebabe_deadbeef);
 
 #[allow(clippy::needless_pass_by_value)] // json! literals are ergonomic to pass by value
 pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
@@ -104,11 +146,25 @@ pub fn log_audit_event(event_type: &str, details: serde_json::Value) {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
+
+        let prev_hash = PREV_AUDIT_HASH.load(std::sync::atomic::Ordering::Relaxed);
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        prev_hash.hash(&mut hasher);
+        timestamp.hash(&mut hasher);
+        event_type.hash(&mut hasher);
+        details.to_string().hash(&mut hasher);
+        let current_hash = hasher.finish();
+        PREV_AUDIT_HASH.store(current_hash, std::sync::atomic::Ordering::Relaxed);
+
         let log_entry = serde_json::json!({
             "timestamp": timestamp,
             "event": event_type,
-            "details": details
+            "details": details,
+            "prev_hash": format!("{:016x}", prev_hash),
+            "hash": format!("{:016x}", current_hash)
         });
+
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -136,13 +192,13 @@ mod tests {
     #[test]
     fn test_security_config_defaults() {
         let config = SecurityConfig {
-            auth_token: None,
+            auth_token_hash: None,
             allowed_tools: None,
             audit_log_path: None,
             custom_redaction_patterns: None,
             custom_strip_placeholder: None,
         };
-        assert!(config.auth_token.is_none());
+        assert!(config.auth_token_hash.is_none());
         assert!(config.allowed_tools.is_none());
         assert!(config.audit_log_path.is_none());
         assert!(config.custom_redaction_patterns.is_none());
@@ -173,7 +229,7 @@ mod tests {
         std::env::remove_var("MCP_CUSTOM_STRIP_PLACEHOLDER");
 
         let config_empty = SecurityConfig::load();
-        assert!(config_empty.auth_token.is_none());
+        assert!(config_empty.auth_token_hash.is_none());
         assert!(config_empty.allowed_tools.is_none());
         assert!(config_empty.audit_log_path.is_none());
         assert!(config_empty.custom_redaction_patterns.is_none());
@@ -193,7 +249,10 @@ mod tests {
         );
 
         let config_vals = SecurityConfig::load();
-        assert_eq!(config_vals.auth_token, Some("test_token_123".to_string()));
+        assert_eq!(
+            config_vals.auth_token_hash,
+            Some(compute_token_digest("test_token_123"))
+        );
         assert_eq!(
             config_vals.allowed_tools,
             Some(vec!["tool1".to_string(), "tool2".to_string()])
@@ -282,8 +341,8 @@ mod tests {
         // Should NOT panic; should fallback to env vars gracefully
         let config = SecurityConfig::load();
         assert_eq!(
-            config.auth_token,
-            Some("fallback_token_from_env".to_string())
+            config.auth_token_hash,
+            Some(compute_token_digest("fallback_token_from_env"))
         );
 
         // Cleanup

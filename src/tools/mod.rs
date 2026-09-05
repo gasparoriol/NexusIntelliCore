@@ -177,8 +177,27 @@ fn apply_final_privacy_pass(result: Value) -> Value {
     crate::privacy_gateway::sanitize_json_args(&result, &policy)
 }
 
+fn get_tool_timeout_duration() -> std::time::Duration {
+    let secs = std::env::var("MCP_TOOL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(30);
+    std::time::Duration::from_secs(secs)
+}
+
 /// Dispatch a `tools/call` request to the appropriate handler.
 pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
+    let timeout_duration = get_tool_timeout_duration();
+    match tokio::time::timeout(timeout_duration, dispatch_tool_internal(name, args)).await {
+        Ok(res) => res,
+        Err(_) => Ok(apply_final_privacy_pass(error_response(format!(
+            "Tool '{name}' timed out after {} seconds. Operation cancelled to preserve server responsiveness.",
+            timeout_duration.as_secs()
+        )))),
+    }
+}
+
+async fn dispatch_tool_internal(name: &str, args: Value) -> Result<Value> {
     let state = crate::state::ServerState::get();
     state.record_tool_invocation(name);
 

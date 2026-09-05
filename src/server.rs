@@ -38,11 +38,13 @@ pub async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
     }
 }
 
+static AUTH_FAILURE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn handle_initialize(id: Value, params: &Value) -> JsonRpcResponse {
     let state = state::ServerState::get();
     let mut token_found = None;
 
-    if state.security_config().auth_token.is_some() {
+    if state.security_config().auth_token_hash.is_some() {
         let token_opt = params
             .get("auth_token")
             .or_else(|| params.get("token"))
@@ -53,15 +55,22 @@ fn handle_initialize(id: Value, params: &Value) -> JsonRpcResponse {
         if let Some(t) = token_opt {
             if state.authenticate(t) {
                 token_found = Some("[PRESENT]".to_string());
+                AUTH_FAILURE_COUNT.store(0, std::sync::atomic::Ordering::Release);
             }
         }
 
         if !state.is_authenticated() {
+            let fails = AUTH_FAILURE_COUNT.fetch_add(1, std::sync::atomic::Ordering::AcqRel) + 1;
+            if fails >= 3 {
+                let delay_ms = (250 * (1 << (fails - 3).min(4))).min(2000);
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
             security::log_audit_event(
                 "auth_failure",
                 json!({
                     "method": "initialize",
-                    "reason": "missing or invalid authentication token"
+                    "reason": "missing or invalid authentication token",
+                    "consecutive_failures": fails
                 }),
             );
             return JsonRpcResponse::error(

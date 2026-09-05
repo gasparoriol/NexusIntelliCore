@@ -1,0 +1,26 @@
+# Pre-commit hooks for NexusIntelliCore
+# Install with: pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Gitleaks — detects hardcoded secrets before they reach the repository
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+        name: Detect hardcoded secrets
+        description: Scan for hardcoded secrets (API keys, DB URIs, private keys, etc.)
+        entry: gitleaks protect --verbose --log-level=info --staged
+        language: system
+        stages: [commit]
+
+  # Clippy — Rust linting (catch unsafe blocks without documentation)
+  - repo: local
+    hooks:
+      - id: cargo-clippy
+        name: Clippy — Rust linter
+        description: Lint Rust code with clippy
+        entry: cargo clippy --all-targets --all-features
+        language: rust
+        types: [rust]
+        pass_filenames: false

@@ -79,7 +79,7 @@ impl ServerState {
         let concurrency_limits = ConcurrencyLimits::from_env();
         let max_concurrency = concurrency_limits.max_tool_concurrency;
         let security_config = SecurityConfig::load();
-        let client_authenticated = AtomicBool::new(security_config.auth_token.is_none());
+        let client_authenticated = AtomicBool::new(security_config.auth_token_hash.is_none());
 
         Ok(Arc::new(Self {
             projects: std::sync::RwLock::new(HashMap::new()),
@@ -114,6 +114,7 @@ impl ServerState {
         Ok(instance)
     }
 
+    /// Returns the global `ServerState` instance. Panics if called before `init()`.
     pub fn get() -> Arc<Self> {
         STATE
             .get()
@@ -121,20 +122,34 @@ impl ServerState {
             .clone()
     }
 
+    /// Returns `Some(Arc<ServerState>)` if initialized, or `None` without panicking.
+    #[allow(dead_code)]
+    pub fn try_get() -> Option<Arc<Self>> {
+        STATE.get().cloned()
+    }
+
+    /// Returns `Some(Arc<ServerState>)` if initialized, or `None` without panicking.
     pub fn get_opt() -> Option<Arc<Self>> {
         STATE.get().cloned()
     }
 
+    /// Registers a new workspace project in the server state.
     pub fn register_project(
         &self,
         root_str: &str,
         id: Option<String>,
     ) -> Result<Arc<ProjectContext>> {
         let project = ProjectContext::new(root_str, id)?;
-        let mut projects = self.projects.write().unwrap();
+        let mut projects = self
+            .projects
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         projects.insert(project.id.clone(), project.clone());
 
-        let mut def_lock = self.default_project_id.write().unwrap();
+        let mut def_lock = self
+            .default_project_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if def_lock.is_none() {
             *def_lock = Some(project.id.clone());
         }
@@ -144,7 +159,10 @@ impl ServerState {
     }
 
     pub fn unregister_project(&self, id_or_path: &str) -> Result<bool> {
-        let mut projects = self.projects.write().unwrap();
+        let mut projects = self
+            .projects
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let target_id = if projects.contains_key(id_or_path) {
             Some(id_or_path.to_string())
         } else if let Ok(canonical) = std::fs::canonicalize(id_or_path) {
@@ -164,7 +182,10 @@ impl ServerState {
             self.invalidate_tool_cache_for_root(&removed.root);
             self.invalidate_ast_cache_for_root(&removed.root);
 
-            let mut def_lock = self.default_project_id.write().unwrap();
+            let mut def_lock = self
+                .default_project_id
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if def_lock.as_deref() == Some(&id) {
                 *def_lock = projects.keys().next().cloned();
             }
@@ -176,7 +197,10 @@ impl ServerState {
     }
 
     pub fn get_project(&self, id_or_path: Option<&str>) -> Result<Arc<ProjectContext>> {
-        let projects = self.projects.read().unwrap();
+        let projects = self
+            .projects
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if let Some(key) = id_or_path {
             if let Some(proj) = projects.get(key) {
@@ -190,7 +214,10 @@ impl ServerState {
             anyhow::bail!("Project '{key}' not found");
         }
 
-        let def_id = self.default_project_id.read().unwrap();
+        let def_id = self
+            .default_project_id
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(ref id) = *def_id else {
             anyhow::bail!("No project registered in ServerState");
         };
@@ -206,7 +233,10 @@ impl ServerState {
         file_path: &str,
     ) -> Result<(Arc<ProjectContext>, PathBuf)> {
         let requested_path = Path::new(file_path);
-        let projects = self.projects.read().unwrap();
+        let projects = self
+            .projects
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let absolute_candidate = std::fs::canonicalize(requested_path).ok();
 
@@ -228,7 +258,10 @@ impl ServerState {
     }
 
     pub fn list_projects(&self) -> Vec<(String, PathBuf)> {
-        let projects = self.projects.read().unwrap();
+        let projects = self
+            .projects
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         projects
             .iter()
             .map(|(id, p)| (id.clone(), p.root.clone()))
@@ -264,8 +297,9 @@ impl ServerState {
     }
 
     pub fn authenticate(&self, token: &str) -> bool {
-        if let Some(ref expected) = self.security_config.auth_token {
-            if crate::security::constant_time_compare(token, expected) {
+        if let Some(ref expected_hash) = self.security_config.auth_token_hash {
+            let provided_hash = crate::security::compute_token_digest(token);
+            if crate::security::constant_time_compare_hashes(expected_hash, &provided_hash) {
                 self.set_client_authenticated(true);
                 return true;
             }

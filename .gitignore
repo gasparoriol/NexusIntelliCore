@@ -1,12 +1,16 @@
 /target
-Cargo.lock
 /.vscode
 *.log
-*.md
 *.yaml
 
-# The current MCP API contract is validated by tests and must be versioned.
-!docs/API.md
-!docs/README.md
-!docs/SECURITY.md
-!docs/architecture.md
+# Exclude all documentation for now except root README.md
+*.md
+!README.md
+docs/
+!README.md
+
+# Track critical build and tooling configs
+!Cargo.lock
+!.pre-commit-config.yaml
+
+

@@ -24,3 +24,14 @@ script = [
   "cargo build --release --target x86_64-apple-darwin",
   "lipo -create -output nexusintellicore target/aarch64-apple-darwin/release/nexusintellicore target/x86_64-apple-darwin/release/nexusintellicore",
 ]
+
+[tasks.stress]
+description = "Runs high load and stress integration tests"
+command = "cargo"
+args = ["test", "--test", "stress_test", "--", "--nocapture"]
+
+[tasks.coverage]
+description = "Generates code coverage report using cargo-tarpaulin"
+command = "cargo"
+args = ["tarpaulin", "--ignore-tests", "--out", "Html"]
+

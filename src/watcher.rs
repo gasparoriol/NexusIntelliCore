@@ -109,7 +109,7 @@ impl FileWatcher {
             loop {
                 // Block until the next batch of events (or channel close).
                 let event = {
-                    let rx = rx.lock().unwrap();
+                    let rx = rx.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     rx.recv()
                 };
 
