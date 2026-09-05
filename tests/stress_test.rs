@@ -29,14 +29,26 @@ fn test_stress_large_workspace_and_concurrent_queries() {
 
     // Call get_project_structure
     let struct_resp = client.call_tool("get_project_structure", json!({}));
-    assert!(struct_resp.contains("result"), "Expected valid JSON-RPC response from get_project_structure");
+    assert!(
+        struct_resp.contains("result"),
+        "Expected valid JSON-RPC response from get_project_structure"
+    );
 
     // Call get_file_outline on multiple generated files
     for i in 0..10 {
         let abs_path = root.join(format!("src/module_{i}/item_0.rs"));
-        let outline_resp = client.call_tool("get_file_outline", json!({ "file_path": abs_path.to_str().unwrap() }));
-        assert!(outline_resp.contains("result"), "Expected valid response for {abs_path:?}: {outline_resp}");
-        assert!(outline_resp.contains(&format!("ModStruct{i}_0")), "Expected symbol ModStruct{i}_0 in outline response");
+        let outline_resp = client.call_tool(
+            "get_file_outline",
+            json!({ "file_path": abs_path.to_str().unwrap() }),
+        );
+        assert!(
+            outline_resp.contains("result"),
+            "Expected valid response for {abs_path:?}: {outline_resp}"
+        );
+        assert!(
+            outline_resp.contains(&format!("ModStruct{i}_0")),
+            "Expected symbol ModStruct{i}_0 in outline response"
+        );
     }
 
     // Cleanup
