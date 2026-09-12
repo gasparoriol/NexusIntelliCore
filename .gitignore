@@ -3,12 +3,19 @@
 *.log
 *.yaml
 
-# Exclude internal markdown working docs except root README.md & multi-lang docs
+# Exclude internal working documents and evaluation reports
 *.md
 !README.md
+!LICENSE.md
 !docs/ca/**
 !docs/en/**
 !docs/es/**
+!docs/API.md
+!docs/README.md
+!docs/SECURITY.md
+!docs/architecture.md
+
+
 
 
 
