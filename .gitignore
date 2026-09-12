@@ -3,11 +3,14 @@
 *.log
 *.yaml
 
-# Exclude all documentation for now except root README.md
+# Exclude internal markdown working docs except root README.md & multi-lang docs
 *.md
 !README.md
-docs/
-!README.md
+!docs/ca/**
+!docs/en/**
+!docs/es/**
+
+
 
 # Track critical build and tooling configs
 !Cargo.lock
