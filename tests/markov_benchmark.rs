@@ -2,7 +2,7 @@ use NexusIntelliCore::analyzer::MarkovAstPredictor;
 use std::time::Instant;
 use tree_sitter::Parser;
 
-/// Genera un código fuente sintetizado de gran tamaño con estructuras AST complejas
+
 fn generate_large_source_code(files: usize) -> String {
     let mut code = String::new();
     for i in 0..files {
@@ -75,17 +75,17 @@ fn test_markov_performance_benchmark() {
     println!("Observaciones Markov de 2º orden acumuladas: {}", predictor.total_observations());
     println!("Tiempo de entrenamiento del Predictor: {:?}", train_duration);
 
-    // Objetivo de búsqueda: identificar llamadas a funciones/métodos (ej. `call_expression`)
-    // Obtener kind_id de `call_expression` y `field_expression` en la gramática
+    // Goal: identify function/method calls (e.g., `call_expression`)
+    // Get kind_id of `call_expression` and `field_expression` in the grammar
     let call_expr_kind = ts_lang.id_for_node_kind("call_expression", true);
     let field_expr_kind = ts_lang.id_for_node_kind("field_expression", true);
     let target_kinds = vec![call_expr_kind, field_expr_kind];
 
-    // Iteraciones para benchmark de latencia
+    // Iterations for latency benchmark
     let iterations = 50;
 
     // -----------------------------------------------------------------------
-    // ESCENARIO A: BASELINE (Sin Cadenas de Markov - Recorrido exhaustivo)
+    //  SCENARIO A: BASELINE (Without Markov Chains - Exhaustive Traversal)
     // -----------------------------------------------------------------------
     let start_baseline = Instant::now();
     let mut baseline_nodes_visited = 0usize;
@@ -111,7 +111,7 @@ fn test_markov_performance_benchmark() {
     let baseline_duration = start_baseline.elapsed();
 
     // -----------------------------------------------------------------------
-    // ESCENARIO B: CON CADENAS DE MARKOV (Predictive Pruning / Skip-Traversal)
+    // SCENARIO B: WITH MARKOV CHAINS (Predictive Pruning / Skip-Traversal)
     // -----------------------------------------------------------------------
     let start_markov = Instant::now();
     let mut markov_nodes_visited = 0usize;
@@ -133,7 +133,7 @@ fn test_markov_performance_benchmark() {
                 markov_matches += 1;
             }
 
-            // Aplicar evaluación de la Cadena de Markov antes de expandir hijos
+            // Apply Markov Chain evaluation before expanding children
             if predictor.should_prune_subtree(parent_kind, kind, &target_kinds, pruning_threshold) {
                 markov_nodes_pruned += node.child_count();
                 continue; // Skip subtree expansion
@@ -148,7 +148,7 @@ fn test_markov_performance_benchmark() {
     let markov_duration = start_markov.elapsed();
 
     // -----------------------------------------------------------------------
-    // RESULTADOS Y COMPARATIVA
+    // RESULTS AND COMPARATIVE
     // -----------------------------------------------------------------------
     let baseline_avg_us = baseline_duration.as_micros() as f64 / iterations as f64;
     let markov_avg_us = markov_duration.as_micros() as f64 / iterations as f64;
@@ -164,19 +164,19 @@ fn test_markov_performance_benchmark() {
     };
 
     println!("\n-------------------------------------------------------");
-    println!("                    RESULTADOS DE RENDIMIENTO");
+    println!("                   RESULTS AND COMPARATIVE");
     println!("-------------------------------------------------------");
-    println!("Métrica                             | Baseline (Sin Markov) | Predictivo (Con Markov)");
+    println!("Metric                             | Baseline (Without Markov) | Predictive (With Markov)");
     println!("------------------------------------+-----------------------+-------------------------");
-    println!("Tiempo Promedio por Recorrido       | {:>17.2} µs | {:>19.2} µs", baseline_avg_us, markov_avg_us);
-    println!("Nodos Visitados por Pasada          | {:>21} | {:>23}", baseline_nodes_visited, markov_nodes_visited);
-    println!("Nodos Descartados (Subtree Pruning) | {:>21} | {:>23}", 0, markov_nodes_pruned);
-    println!("Coincidencias Encontradas           | {:>21} | {:>23}", baseline_matches, markov_matches);
+    println!("Average Time per Traversal       | {:>17.2} µs | {:>19.2} µs", baseline_avg_us, markov_avg_us);
+    println!("Nodes Visited per Traversal          | {:>21} | {:>23}", baseline_nodes_visited, markov_nodes_visited);
+    println!("Pruned Subtrees                    | {:>21} | {:>23}", 0, markov_nodes_pruned);
+    println!("Found Matches                      | {:>21} | {:>23}", baseline_matches, markov_matches);
     println!("-------------------------------------------------------");
-    println!("Aceleración (Speedup Factor)        : {:.2}x", speedup);
-    println!("Precisión / Exhaustividad (Recall)  : {:.2}%", recall);
+    println!("Speedup Factor                     : {:.2}x", speedup);
+    println!("Precision / Exhaustiveness (Recall) : {:.2}%", recall);
     println!("=======================================================\n");
 
-    assert!(baseline_matches > 0, "Debe haber encontrado coincidencias");
-    assert_eq!(baseline_matches, markov_matches, "El modelo predictivo no debe perder coincidencias verdaderas");
+    assert!(baseline_matches > 0, "Must have found matches");
+    assert_eq!(baseline_matches, markov_matches, "Predictive model must not lose true matches");
 }
