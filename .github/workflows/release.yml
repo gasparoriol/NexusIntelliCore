@@ -58,7 +58,7 @@ jobs:
           mkdir -p dist
           cp ${{ matrix.source_path }} dist/${{ matrix.asset_name }}
           cd dist
-          shasum -a 256 ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+          sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256 2>/dev/null || shasum -a 256 ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
 
       - name: Upload Binaries and Checksums
         uses: softprops/action-gh-release@v2
