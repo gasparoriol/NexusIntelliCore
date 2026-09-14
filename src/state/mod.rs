@@ -728,11 +728,11 @@ mod tests {
         assert!(l.max_tool_concurrency > 0);
     }
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn concurrency_limits_from_env_reads_override() {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(super::ENV_TOOL_CONCURRENCY, "8");
         let l = super::ConcurrencyLimits::from_env();
         std::env::remove_var(super::ENV_TOOL_CONCURRENCY);
@@ -741,9 +741,7 @@ mod tests {
 
     #[test]
     fn concurrency_limits_from_env_ignores_zero() {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(super::ENV_TOOL_CONCURRENCY, "0");
         let l = super::ConcurrencyLimits::from_env();
         std::env::remove_var(super::ENV_TOOL_CONCURRENCY);

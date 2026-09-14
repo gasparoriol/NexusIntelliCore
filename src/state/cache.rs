@@ -77,6 +77,12 @@ pub struct CacheManager {
     pub tool_cache_limit: usize,
 }
 
+impl Default for CacheManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CacheManager {
     pub fn new() -> Self {
         let limits = ToolCacheLimits::from_env();

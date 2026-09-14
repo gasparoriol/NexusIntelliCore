@@ -23,6 +23,12 @@ pub struct MetricsCollector {
     pub tool_invocation_counts: Mutex<HashMap<String, u64>>,
 }
 
+impl Default for MetricsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetricsCollector {
     pub fn new() -> Self {
         Self {

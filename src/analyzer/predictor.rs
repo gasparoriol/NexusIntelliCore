@@ -39,7 +39,11 @@ impl MarkovAstPredictor {
         self.traverse_and_observe(0, root);
     }
 
-    fn traverse_and_observe(&mut self, parent_kind: u16, current_node: tree_sitter::Node<'_>) -> Vec<u16> {
+    fn traverse_and_observe(
+        &mut self,
+        parent_kind: u16,
+        current_node: tree_sitter::Node<'_>,
+    ) -> Vec<u16> {
         let current_kind = current_node.kind_id();
         let key = (parent_kind, current_kind);
 
@@ -76,7 +80,8 @@ impl MarkovAstPredictor {
         let key = (parent, current);
         let mut predictions = Vec::new();
 
-        if let (Some(next_map), Some(&total)) = (self.transitions.get(&key), self.totals.get(&key)) {
+        if let (Some(next_map), Some(&total)) = (self.transitions.get(&key), self.totals.get(&key))
+        {
             if total == 0 {
                 return predictions;
             }
@@ -101,7 +106,8 @@ impl MarkovAstPredictor {
         threshold: f64,
     ) -> bool {
         let key = (parent, current);
-        if let (Some(desc_map), Some(&total)) = (self.descendants.get(&key), self.totals.get(&key)) {
+        if let (Some(desc_map), Some(&total)) = (self.descendants.get(&key), self.totals.get(&key))
+        {
             if total < 3 {
                 // Insufficient samples to safely prune
                 return false;

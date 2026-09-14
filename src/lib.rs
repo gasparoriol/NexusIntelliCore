@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 pub mod analyzer;
 pub mod audit_queries;
 pub mod indexer;

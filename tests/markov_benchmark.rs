@@ -1,7 +1,6 @@
-use NexusIntelliCore::analyzer::MarkovAstPredictor;
 use std::time::Instant;
 use tree_sitter::Parser;
-
+use NexusIntelliCore::analyzer::MarkovAstPredictor;
 
 fn generate_large_source_code(files: usize) -> String {
     let mut code = String::new();
@@ -72,8 +71,14 @@ fn test_markov_performance_benchmark() {
     println!("   BENCHMARK DE RENDIMIENTO: MARKOV PREDICTOR VS BASELINE");
     println!("=======================================================");
     println!("Total de Nodos en AST: {}", root.descendant_count());
-    println!("Observaciones Markov de 2º orden acumuladas: {}", predictor.total_observations());
-    println!("Tiempo de entrenamiento del Predictor: {:?}", train_duration);
+    println!(
+        "Observaciones Markov de 2º orden acumuladas: {}",
+        predictor.total_observations()
+    );
+    println!(
+        "Tiempo de entrenamiento del Predictor: {:?}",
+        train_duration
+    );
 
     // Goal: identify function/method calls (e.g., `call_expression`)
     // Get kind_id of `call_expression` and `field_expression` in the grammar
@@ -166,17 +171,36 @@ fn test_markov_performance_benchmark() {
     println!("\n-------------------------------------------------------");
     println!("                   RESULTS AND COMPARATIVE");
     println!("-------------------------------------------------------");
-    println!("Metric                             | Baseline (Without Markov) | Predictive (With Markov)");
-    println!("------------------------------------+-----------------------+-------------------------");
-    println!("Average Time per Traversal       | {:>17.2} µs | {:>19.2} µs", baseline_avg_us, markov_avg_us);
-    println!("Nodes Visited per Traversal          | {:>21} | {:>23}", baseline_nodes_visited, markov_nodes_visited);
-    println!("Pruned Subtrees                    | {:>21} | {:>23}", 0, markov_nodes_pruned);
-    println!("Found Matches                      | {:>21} | {:>23}", baseline_matches, markov_matches);
+    println!(
+        "Metric                             | Baseline (Without Markov) | Predictive (With Markov)"
+    );
+    println!(
+        "------------------------------------+-----------------------+-------------------------"
+    );
+    println!(
+        "Average Time per Traversal       | {:>17.2} µs | {:>19.2} µs",
+        baseline_avg_us, markov_avg_us
+    );
+    println!(
+        "Nodes Visited per Traversal          | {:>21} | {:>23}",
+        baseline_nodes_visited, markov_nodes_visited
+    );
+    println!(
+        "Pruned Subtrees                    | {:>21} | {:>23}",
+        0, markov_nodes_pruned
+    );
+    println!(
+        "Found Matches                      | {:>21} | {:>23}",
+        baseline_matches, markov_matches
+    );
     println!("-------------------------------------------------------");
     println!("Speedup Factor                     : {:.2}x", speedup);
     println!("Precision / Exhaustiveness (Recall) : {:.2}%", recall);
     println!("=======================================================\n");
 
     assert!(baseline_matches > 0, "Must have found matches");
-    assert_eq!(baseline_matches, markov_matches, "Predictive model must not lose true matches");
+    assert_eq!(
+        baseline_matches, markov_matches,
+        "Predictive model must not lose true matches"
+    );
 }
