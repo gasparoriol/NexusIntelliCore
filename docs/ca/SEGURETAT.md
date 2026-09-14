@@ -140,7 +140,7 @@ Aquestes **no són vulnerabilitats** sinó les regles de sanitització en si mat
 
    ```bash
    # ❌ Dolent: Codificat
-   const API_KEY = "sk-1234567890";
+   const API_KEY = "your-api-key-placeholder";
 
    # ✅ Bé: Variable d'entorn
    const API_KEY = process.env.OPENAI_API_KEY;
