@@ -8,6 +8,7 @@ pub mod audit;
 pub mod entrypoints;
 pub mod lang;
 pub mod patterns;
+pub mod predictor;
 pub mod use_cases;
 
 // Private sub modules (only accessed via parse.rs)
@@ -31,6 +32,7 @@ pub use imports::classify_import_kind_from_path;
 pub use lang::{detect_grammar, EvalMode, LanguageGrammar, LANGUAGE_REGISTRY};
 pub use parse::analyze_file;
 pub use patterns::detect_patterns;
+pub use predictor::{MarkovAstPredictor, SharedMarkovPredictor};
 pub use use_cases::infer_use_cases;
 
 #[cfg(test)]

@@ -1,3 +1,4 @@
+pub mod ast_cache;
 pub mod cache;
 pub mod index;
 pub mod metrics;
@@ -18,6 +19,8 @@ use crate::indexer::FileIndex;
 use crate::linter::LintPool;
 use crate::security::SecurityConfig;
 
+#[allow(unused_imports)]
+pub use ast_cache::MarkovAstCache;
 pub use cache::{AstCacheStats, CachedAnalysis, ToolCacheKey};
 pub use metrics::OperationalMetrics;
 pub use project::ProjectContext;
@@ -72,6 +75,7 @@ pub struct ServerState {
     // Sub-components
     cache: cache::CacheManager,
     metrics: metrics::MetricsCollector,
+    markov_predictor: analyzer::SharedMarkovPredictor,
 }
 
 impl ServerState {
@@ -89,6 +93,7 @@ impl ServerState {
             tool_concurrency: tokio::sync::Semaphore::new(max_concurrency),
             cache: cache::CacheManager::new(),
             metrics: metrics::MetricsCollector::new(),
+            markov_predictor: analyzer::SharedMarkovPredictor::new(),
         }))
     }
 
@@ -131,6 +136,11 @@ impl ServerState {
     /// Returns `Some(Arc<ServerState>)` if initialized, or `None` without panicking.
     pub fn get_opt() -> Option<Arc<Self>> {
         STATE.get().cloned()
+    }
+
+    /// Access the global Markov AST predictor instance.
+    pub fn markov_predictor(&self) -> &analyzer::SharedMarkovPredictor {
+        &self.markov_predictor
     }
 
     /// Registers a new workspace project in the server state.

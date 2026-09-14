@@ -58,6 +58,9 @@ pub(super) async fn query_ast(
         return Ok(error_response("Failed to parse source file"));
     };
 
+    let root = tree.root_node();
+    state.markov_predictor().observe_tree(root);
+
     let query = match Query::new(&ts_lang, query_source) {
         Ok(q) => q,
         Err(e) => return Ok(error_response(format!("Invalid tree-sitter query: {e}"))),
@@ -68,7 +71,7 @@ pub(super) async fn query_ast(
     let mut cursor = QueryCursor::new();
     let mut captures = Vec::new();
 
-    for m in cursor.matches(&query, tree.root_node(), source.as_bytes()) {
+    for m in cursor.matches(&query, root, source.as_bytes()) {
         for cap in m.captures {
             let node = cap.node;
             let start = node.start_position();
@@ -98,6 +101,7 @@ pub(super) async fn query_ast(
         "language": grammar.name(),
         "query": query_source,
         "capture_count": captures.len(),
+        "markov_observations": state.markov_predictor().total_observations(),
         "captures": captures,
     });
 

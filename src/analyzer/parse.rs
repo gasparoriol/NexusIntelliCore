@@ -69,6 +69,10 @@ pub fn analyze_file(path: &Path) -> Result<FileAnalysis> {
 
     let root = tree.root_node();
 
+    if let Some(state) = crate::state::ServerState::get_opt() {
+        state.markov_predictor().observe_tree(root);
+    }
+
     let functions = extract_functions(root, &source, grammar, &ts_lang)?;
     let classes = extract_classes(root, &source, grammar, &ts_lang)?;
     let imports = extract_imports(root, &source, grammar, &ts_lang)?;
