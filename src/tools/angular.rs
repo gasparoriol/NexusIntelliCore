@@ -10,14 +10,15 @@ const ANGULAR_LINT_MAX_ITEMS: usize = 5;
 #[allow(clippy::too_many_lines)] // Rich multi-step analysis: template + styles + lint; splitting would harm readability
 pub(super) async fn analyze_angular_component(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     component_path: &str,
 ) -> Result<Value> {
-    let ts_path = match state.validate_path(Path::new(component_path)) {
+    let ts_path = match proj.validate_path(Path::new(component_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
-    let index = state.index().await?;
+    let index = proj.index().await?;
     if index.is_restricted(&ts_path) {
         return Ok(tool_response(vec![text_content(format!(
             "⚠ Access denied by .mcpignore policy: {component_path}"
@@ -42,10 +43,10 @@ pub(super) async fn analyze_angular_component(
 
     // Analyse the .ts file itself (for class names / methods)
     let ts_analysis = state.get_analysis(&ts_path).await.ok();
-    let component_lint = if state.lint_pool().enabled() {
+    let component_lint = if proj.lint_pool.enabled() {
         match ts_analysis.as_ref() {
             Some(analysis) => {
-                Some(build_lint_section(state, &ts_path, analysis, ANGULAR_LINT_MAX_ITEMS).await)
+                Some(build_lint_section(proj, &ts_path, analysis, ANGULAR_LINT_MAX_ITEMS).await)
             }
             None => None,
         }
@@ -55,7 +56,7 @@ pub(super) async fn analyze_angular_component(
 
     // Analyse the template file (HTML)
     let template_analysis = if let Some(ref tmpl_path) = info.template_file {
-        match state.validate_path(tmpl_path) {
+        match proj.validate_path(tmpl_path) {
             Ok(valid_path) => state
                 .get_analysis(&valid_path)
                 .await
@@ -71,7 +72,7 @@ pub(super) async fn analyze_angular_component(
     let mut style_analyses: Vec<(String, std::path::PathBuf, crate::analyzer::FileAnalysis)> =
         Vec::new();
     for style_path in &info.style_files {
-        if let Ok(valid_path) = state.validate_path(style_path) {
+        if let Ok(valid_path) = proj.validate_path(style_path) {
             if let Ok(analysis) = state.get_analysis(&valid_path).await {
                 style_analyses.push((style_path.display().to_string(), valid_path, analysis));
             }
@@ -153,10 +154,10 @@ pub(super) async fn analyze_angular_component(
             json!(angular_components),
         );
         template_section.insert("css_classes_used".to_string(), json!(css_classes));
-        if state.lint_pool().enabled() {
+        if proj.lint_pool.enabled() {
             template_section.insert(
                 "lint".to_string(),
-                build_lint_section(state, template_path, tmpl, ANGULAR_LINT_MAX_ITEMS).await,
+                build_lint_section(proj, template_path, tmpl, ANGULAR_LINT_MAX_ITEMS).await,
             );
         }
         Some(Value::Object(template_section))
@@ -184,10 +185,10 @@ pub(super) async fn analyze_angular_component(
         style_item.insert("file".to_string(), json!(path_str));
         style_item.insert("language".to_string(), json!(analysis.language));
         style_item.insert("selectors".to_string(), json!(selectors));
-        if state.lint_pool().enabled() {
+        if proj.lint_pool.enabled() {
             style_item.insert(
                 "lint".to_string(),
-                build_lint_section(state, path_buf, analysis, ANGULAR_LINT_MAX_ITEMS).await,
+                build_lint_section(proj, path_buf, analysis, ANGULAR_LINT_MAX_ITEMS).await,
             );
         }
         style_entries.push(Value::Object(style_item));
@@ -207,12 +208,12 @@ pub(super) async fn analyze_angular_component(
 }
 
 async fn build_lint_section(
-    state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     path: &Path,
     analysis: &crate::analyzer::FileAnalysis,
     max_items: usize,
 ) -> Value {
-    let lint_result = state.lint_pool().get_or_schedule(path, analysis).await;
+    let lint_result = proj.lint_pool.get_or_schedule(path, analysis).await;
     let total = lint_result.diagnostics.len();
     let diagnostics = lint_result
         .diagnostics
@@ -231,7 +232,7 @@ async fn build_lint_section(
         .collect::<Vec<_>>();
 
     json!({
-        "enabled": state.lint_pool().enabled(),
+        "enabled": proj.lint_pool.enabled(),
         "file": path.display().to_string(),
         "diagnostic_count": total,
         "omitted_diagnostics": total.saturating_sub(max_items),

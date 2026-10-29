@@ -39,6 +39,7 @@ pub(crate) fn apply_dependency_type_filters(
 
 pub(crate) async fn build_file_dependencies(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     allowed_files: &[PathBuf],
     restricted_files: &[PathBuf],
     params: &QueryParams,
@@ -46,11 +47,11 @@ pub(crate) async fn build_file_dependencies(
     let mut file_deps: serde_json::Map<String, Value> = serde_json::Map::new();
 
     for file in allowed_files.iter().take(params.max_nodes * 2) {
-        let Ok(path) = state.validate_path(file) else {
+        let Ok(path) = proj.validate_path(file) else {
             continue;
         };
 
-        let index_read = state.index().await?;
+        let index_read = proj.index().await?;
         let rel = index_read.relative(&path).to_string_lossy().into_owned();
         drop(index_read);
 

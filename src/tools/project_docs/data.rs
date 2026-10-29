@@ -24,11 +24,12 @@ pub(super) struct ProjectDocsData {
 
 pub(super) async fn collect_project_docs_data(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     max_files: usize,
     file_offset: usize,
 ) -> Result<ProjectDocsData> {
-    let index = state.index().await?;
-    let root = state.root().to_path_buf();
+    let index = proj.index().await?;
+    let root = proj.root.clone();
     let project_name = root
         .file_name()
         .and_then(|n| n.to_str())

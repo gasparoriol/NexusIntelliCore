@@ -4,8 +4,12 @@ use serde_json::{json, Value};
 use crate::privacy_gateway;
 use crate::protocol::{error_response, text_content, tool_response};
 
-pub(super) async fn lint_file(state: &crate::state::ServerState, file_path: &str) -> Result<Value> {
-    let (proj, path) = match state.resolve_project_for_path(file_path) {
+pub(super) async fn lint_file(
+    state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
+    file_path: &str,
+) -> Result<Value> {
+    let path = match proj.validate_path(std::path::Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };

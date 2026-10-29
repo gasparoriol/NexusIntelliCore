@@ -234,8 +234,8 @@ fn render_json_summary(
 
 // ── Tool entry point ─────────────────────────────────────────────────────────
 
-pub(super) async fn audit_security_measures(state: &crate::state::ServerState) -> Result<Value> {
-    let index = state.index().await?;
+pub(super) async fn audit_security_measures(proj: &crate::state::ProjectContext) -> Result<Value> {
+    let index = proj.index().await?;
     let allowed_files = index.allowed_files.clone();
     let restricted_len = index.restricted_files.len();
     drop(index);
@@ -243,11 +243,11 @@ pub(super) async fn audit_security_measures(state: &crate::state::ServerState) -
     let mut findings: Vec<RichFinding> = Vec::new();
 
     for file in &allowed_files {
-        let Ok(path) = state.validate_path(file) else {
+        let Ok(path) = proj.validate_path(file) else {
             continue;
         };
 
-        let index_read = state.index().await?;
+        let index_read = proj.index().await?;
         let rel = index_read.relative(&path).to_string_lossy().into_owned();
         drop(index_read);
 

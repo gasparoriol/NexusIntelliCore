@@ -10,15 +10,16 @@ use crate::protocol::{error_response, text_content, tool_response};
 
 pub(super) async fn query_ast(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     file_path: &str,
     query_source: &str,
 ) -> Result<Value> {
-    let path = match state.validate_path(Path::new(file_path)) {
+    let path = match proj.validate_path(Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
-    let index = state.index().await?;
+    let index = proj.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
             "⚠ Access denied: {file_path} is protected by .mcpignore."

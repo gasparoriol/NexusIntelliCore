@@ -89,6 +89,7 @@ async fn main() {
     let stdout = tokio::io::stdout();
 
     let mut transport = transport::McpTransport::new(stdin, stdout);
+    let session = state::Session::new();
 
     loop {
         let read_result = transport.read_message().await;
@@ -102,7 +103,7 @@ async fn main() {
                 let response = match serde_json::from_value::<JsonRpcRequest>(msg) {
                     Ok(req) => {
                         if req.jsonrpc == "2.0" {
-                            server::handle_request(req).await
+                            server::handle_request(&session, req).await
                         } else {
                             warn!(version = %req.jsonrpc, "Unsupported jsonrpc version");
                             Some(JsonRpcResponse::error(

@@ -124,6 +124,7 @@ fn select_candidate_files(
 
 async fn collect_pattern_matches(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     files: &[std::path::PathBuf],
     max_files: usize,
 ) -> Result<(Vec<analyzer::PatternMatch>, usize)> {
@@ -131,11 +132,11 @@ async fn collect_pattern_matches(
     let mut files_scanned = 0usize;
 
     for file in files.iter().take(max_files) {
-        let Ok(path) = state.validate_path(file) else {
+        let Ok(path) = proj.validate_path(file) else {
             continue;
         };
 
-        let index_read = state.index().await?;
+        let index_read = proj.index().await?;
         if index_read.is_restricted(&path) {
             drop(index_read);
             continue;
@@ -157,17 +158,18 @@ async fn collect_pattern_matches(
 
 pub(super) async fn search_design_patterns(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     args: &Value,
 ) -> Result<Value> {
     let start = Instant::now();
     let params = QueryParams::from_args(args);
-    let index = state.index().await?;
+    let index = proj.index().await?;
 
     let files = select_candidate_files(&index, &params);
     drop(index);
 
     let (mut all_patterns, files_scanned) =
-        collect_pattern_matches(state, &files, params.max_files).await?;
+        collect_pattern_matches(state, proj, &files, params.max_files).await?;
 
     let total_matches = all_patterns.len();
 

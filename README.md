@@ -70,17 +70,20 @@ nexusintellicore /path/to/project1 /path/to/project2 /path/to/project3
 
 Alternatively, start the server empty and register repositories dynamically.
 
-### 2. Dynamic Runtime Registration (`list_projects`, `register_project`, `unregister_project`)
+### 2. Dynamic Runtime Registration (`list_projects`, `register_project`, `unregister_project`, `set_active_project`)
 Projects can be managed dynamically during an active MCP session:
 
-- **`list_projects`**: Lists all active project contexts, canonical root paths, file counts, and Angular framework detection status.
-- **`register_project`**: Registers a new project root directory at runtime. Accepts `path` (required) and an optional `project_id` alias.
+- **`list_projects`**: Lists all active project contexts, canonical root paths, file counts, Angular framework detection status and an `active` flag marking the session's active project.
+- **`register_project`**: Registers a new project root directory at runtime. Accepts `path` (required), an optional `project_id` alias, `set_active` (default `false`) to also make it the active project of the session, and `index` (default `true`) to verify the index is ready and report the files indexed.
+- **`set_active_project`**: Sets the active project of the current session (`project_id` or a registered root path) and returns `{ active_project_id, root, files_indexed }`.
 - **`unregister_project`**: Removes a project root from the server state and automatically purges its associated AST and tool cache entries.
 
-### 3. Automatic Project Path Resolution
-File-based tools (`get_file_outline`, `inspect_symbol`, `lint_file`, `query_ast`, `get_module_summary`, etc.) automatically map the target `file_path` to the correct registered project root without requiring explicit project selection.
+### 3. Project Selection: Active Project per Session
+Every project-scoped tool accepts an optional `project_id` (alias `root_path`). Resolution order per call: explicit `project_id` → project owning the `file_path` argument → session active project → first registered project (first CLI root). Unknown ids return an error listing the valid ids, and a `root_path`/`file_path` outside the registered roots is rejected.
 
-For structural tools like `get_project_structure`, an optional `project` parameter accepts a project ID or path alias to target a specific workspace. If omitted, the default (first registered) project is selected automatically.
+The active project lives in the connection's session (not in a process-wide global) and is selected automatically from `rootUri` / `workspaceFolders` of the MCP `initialize` request when they match (symlinks, trailing slashes and case on case-insensitive filesystems are normalised) a registered root. Project-scoped results include a `project: { id, root }` field with the project actually used, and `get_server_stats` reports `active_project_id`.
+
+**Migration note:** the argument order of the CLI roots no longer decides which project tools operate on once the client sends a matching `rootUri`/`workspaceFolders` or calls `set_active_project`. Without either, behaviour is unchanged (first root is the default). The legacy `project` argument of `get_project_structure` is still accepted as an alias of `project_id`.
 
 ### 4. Isolated State & Shared Cache Design
 - **Per-Project Isolation (`ProjectContext`)**: Each project maintains its own isolated `FileIndex`, TypeScript path alias configuration (`TsPathAliasConfig`), linter pool (`LintPool`), and filesystem watcher (`FileWatcher`).
@@ -111,11 +114,11 @@ For structural tools like `get_project_structure`, an optional `project` paramet
 
 ---
 
-## MCP Tools Reference (17 Tools)
+## MCP Tools Reference (18 Tools)
 
 | Tool Name | Cacheable | Description |
 |---|:---:|---|
-| `get_project_structure` | No | Directory tree with access-control markers (`project` ID optional) |
+| `get_project_structure` | No | Directory tree with access-control markers (`project_id` optional) |
 | `get_file_outline` | Yes | Structural map of a file (signatures, types, imports, doc-comments) |
 | `get_module_summary` | Yes | Module-level doc-comments and public API summary |
 | `inspect_symbol` | Yes | Sanitized source code of a specific function, class, or method |
@@ -132,6 +135,7 @@ For structural tools like `get_project_structure`, an optional `project` paramet
 | `list_projects` | No | List all active workspace projects managed by the server instance |
 | `register_project` | No | Dynamically register a new project root directory at runtime |
 | `unregister_project` | No | Unregister a project root and flush its associated caches |
+| `set_active_project` | No | Set the session's active project (all project-scoped tools accept an optional `project_id`) |
 
 ---
 

@@ -105,6 +105,12 @@ pub fn all_tool_definitions() -> Vec<ToolDefinition> {
             expensive: false,
             schema: schema_unregister_project,
         },
+        ToolDefinition {
+            name: "set_active_project",
+            cacheable: false,
+            expensive: false,
+            schema: schema_set_active_project,
+        },
     ]
 }
 
@@ -466,7 +472,7 @@ fn schema_lint_file() -> Value {
 fn schema_list_projects() -> Value {
     json!({
         "name": "list_projects",
-        "description": "Lists all registered projects managed by this NexusIntelliCore instance, including their IDs, root paths, and index status.",
+        "description": "Lists all registered projects managed by this NexusIntelliCore instance, including their IDs, root paths, index status and which one is active for the current session.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -489,6 +495,14 @@ fn schema_register_project() -> Value {
                 "project_id": {
                     "type": "string",
                     "description": "Optional custom alias/ID for the project"
+                },
+                "set_active": {
+                    "type": "boolean",
+                    "description": "If true, also makes the project the active one for this session (default: false)"
+                },
+                "index": {
+                    "type": "boolean",
+                    "description": "If true (default), verifies the project index is ready and reports the number of files indexed"
                 }
             },
             "required": ["path"]
@@ -513,10 +527,62 @@ fn schema_unregister_project() -> Value {
     })
 }
 
+/// Adds the optional `project_id` / `root_path` selectors to a project-scoped tool schema.
+fn with_project_selector(mut schema: Value) -> Value {
+    if let Some(props) = schema
+        .pointer_mut("/inputSchema/properties")
+        .and_then(Value::as_object_mut)
+    {
+        props.insert(
+            "project_id".to_owned(),
+            json!({
+                "type": "string",
+                "description": "Optional. Project id (see list_projects) to operate on. Defaults to the session's active project."
+            }),
+        );
+        props.insert(
+            "root_path".to_owned(),
+            json!({
+                "type": "string",
+                "description": "Optional alias of project_id: the root path of a registered project."
+            }),
+        );
+    }
+    schema
+}
+
+fn schema_set_active_project() -> Value {
+    json!({
+        "name": "set_active_project",
+        "description": "Sets the active project of the current session. Tools called without project_id operate on it. Returns { active_project_id, root, files_indexed }.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Project id (or root path) of a registered project"
+                }
+            },
+            "required": ["project_id"]
+        }
+    })
+}
+
 /// JSON Schema definitions returned by `tools/list`.
 pub fn tool_definitions() -> Value {
     let defs = registered_tool_definitions();
-    Value::Array(defs.iter().map(|d| (d.schema)()).collect())
+    Value::Array(
+        defs.iter()
+            .map(|d| {
+                let schema = (d.schema)();
+                if super::is_project_scoped(d.name) {
+                    with_project_selector(schema)
+                } else {
+                    schema
+                }
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

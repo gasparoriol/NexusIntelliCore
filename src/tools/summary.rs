@@ -119,10 +119,11 @@ fn append_import_sections(
 
 pub(super) async fn get_module_summary(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     file_path: &str,
     public_only: bool,
 ) -> Result<Value> {
-    let (proj, path) = match state.resolve_project_for_path(file_path) {
+    let path = match proj.validate_path(std::path::Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };

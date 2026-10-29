@@ -30,8 +30,23 @@ The current tool registry contains these tools:
 | `get_module_summary`        | `file_path`                            | Module documentation and API summary                          |
 | `generate_project_docs`     | none                                   | Supports sections, visibility, pagination and language        |
 | `analyze_angular_component` | `file_path` or legacy `component_path` | Registered dynamically for Angular projects                   |
+| `list_projects`             | none                                   | Registered projects; `active: true` marks the session's active one |
+| `register_project`          | `path`                                 | Optional `project_id`, `set_active` (default `false`), `index` (default `true`) |
+| `unregister_project`        | `project_id`                           | Removes a project and flushes its caches                      |
+| `set_active_project`        | `project_id`                           | Sets the session's active project; returns `{ active_project_id, root, files_indexed }` |
 
 `tools/list` is the authoritative discovery surface. The Angular tool is omitted when the project is not detected as Angular. Tool schemas and cache/expense policies are generated from the same registry, so this table must be checked against `src/tools/definitions.rs` when the registry changes.
+
+### Project Selection (multi-project)
+
+Every project-scoped tool (all tools above except `list_projects`, `register_project`, `unregister_project` and `set_active_project`) accepts an optional `project_id` string; `root_path` is an alias that must equal the canonical root of a registered project. The target project is resolved per call in this order:
+
+1. Explicit `project_id` / `root_path`. Unknown values return an `isError` result listing the valid ids. A `file_path` outside the selected project is rejected (`Access denied`).
+2. The project that contains the `file_path` argument, if any.
+3. The session's active project, set by `set_active_project`, `register_project` with `set_active: true`, or automatically from `rootUri` / `workspaceFolders` in the `initialize` request.
+4. The first registered project (first CLI root).
+
+The active project is stored per connection (session), not per process. Every project-scoped result carries a top-level `project: { id, root }` object with the project actually used, and `get_server_stats` also reports `active_project_id`, `project_id`, `root` and `files_indexed`.
 
 ### Common Request and Response Shape
 

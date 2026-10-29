@@ -13,13 +13,14 @@ const INSPECT_SYMBOL_LINT_MAX_ITEMS: usize = 5;
 #[allow(clippy::too_many_lines)] // Complex symbol AST extraction and match formatting
 pub(super) async fn inspect_symbol(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     file_path: &str,
     symbol_name: &str,
     match_mode: &str,
     return_all_matches: bool,
     signature_hint: Option<&str>,
 ) -> Result<Value> {
-    let (proj, path) = match state.resolve_project_for_path(file_path) {
+    let path = match proj.validate_path(std::path::Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
@@ -225,8 +226,8 @@ pub(super) async fn inspect_symbol(
     };
     out.push_str(role_hint);
 
-    if state.lint_pool().enabled() {
-        let lint_result = state.lint_pool().get_or_schedule(&path, &analysis).await;
+    if proj.lint_pool.enabled() {
+        let lint_result = proj.lint_pool.get_or_schedule(&path, &analysis).await;
         let selected = matches[0];
         if let Some(summary) = render_lint_summary_scoped(
             &lint_result,

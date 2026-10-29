@@ -1,10 +1,12 @@
 use crate::privacy_gateway;
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
+use crate::state::Session;
 use crate::{security, state, tools};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use tracing::{error, info, warn};
 
-pub async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
+pub async fn handle_request(session: &Session, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
     let id = req.id.clone().unwrap_or(Value::Null);
 
     let state = state::ServerState::get();
@@ -24,11 +26,11 @@ pub async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
     }
 
     match req.method.as_str() {
-        "initialize" => Some(handle_initialize(id, &req.params)),
+        "initialize" => Some(handle_initialize(session, id, &req.params)),
         "notifications/initialized" => None,
         m if m.starts_with("notifications/") => None,
         "tools/list" => Some(handle_tools_list(id)),
-        "tools/call" => Some(handle_tool_call(id, req.params).await),
+        "tools/call" => Some(handle_tool_call(session, id, req.params).await),
         "ping" => Some(JsonRpcResponse::success(id, json!({}))),
         other => Some(JsonRpcResponse::error(
             id,
@@ -40,7 +42,57 @@ pub async fn handle_request(req: JsonRpcRequest) -> Option<JsonRpcResponse> {
 
 static AUTH_FAILURE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-fn handle_initialize(id: Value, params: &Value) -> JsonRpcResponse {
+/// Converts a `file://` URI (or a plain path) from the `initialize` request into a path.
+fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let Some(rest) = uri.strip_prefix("file://") else {
+        return uri.starts_with('/').then(|| PathBuf::from(uri));
+    };
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    let bytes = rest.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = rest.get(i + 1..i + 3)?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let path = String::from_utf8(decoded).ok()?;
+    // Windows drive URIs look like `/C:/dir`
+    let path = match path.as_bytes() {
+        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => path[1..].to_owned(),
+        _ => path,
+    };
+    Some(PathBuf::from(path))
+}
+
+/// Activates, for this session, the registered project matching `rootUri` or any
+/// of `workspaceFolders` from the MCP `initialize` request.
+fn select_project_from_initialize(session: &Session, params: &Value) {
+    let state = state::ServerState::get();
+    let root_uri = params.get("rootUri").and_then(Value::as_str);
+    let folder_uris = params
+        .get("workspaceFolders")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|f| f.get("uri").and_then(Value::as_str));
+
+    for uri in root_uri.into_iter().chain(folder_uris) {
+        let Some(proj) = uri_to_path(uri).and_then(|p| state.project_containing(&p)) else {
+            continue;
+        };
+        info!(project_id = %proj.id, "Active project selected from initialize handshake");
+        session.set_active_project_id(proj.id.clone());
+        return;
+    }
+}
+
+fn handle_initialize(session: &Session, id: Value, params: &Value) -> JsonRpcResponse {
     let state = state::ServerState::get();
     let mut token_found = None;
 
@@ -89,6 +141,8 @@ fn handle_initialize(id: Value, params: &Value) -> JsonRpcResponse {
         }),
     );
 
+    select_project_from_initialize(session, params);
+
     JsonRpcResponse::success(
         id,
         json!({
@@ -135,7 +189,7 @@ fn handle_tools_list(id: Value) -> JsonRpcResponse {
     JsonRpcResponse::success(id, json!({ "tools": filtered_tools }))
 }
 
-async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
+async fn handle_tool_call(session: &Session, id: Value, params: Value) -> JsonRpcResponse {
     let name = if let Some(n) = params.get("name").and_then(|v| v.as_str()) {
         n.to_owned()
     } else {
@@ -184,7 +238,7 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
         }),
     );
 
-    match tools::dispatch_tool(&name, args).await {
+    match tools::dispatch_tool(session, &name, args).await {
         Ok(result) => {
             let elapsed = start.elapsed().as_millis();
             info!(tool = %safe_name, elapsed_ms = %elapsed, "Tool call completed successfully");
@@ -209,5 +263,29 @@ async fn handle_tool_call(id: Value, params: Value) -> JsonRpcResponse {
                 }),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uri_to_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn uri_to_path_decodes_file_uris() {
+        assert_eq!(
+            uri_to_path("file:///Users/me/My%20Project"),
+            Some(PathBuf::from("/Users/me/My Project"))
+        );
+        assert_eq!(
+            uri_to_path("file:///C:/work/app"),
+            Some(PathBuf::from("C:/work/app"))
+        );
+        assert_eq!(
+            uri_to_path("/plain/path"),
+            Some(PathBuf::from("/plain/path"))
+        );
+        assert_eq!(uri_to_path("https://example.com"), None);
+        assert_eq!(uri_to_path("file:///bad%zz"), None);
     }
 }

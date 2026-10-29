@@ -117,12 +117,13 @@ fn bounded_limit(
 
 pub(super) async fn get_dependencies_graph(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     args: &Value,
 ) -> Result<Value> {
     let start = Instant::now();
     let params = QueryParams::from_args(args);
 
-    let index = state.index().await?;
+    let index = proj.index().await?;
     let allowed_files =
         builder::filter_by_scope(index.allowed_files.clone(), params.scope_path.as_deref());
     let restricted_files =
@@ -130,7 +131,8 @@ pub(super) async fn get_dependencies_graph(
     drop(index);
 
     let mut file_deps =
-        builder::build_file_dependencies(state, &allowed_files, &restricted_files, &params).await?;
+        builder::build_file_dependencies(state, proj, &allowed_files, &restricted_files, &params)
+            .await?;
     builder::apply_dependency_type_filters(&mut file_deps, &params);
 
     let file_deps = match params.direction.as_str() {

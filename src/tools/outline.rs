@@ -89,9 +89,10 @@ async fn render_config_outline(path: &Path, file_path: &str) -> Result<Value> {
 
 pub(super) async fn get_file_outline(
     state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     file_path: &str,
 ) -> Result<Value> {
-    let (proj, path) = match state.resolve_project_for_path(file_path) {
+    let path = match proj.validate_path(Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };

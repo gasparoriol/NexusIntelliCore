@@ -17,6 +17,12 @@ pub struct TsPathAliasConfig {
 
 pub struct PathResolver;
 
+/// Single point where project roots are canonicalised (symlinks, `..`, trailing slash).
+pub fn canonical_root(path: &str) -> Result<PathBuf> {
+    std::fs::canonicalize(path)
+        .with_context(|| format!("Failed to canonicalise project root: {path}"))
+}
+
 impl PathResolver {
     pub fn validate_path(root: &Path, requested: &Path) -> Result<PathBuf> {
         let requested_text = requested.display().to_string();

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -22,8 +22,7 @@ pub struct ProjectContext {
 
 impl ProjectContext {
     pub fn new(root_str: &str, id: Option<String>) -> Result<Arc<Self>> {
-        let root = std::fs::canonicalize(root_str)
-            .with_context(|| format!("Failed to canonicalise project root: {root_str}"))?;
+        let root = resolver::canonical_root(root_str)?;
 
         let project_id = id.unwrap_or_else(|| {
             root.file_name()
@@ -60,7 +59,12 @@ impl ProjectContext {
     }
 
     pub fn validate_path(&self, requested: &Path) -> Result<PathBuf> {
-        resolver::PathResolver::validate_path(&self.root, requested)
+        let absolute = if requested.is_relative() {
+            self.root.join(requested)
+        } else {
+            requested.to_path_buf()
+        };
+        resolver::PathResolver::validate_path(&self.root, &absolute)
     }
 
     pub async fn index(&self) -> Result<FileIndex> {

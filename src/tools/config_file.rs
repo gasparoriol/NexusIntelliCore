@@ -9,15 +9,15 @@ use crate::sanitizer;
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB, matches analyzer::parse::analyze_file
 
 pub(super) async fn read_config_file(
-    state: &crate::state::ServerState,
+    proj: &crate::state::ProjectContext,
     file_path: &str,
 ) -> Result<Value> {
-    let path = match state.validate_path(Path::new(file_path)) {
+    let path = match proj.validate_path(Path::new(file_path)) {
         Ok(p) => p,
         Err(e) => return Ok(error_response(format!("Access denied: {e}"))),
     };
 
-    let index = state.index().await?;
+    let index = proj.index().await?;
     if index.is_restricted(&path) {
         return Ok(tool_response(vec![text_content(format!(
             "⚠ Access denied: {file_path} is protected by .mcpignore."

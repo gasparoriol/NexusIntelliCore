@@ -4,6 +4,7 @@ pub mod index;
 pub mod metrics;
 pub mod project;
 pub mod resolver;
+pub mod session;
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -15,8 +16,6 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::analyzer;
-use crate::indexer::FileIndex;
-use crate::linter::LintPool;
 use crate::security::SecurityConfig;
 
 #[allow(unused_imports)]
@@ -25,6 +24,7 @@ pub use cache::{AstCacheStats, CachedAnalysis, ToolCacheKey};
 pub use metrics::OperationalMetrics;
 pub use project::ProjectContext;
 pub use resolver::TsPathAliasConfig;
+pub use session::Session;
 
 /// Global server state, initialised once at startup.
 static STATE: OnceLock<Arc<ServerState>> = OnceLock::new();
@@ -58,6 +58,16 @@ impl ConcurrencyLimits {
             max_tool_concurrency: max,
         }
     }
+}
+
+fn longest_root_match<'a>(
+    projects: &'a HashMap<String, Arc<ProjectContext>>,
+    canonical: &Path,
+) -> Option<&'a Arc<ProjectContext>> {
+    projects
+        .values()
+        .filter(|p| canonical.starts_with(&p.root))
+        .max_by_key(|p| p.root.components().count())
 }
 
 pub struct ServerState {
@@ -216,12 +226,17 @@ impl ServerState {
             if let Some(proj) = projects.get(key) {
                 return Ok(proj.clone());
             }
-            if let Ok(canonical) = std::fs::canonicalize(key) {
+            if let Ok(canonical) = resolver::canonical_root(key) {
                 if let Some((_, proj)) = projects.iter().find(|(_, p)| p.root == canonical) {
                     return Ok(proj.clone());
                 }
             }
-            anyhow::bail!("Project '{key}' not found");
+            let mut ids: Vec<&str> = projects.keys().map(String::as_str).collect();
+            ids.sort_unstable();
+            anyhow::bail!(
+                "Project '{key}' not found or not registered. Valid project ids: [{}]",
+                ids.join(", ")
+            );
         }
 
         let def_id = self
@@ -248,16 +263,9 @@ impl ServerState {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        let absolute_candidate = std::fs::canonicalize(requested_path).ok();
-
-        if let Some(ref canonical) = absolute_candidate {
-            let mut matched: Vec<&Arc<ProjectContext>> = projects
-                .values()
-                .filter(|p| canonical.starts_with(&p.root))
-                .collect();
-            matched.sort_by_key(|p| std::cmp::Reverse(p.root.components().count()));
-            if let Some(best) = matched.first() {
-                return Ok(((*best).clone(), canonical.clone()));
+        if let Ok(canonical) = std::fs::canonicalize(requested_path) {
+            if let Some(best) = longest_root_match(&projects, &canonical) {
+                return Ok((best.clone(), canonical));
             }
         }
 
@@ -265,6 +273,55 @@ impl ServerState {
         let default_proj = self.get_project(None)?;
         let validated = default_proj.validate_path(requested_path)?;
         Ok((default_proj, validated))
+    }
+
+    /// Returns the registered project containing `path`, if any. On case-insensitive
+    /// filesystems a case-folded comparison is used when the exact one finds nothing.
+    pub fn project_containing(&self, path: &Path) -> Option<Arc<ProjectContext>> {
+        let canonical = std::fs::canonicalize(path).ok()?;
+        let projects = self
+            .projects
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if let Some(found) = longest_root_match(&projects, &canonical) {
+            return Some(found.clone());
+        }
+        if !cfg!(any(target_os = "macos", target_os = "windows")) {
+            return None;
+        }
+        let folded = PathBuf::from(canonical.to_string_lossy().to_lowercase());
+        projects
+            .values()
+            .filter(|p| folded.starts_with(p.root.to_string_lossy().to_lowercase()))
+            .max_by_key(|p| p.root.components().count())
+            .cloned()
+    }
+
+    /// Resolves the project a tool call targets: explicit reference (project id or
+    /// root path) first, then the session's active project, then the default
+    /// (first registered) project.
+    pub fn resolve_project(
+        &self,
+        session: &Session,
+        explicit: Option<&str>,
+    ) -> Result<Arc<ProjectContext>> {
+        if let Some(key) = explicit {
+            return self.get_project(Some(key));
+        }
+        if let Some(active) = session.active_project_id() {
+            if let Ok(proj) = self.get_project(Some(&active)) {
+                return Ok(proj);
+            }
+        }
+        self.default_project()
+    }
+
+    /// Id of the project that tools without an explicit reference operate on.
+    pub fn active_project_id(&self, session: &Session) -> Option<String> {
+        self.resolve_project(session, None)
+            .ok()
+            .map(|p| p.id.clone())
     }
 
     pub fn list_projects(&self) -> Vec<(String, PathBuf)> {
@@ -286,12 +343,6 @@ impl ServerState {
         self.default_project()
             .map(|p| p.root.clone())
             .unwrap_or_default()
-    }
-
-    pub fn lint_pool(&self) -> LintPool {
-        self.default_project()
-            .map(|p| p.lint_pool.clone())
-            .unwrap_or_else(|_| LintPool::init(Path::new(".")))
     }
 
     pub fn security_config(&self) -> &SecurityConfig {
@@ -442,17 +493,14 @@ impl ServerState {
             .and_then(|res| res.ok())
     }
 
-    pub fn make_tool_cache_key(&self, tool_name: &str, args: &serde_json::Value) -> ToolCacheKey {
-        let root = if let Some(path_str) = args.get("file_path").and_then(|v| v.as_str()) {
-            self.resolve_project_for_path(path_str)
-                .map(|(p, _)| p.root.clone())
-                .unwrap_or_else(|_| self.root())
-        } else {
-            self.root()
-        };
-
+    pub fn make_tool_cache_key(
+        &self,
+        root: &Path,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> ToolCacheKey {
         ToolCacheKey {
-            root_path: root,
+            root_path: root.to_path_buf(),
             tool_name: tool_name.to_string(),
             canonical_args: resolver::canonicalize_json(args),
         }
@@ -472,16 +520,6 @@ impl ServerState {
             .map(|(p, _)| p.root.clone())
             .unwrap_or_else(|_| self.root());
         self.cache.invalidate_tool_cache_for_file(&root, path);
-    }
-
-    pub async fn index(&self) -> Result<FileIndex> {
-        let proj = self.default_project()?;
-        proj.index().await
-    }
-
-    pub fn validate_path(&self, requested: &Path) -> Result<PathBuf> {
-        let (_proj, validated) = self.resolve_project_for_path(&requested.to_string_lossy())?;
-        Ok(validated)
     }
 
     pub async fn get_analysis(&self, path: &Path) -> Result<analyzer::FileAnalysis> {
@@ -508,11 +546,6 @@ impl ServerState {
             .await;
 
         Ok(cached.analysis)
-    }
-
-    pub async fn refresh_index(&self) -> Result<(usize, u64)> {
-        let proj = self.default_project()?;
-        proj.refresh_index().await
     }
 }
 
@@ -769,6 +802,49 @@ mod tests {
 
         assert!(state.unregister_project("proj1").unwrap());
         assert_eq!(state.list_projects().len(), 1);
+
+        let _ = std::fs::remove_dir_all(dir1);
+        let _ = std::fs::remove_dir_all(dir2);
+    }
+
+    #[test]
+    fn resolve_project_order_is_explicit_then_session_then_default() {
+        let dir1 = std::env::temp_dir().join("nexus_test_resolve1");
+        let dir2 = std::env::temp_dir().join("nexus_test_resolve2");
+        let _ = std::fs::create_dir_all(&dir1);
+        let _ = std::fs::create_dir_all(&dir2);
+
+        let state = ServerState::empty().unwrap();
+        state
+            .register_project(dir1.to_str().unwrap(), Some("first".into()))
+            .unwrap();
+        state
+            .register_project(dir2.to_str().unwrap(), Some("second".into()))
+            .unwrap();
+
+        let session_a = Session::new();
+        let session_b = Session::new();
+        session_a.set_active_project_id("second".into());
+
+        assert_eq!(
+            state.resolve_project(&session_a, None).unwrap().id,
+            "second"
+        );
+        assert_eq!(state.resolve_project(&session_b, None).unwrap().id, "first");
+        assert_eq!(
+            state.resolve_project(&session_a, Some("first")).unwrap().id,
+            "first"
+        );
+
+        let err = state
+            .resolve_project(&session_a, Some("nope"))
+            .err()
+            .expect("unknown id must fail");
+        assert!(err.to_string().contains("first, second"), "{err}");
+
+        // An active project that was unregistered falls back to the default one.
+        state.unregister_project("second").unwrap();
+        assert_eq!(state.resolve_project(&session_a, None).unwrap().id, "first");
 
         let _ = std::fs::remove_dir_all(dir1);
         let _ = std::fs::remove_dir_all(dir2);

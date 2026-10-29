@@ -5,9 +5,9 @@ use crate::protocol::{error_response, text_content, tool_response};
 
 /// Rebuilds the project file index from disk and clears the AST cache.
 /// Use this when files are added/removed or to free memory.
-pub(super) async fn refresh_index(state: &crate::state::ServerState) -> Result<Value> {
+pub(super) async fn refresh_index(proj: &crate::state::ProjectContext) -> Result<Value> {
     // Rebuild index and clear cache
-    let (files_found, cache_cleared) = match state.refresh_index().await {
+    let (files_found, cache_cleared) = match proj.refresh_index().await {
         Ok((files, cleared)) => (files, cleared),
         Err(e) => return Ok(error_response(format!("Index rebuild failed: {e}"))),
     };
@@ -24,9 +24,13 @@ pub(super) async fn refresh_index(state: &crate::state::ServerState) -> Result<V
 }
 
 /// Returns server statistics: AST and tool cache utilization, file index metadata, and runtime configuration.
-pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Result<Value> {
+pub(super) async fn get_server_stats(
+    state: &crate::state::ServerState,
+    session: &crate::state::Session,
+    proj: &crate::state::ProjectContext,
+) -> Result<Value> {
     let cache_stats = state.get_cache_stats();
-    let index = state.index().await?;
+    let index = proj.index().await?;
     let invocation_counts = state.get_tool_invocation_counts();
     let uptime_secs = state.uptime_seconds();
     let metrics = state.get_operational_metrics();
@@ -55,7 +59,10 @@ pub(super) async fn get_server_stats(state: &crate::state::ServerState) -> Resul
             "restricted_files": index.restricted_files.len(),
         },
         "tool_invocations": invocation_counts,
-        "root": state.root().display().to_string()
+        "root": proj.root.display().to_string(),
+        "active_project_id": state.active_project_id(session),
+        "project_id": proj.id,
+        "files_indexed": index.allowed_files.len() + index.restricted_files.len()
     });
 
     let msg = format!(

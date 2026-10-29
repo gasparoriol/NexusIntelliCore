@@ -4,9 +4,12 @@
 /// the public dispatch entry-point and the JSON schema registry.
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::path::Path;
+use std::sync::Arc;
 
 use crate::protocol::error_response;
+use crate::state::{ProjectContext, ServerState, Session};
 
 mod angular;
 mod audit;
@@ -45,17 +48,105 @@ fn tool_is_cacheable(name: &str) -> bool {
         .is_some_and(|def| def.cacheable)
 }
 
-#[allow(clippy::too_many_lines)] // Routing match table; splitting by sub-groups would only add indirection
+/// Tools that operate on a single project and therefore accept `project_id` / `root_path`.
+const PROJECT_SCOPED_TOOLS: &[&str] = &[
+    "get_project_structure",
+    "get_file_outline",
+    "inspect_symbol",
+    "lint_file",
+    "get_dependencies_graph",
+    "query_ast",
+    "read_config_file",
+    "search_design_patterns",
+    "audit_security_measures",
+    "refresh_index",
+    "get_server_stats",
+    "analyze_angular_component",
+    "get_module_summary",
+    "generate_project_docs",
+];
+
+fn is_project_scoped(name: &str) -> bool {
+    PROJECT_SCOPED_TOOLS.contains(&name)
+}
+
+/// Explicit project reference of a call: `project_id`, its alias `root_path`, or the legacy `project`.
+fn explicit_project_ref(args: &Value) -> Option<&str> {
+    ["project_id", "root_path", "project"]
+        .iter()
+        .find_map(|key| args.get(*key).and_then(Value::as_str))
+}
+
+/// Resolution order: explicit `project_id`/`root_path` → project owning the `file_path`
+/// → session active project → first registered project.
+fn resolve_scope(
+    state: &ServerState,
+    session: &Session,
+    args: &Value,
+) -> Result<Arc<ProjectContext>> {
+    if let Some(key) = explicit_project_ref(args) {
+        return state.get_project(Some(key));
+    }
+    let owner = serde_json::from_value::<FilePathArgs>(args.clone())
+        .ok()
+        .and_then(|a| a.file_path.or(a.component_path))
+        .and_then(|f| state.project_containing(Path::new(&f)));
+    match owner {
+        Some(proj) => Ok(proj),
+        None => state.resolve_project(session, None),
+    }
+}
+
+fn tag_with_project(mut result: Value, proj: &ProjectContext) -> Value {
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert(
+            "project".to_owned(),
+            json!({ "id": proj.id, "root": proj.root.display().to_string() }),
+        );
+    }
+    result
+}
+
 async fn dispatch_tool_uncached(
-    state: &std::sync::Arc<crate::state::ServerState>,
+    state: &Arc<ServerState>,
+    session: &Session,
     name: &str,
     args: &Value,
 ) -> Result<Value> {
     let raw = match name {
-        "get_project_structure" => project::get_project_structure(state, args).await,
+        "list_projects" => projects_tool::list_projects(state, session).await,
+        "register_project" => projects_tool::register_project(state, session, args).await,
+        "unregister_project" => projects_tool::unregister_project(state, args).await,
+        "set_active_project" => projects_tool::set_active_project(state, session, args).await,
+        scoped if is_project_scoped(scoped) => {
+            let proj = match resolve_scope(state, session, args) {
+                Ok(p) => p,
+                Err(e) => return Ok(apply_final_privacy_pass(error_response(e.to_string()))),
+            };
+            dispatch_project_tool(state, session, &proj, scoped, args)
+                .await
+                .map(|res| tag_with_project(res, &proj))
+        }
+        other => Ok(error_response(format!("Unknown tool: {other}"))),
+    };
+    // Single output boundary: every tool result passes through the privacy gateway
+    // regardless of whether the handler applied its own specialised sanitiser.
+    raw.map(apply_final_privacy_pass)
+}
+
+#[allow(clippy::too_many_lines)] // Routing match table; splitting by sub-groups would only add indirection
+async fn dispatch_project_tool(
+    state: &ServerState,
+    session: &Session,
+    proj: &Arc<ProjectContext>,
+    name: &str,
+    args: &Value,
+) -> Result<Value> {
+    match name {
+        "get_project_structure" => project::get_project_structure(proj).await,
         "get_file_outline" => {
             let file = require_file_path(args)?;
-            outline::get_file_outline(state, &file).await
+            outline::get_file_outline(state, proj, &file).await
         }
         "inspect_symbol" => {
             let file = require_file_path(args)?;
@@ -76,6 +167,7 @@ async fn dispatch_tool_uncached(
             let signature_hint = args.get("signature_hint").and_then(|v| v.as_str());
             symbol::inspect_symbol(
                 state,
+                proj,
                 &file,
                 symbol,
                 match_mode,
@@ -86,25 +178,25 @@ async fn dispatch_tool_uncached(
         }
         "lint_file" => {
             let file = require_file_path(args)?;
-            lint::lint_file(state, &file).await
+            lint::lint_file(state, proj, &file).await
         }
-        "get_dependencies_graph" => deps_graph::get_dependencies_graph(state, args).await,
+        "get_dependencies_graph" => deps_graph::get_dependencies_graph(state, proj, args).await,
         "query_ast" => {
             let file = require_file_path(args)?;
             let query_source = require_str(args, "query")?;
-            query_ast::query_ast(state, &file, query_source).await
+            query_ast::query_ast(state, proj, &file, query_source).await
         }
         "read_config_file" => {
             let file = require_file_path(args)?;
-            config_file::read_config_file(state, &file).await
+            config_file::read_config_file(proj, &file).await
         }
-        "search_design_patterns" => patterns::search_design_patterns(state, args).await,
-        "audit_security_measures" => audit::audit_security_measures(state).await,
-        "refresh_index" => server::refresh_index(state).await,
-        "get_server_stats" => server::get_server_stats(state).await,
+        "search_design_patterns" => patterns::search_design_patterns(state, proj, args).await,
+        "audit_security_measures" => audit::audit_security_measures(proj).await,
+        "refresh_index" => server::refresh_index(proj).await,
+        "get_server_stats" => server::get_server_stats(state, session, proj).await,
         "analyze_angular_component" => {
             let path = require_file_path_or_component_path(args)?;
-            angular::analyze_angular_component(state, &path).await
+            angular::analyze_angular_component(state, proj, &path).await
         }
         "get_module_summary" => {
             let file = require_file_path(args)?;
@@ -112,7 +204,7 @@ async fn dispatch_tool_uncached(
                 .get("public_only")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            summary::get_module_summary(state, &file, public_only).await
+            summary::get_module_summary(state, proj, &file, public_only).await
         }
         "generate_project_docs" => {
             let sections: Vec<String> = args.get("sections").and_then(Value::as_array).map_or_else(
@@ -151,6 +243,7 @@ async fn dispatch_tool_uncached(
                 .to_owned();
             project_docs::generate_project_docs(
                 state,
+                proj,
                 sections,
                 public_only,
                 max_files,
@@ -159,14 +252,8 @@ async fn dispatch_tool_uncached(
             )
             .await
         }
-        "list_projects" => projects_tool::list_projects(state).await,
-        "register_project" => projects_tool::register_project(state, args).await,
-        "unregister_project" => projects_tool::unregister_project(state, args).await,
         other => Ok(error_response(format!("Unknown tool: {other}"))),
-    };
-    // Single output boundary: every tool result passes through the privacy gateway
-    // regardless of whether the handler applied its own specialised sanitiser.
-    raw.map(apply_final_privacy_pass)
+    }
 }
 
 /// Applies a defensive privacy pass to the full JSON tool result. Handlers may
@@ -186,9 +273,10 @@ fn get_tool_timeout_duration() -> std::time::Duration {
 }
 
 /// Dispatch a `tools/call` request to the appropriate handler.
-pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
+pub async fn dispatch_tool(session: &Session, name: &str, args: Value) -> Result<Value> {
     let timeout_duration = get_tool_timeout_duration();
-    match tokio::time::timeout(timeout_duration, dispatch_tool_internal(name, args)).await {
+    match tokio::time::timeout(timeout_duration, dispatch_tool_internal(session, name, args)).await
+    {
         Ok(res) => res,
         Err(_) => Ok(apply_final_privacy_pass(error_response(format!(
             "Tool '{name}' timed out after {} seconds. Operation cancelled to preserve server responsiveness.",
@@ -197,7 +285,7 @@ pub async fn dispatch_tool(name: &str, args: Value) -> Result<Value> {
     }
 }
 
-async fn dispatch_tool_internal(name: &str, args: Value) -> Result<Value> {
+async fn dispatch_tool_internal(session: &Session, name: &str, args: Value) -> Result<Value> {
     let state = crate::state::ServerState::get();
     state.record_tool_invocation(name);
 
@@ -222,10 +310,15 @@ async fn dispatch_tool_internal(name: &str, args: Value) -> Result<Value> {
     // automatically release the permit at the final of the function
 
     if !tool_is_cacheable(name) {
-        return dispatch_tool_uncached(&state, name, &args).await;
+        return dispatch_tool_uncached(&state, session, name, &args).await;
     }
 
-    let key = state.make_tool_cache_key(name, &args);
+    // Cacheable tools are all project-scoped; the key must carry the resolved project root.
+    let proj = match resolve_scope(&state, session, &args) {
+        Ok(p) => p,
+        Err(e) => return Ok(apply_final_privacy_pass(error_response(e.to_string()))),
+    };
+    let key = state.make_tool_cache_key(&proj.root, name, &args);
     let args_for_compute = args.clone();
     let name_for_compute = name.to_owned();
 
@@ -238,17 +331,18 @@ async fn dispatch_tool_internal(name: &str, args: Value) -> Result<Value> {
     let result = if let Some(cached) = state.get_tool_cache(&key).await {
         cached
     } else {
-        let computed = dispatch_tool_uncached(&state, &name_for_compute, &args_for_compute)
-            .await
-            // error text from anyhow may contain paths/values; sanitize before surfacing
-            .unwrap_or_else(|e| {
-                let policy = crate::privacy_gateway::PrivacyPolicy::default();
-                let sanitized_msg =
-                    crate::privacy_gateway::sanitize_output_text(&e.to_string(), &policy).0;
-                apply_final_privacy_pass(error_response(format!(
-                    "Internal tool error: {sanitized_msg}"
-                )))
-            });
+        let computed =
+            dispatch_tool_uncached(&state, session, &name_for_compute, &args_for_compute)
+                .await
+                // error text from anyhow may contain paths/values; sanitize before surfacing
+                .unwrap_or_else(|e| {
+                    let policy = crate::privacy_gateway::PrivacyPolicy::default();
+                    let sanitized_msg =
+                        crate::privacy_gateway::sanitize_output_text(&e.to_string(), &policy).0;
+                    apply_final_privacy_pass(error_response(format!(
+                        "Internal tool error: {sanitized_msg}"
+                    )))
+                });
 
         if computed.get("isError").and_then(Value::as_bool) != Some(true) {
             state.insert_tool_cache(key.clone(), computed.clone()).await;
@@ -258,7 +352,7 @@ async fn dispatch_tool_internal(name: &str, args: Value) -> Result<Value> {
     };
 
     if result.get("isError").and_then(Value::as_bool) == Some(true) {
-        state.invalidate_tool_cache_for_file(&state.root());
+        state.invalidate_tool_cache_for_file(&proj.root);
     }
 
     Ok(result)
@@ -300,6 +394,7 @@ fn is_expensive_tool(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::state::Session;
     use serde_json::json;
 
     fn ensure_state_init() {
@@ -344,9 +439,10 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "generate_project_docs", &args)
-            .await
-            .expect("dispatcher should execute generate_project_docs route");
+        let response =
+            super::dispatch_tool_uncached(&state, &Session::new(), "generate_project_docs", &args)
+                .await
+                .expect("dispatcher should execute generate_project_docs route");
 
         assert_ne!(
             response.get("isError").and_then(serde_json::Value::as_bool),
@@ -364,9 +460,14 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "analyze_angular_component", &args)
-            .await
-            .expect("dispatcher should execute analyze_angular_component route");
+        let response = super::dispatch_tool_uncached(
+            &state,
+            &Session::new(),
+            "analyze_angular_component",
+            &args,
+        )
+        .await
+        .expect("dispatcher should execute analyze_angular_component route");
 
         let text = response
             .get("content")
@@ -391,9 +492,14 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "analyze_angular_component", &args)
-            .await
-            .expect("dispatcher should execute analyze_angular_component route");
+        let response = super::dispatch_tool_uncached(
+            &state,
+            &Session::new(),
+            "analyze_angular_component",
+            &args,
+        )
+        .await
+        .expect("dispatcher should execute analyze_angular_component route");
 
         let text = response
             .get("content")
@@ -435,6 +541,7 @@ mod tests {
             "list_projects",
             "register_project",
             "unregister_project",
+            "set_active_project",
         ];
 
         for name in dispatched {
@@ -530,7 +637,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "query_ast", &args)
+        let response = super::dispatch_tool_uncached(&state, &Session::new(), "query_ast", &args)
             .await
             .expect("dispatcher should execute query_ast route");
 
@@ -589,9 +696,10 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "read_config_file", &args)
-            .await
-            .expect("dispatcher should execute read_config_file route");
+        let response =
+            super::dispatch_tool_uncached(&state, &Session::new(), "read_config_file", &args)
+                .await
+                .expect("dispatcher should execute read_config_file route");
 
         let text = response
             .get("content")
@@ -625,7 +733,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "lint_file", &args)
+        let response = super::dispatch_tool_uncached(&state, &Session::new(), "lint_file", &args)
             .await
             .expect("dispatcher should execute lint_file route");
 
@@ -652,7 +760,7 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "lint_file", &args)
+        let response = super::dispatch_tool_uncached(&state, &Session::new(), "lint_file", &args)
             .await
             .expect("dispatcher should execute lint_file route");
 
@@ -679,9 +787,10 @@ mod tests {
         });
 
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "get_file_outline", &args)
-            .await
-            .expect("dispatcher should execute get_file_outline route");
+        let response =
+            super::dispatch_tool_uncached(&state, &Session::new(), "get_file_outline", &args)
+                .await
+                .expect("dispatcher should execute get_file_outline route");
 
         let text = response
             .get("content")
@@ -710,9 +819,10 @@ mod tests {
         let sentinel = "sk-proj-FAKEOPENAIKEY12345abcdefghijklmnop";
         let args = json!({ "file_path": format!("/tmp/{sentinel}.rs") });
         let state = crate::state::ServerState::get();
-        let response = super::dispatch_tool_uncached(&state, "unknown_tool_for_test", &args)
-            .await
-            .expect("dispatch should not propagate Err for unknown tools");
+        let response =
+            super::dispatch_tool_uncached(&state, &Session::new(), "unknown_tool_for_test", &args)
+                .await
+                .expect("dispatch should not propagate Err for unknown tools");
 
         let rendered = response.to_string();
         assert!(
@@ -724,7 +834,8 @@ mod tests {
         // apply_final_privacy_pass must be applied on the Ok path; Err values
         // are plain anyhow errors whose to_string() does not contain the sentinel.
         let args2 = json!({ "file_path": format!("/tmp/{sentinel}.rs") });
-        let result2 = super::dispatch_tool_uncached(&state, "inspect_symbol", &args2).await;
+        let result2 =
+            super::dispatch_tool_uncached(&state, &Session::new(), "inspect_symbol", &args2).await;
         match result2 {
             Ok(response2) => {
                 let rendered2 = response2.to_string();
@@ -778,6 +889,7 @@ mod tests {
             "refresh_index",
             "register_project",
             "search_design_patterns",
+            "set_active_project",
             "unregister_project",
         ];
         expected.sort_unstable();
