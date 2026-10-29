@@ -141,7 +141,7 @@ These are **not vulnerabilities** but rather the sanitization rules themselves.
 {
   "username": "john_doe",
   "password": "MySecurePassword123!",
-  "api_key": "sk-1234567890abcdefghij"
+  "api_key": "your-api-key-placeholder"
 }
 
 // After sanitization
@@ -176,7 +176,7 @@ Internal hostnames:
 
    ```bash
    # ❌ Bad: Hardcoded
-   const API_KEY = "sk-1234567890";
+   const API_KEY = "your-api-key-placeholder";
 
    # ✅ Good: Environment variable
    const API_KEY = process.env.OPENAI_API_KEY;

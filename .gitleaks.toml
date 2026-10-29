@@ -1,0 +1,9 @@
+# Gitleaks Configuration File
+title = "NexusIntelliCore Gitleaks Config"
+
+[allowlist]
+description = "Allow test fixtures and documentation example placeholders"
+paths = [
+    '''docs/.*''',
+    '''tests/.*''',
+]
