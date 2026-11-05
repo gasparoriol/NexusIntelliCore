@@ -141,6 +141,54 @@ fn query(id: &str) -> String {
         expected: &[("sql-injection-heuristic", "production", 1)],
         forbidden: &[],
     },
+    CorpusCase {
+        name: "java_path_traversal_read",
+        extension: "java",
+        source: r#"
+import org.springframework.web.bind.annotation.*;
+import java.io.*;
+@RestController
+public class Vuln {
+    @GetMapping("/dl")
+    public String dl(@RequestParam String filename) throws IOException {
+        FileInputStream fis = new FileInputStream("/data/" + filename);
+        return "ok";
+    }
+}
+"#,
+        expected: &[("java-path-traversal-taint", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "java_path_traversal_write_critical",
+        extension: "java",
+        source: r#"
+import javax.servlet.http.*;
+import java.io.*;
+public class VulnWrite extends HttpServlet {
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        String filename = req.getParameter("file");
+        FileOutputStream fos = new FileOutputStream("/uploads/" + filename);
+    }
+}
+"#,
+        expected: &[("java-path-traversal-taint", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "java_static_file_no_alert",
+        extension: "java",
+        source: r#"
+import java.io.*;
+public class Static {
+    void load() throws IOException {
+        FileInputStream fis = new FileInputStream("config.properties");
+    }
+}
+"#,
+        expected: &[],
+        forbidden: &[],
+    },
 ];
 
 fn write_corpus_file(dir: &TempDir, name: &str, ext: &str, source: &str) -> std::path::PathBuf {

@@ -131,6 +131,8 @@ pub enum AuditFindingKind {
     DynamicExecution,
     /// Assignment to a dangerous sink (for example `innerHTML = ...`).
     InsecureAssignment,
+    /// Java Path Traversal via taint flow. `is_write=true` → Critical, `false` → High.
+    PathTraversal { is_write: bool },
 }
 
 /// A single AST-derived security finding with source location.

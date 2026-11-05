@@ -135,6 +135,20 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
                 source_bytes,
             );
         }
+        "java" => {
+            // Runtime.exec / ProcessBuilder detection
+            push_findings_for_query(
+                &mut findings,
+                crate::audit_queries::JAVA_EXEC_QUERY,
+                AuditFindingKind::DynamicExecution,
+                "Runtime.exec() or ProcessBuilder call",
+                &ts_lang,
+                tree.root_node(),
+                source_bytes,
+            );
+            // Path traversal taint flow
+            findings.extend(super::java_taint::detect_path_traversal(source));
+        }
         _ => {
             let eval_query_str = lang
                 .get_query(EvalMode::Exec)

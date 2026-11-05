@@ -286,6 +286,11 @@ pub(super) async fn audit_security_measures(proj: &crate::state::ProjectContext)
                 analyzer::AuditFindingKind::InsecureAssignment => {
                     ("insecure-assignment", "insecure_assignment", Severity::High)
                 }
+                analyzer::AuditFindingKind::PathTraversal { is_write } => (
+                    "java-path-traversal-taint",
+                    "path_traversal",
+                    if is_write { Severity::Critical } else { Severity::High },
+                ),
             };
             findings.push(RichFinding::new(
                 rule_id,
