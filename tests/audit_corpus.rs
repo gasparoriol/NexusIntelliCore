@@ -132,13 +132,11 @@ fn add(a: u32, b: u32) -> u32 { a + b }
     },
     CorpusCase {
         name: "sql_injection_heuristic",
-        // Go has no SQL taint rule yet, so the text heuristic still applies.
-        extension: "go",
+        // C is the only grammar without a SQL taint rule, so the text heuristic still applies.
+        extension: "c",
         source: r#"
-package db
-
-func Query(id string) string {
-    return "SELECT * FROM users WHERE id = " + id
+char *build_query(const char *id) {
+    return concat("SELECT * FROM users WHERE id = ", id);
 }
 "#,
         expected: &[("any-sql-injection-heuristic", "production", 1)],
@@ -427,7 +425,7 @@ fn audit_nexus_ignore_suppresses_and_lists_finding() {
     let text = extract_text(&run_audit_on_file(&path.to_string_lossy()));
     let summary = extract_json_summary(&text);
 
-    assert_eq!(summary["schema_version"], "2", "summary: {summary}");
+    assert_eq!(summary["schema_version"], "3", "summary: {summary}");
     assert_eq!(
         summary["findings_total"], 1,
         "only the reasonless directive keeps its finding: {summary}"

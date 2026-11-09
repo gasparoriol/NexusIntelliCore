@@ -668,6 +668,7 @@ pub struct AuditFinding {
   pub is_write_sink: bool,      // escalates the rule's base severity one level
   pub description: String,      // never contains user source content
   pub flow: Option<(usize, usize)>, // taint rules: (source line, sink line)
+  pub function: Option<String>,     // enclosing function (risk ranking, stable ids)
 }
 ```
 
@@ -679,7 +680,9 @@ Rules are registered declaratively in `analyzer::rules`: `STRUCTURAL_RULES` (one
 - `High`: Should be fixed soon
 - `Medium`: Consider fixing
 
-**Tier**: `structural` (N1), `taint` (N2), `text` (N3), `pattern` (N4).
+**Tier**: `structural` (N1), `taint` (N2), `text` (N3), `pattern` (N4; reported apart from the production gate).
+
+Taint analysis (`analyzer::taint`) follows calls through per-function summaries (`Summaries`, depth `SUMMARY_DEPTH` = 3). `audit_file_ast_with` / `summarize_file` resolve calls across files; `audit_file_ast` resolves calls within one file.
 
 ### PatternMatch
 

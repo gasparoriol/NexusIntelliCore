@@ -650,6 +650,26 @@ fn raw_write(ptr: *mut u8, val: u8) {
 }
 
 #[test]
+fn rust_inline_test_code_is_flagged_as_test() {
+    let source = r#"
+fn prod(x: Option<u8>) -> u8 { x.unwrap() }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn t() { Some(1).unwrap(); }
+}
+
+#[tokio::test]
+// comment between attribute and item
+async fn async_case() { Some(2).expect("x"); }
+"#;
+    let ranges = super::audit::test_code_lines(source, grammar("lib.rs"));
+    assert_eq!(ranges, vec![(5, 8), (12, 12)]);
+    assert!(super::audit::test_code_lines("def f(): pass", grammar("a.py")).is_empty());
+}
+
+#[test]
 fn rust_unsafe_fn_declaration_is_detected() {
     let source = r"
 pub unsafe fn raw_write(ptr: *mut u8) {

@@ -191,7 +191,7 @@ async fn dispatch_project_tool(
             config_file::read_config_file(proj, &file).await
         }
         "search_design_patterns" => patterns::search_design_patterns(state, proj, args).await,
-        "audit_security_measures" => audit::audit_security_measures(proj).await,
+        "audit_security_measures" => audit::audit_security_measures(proj, args).await,
         "refresh_index" => server::refresh_index(proj).await,
         "get_server_stats" => server::get_server_stats(state, session, proj).await,
         "analyze_angular_component" => {

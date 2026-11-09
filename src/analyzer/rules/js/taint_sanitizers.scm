@@ -2,9 +2,11 @@
 (call_expression
   function: (identifier) @_f (#match? @_f "^(parseInt|parseFloat|Number|Boolean)$")) @sanitizer
 
-; Redirect / log: URL-encoding a component removes scheme, host and CR/LF.
+; Redirect / SSRF / log: URL-encoding a component removes scheme, host and CR/LF.
 (call_expression
   function: (identifier) @_f (#eq? @_f "encodeURIComponent")) @sanitizer.redirect
+(call_expression
+  function: (identifier) @_f (#eq? @_f "encodeURIComponent")) @sanitizer.ssrf
 (call_expression
   function: (identifier) @_f (#eq? @_f "encodeURIComponent")) @sanitizer.log
 

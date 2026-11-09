@@ -220,9 +220,13 @@ Detects design patterns using heuristics across files.
 
 ### 7. `audit_security_measures`
 
-Runs secret scanning and AST-based insecure code detection across the project.
+Runs secret scanning, AST-based insecure code detection, taint analysis and infrastructure checks across the project.
 
-**Parameters:** None
+**Parameters:**
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `format` | string | No | `markdown` (default): report with an embedded JSON summary. `sarif`: pure SARIF 2.1.0 log (GitHub code scanning, IDEs). `baseline`: `audit-baseline.json` content accepting every current finding. |
 
 **What it detects:**
 Rules are declarative (`src/analyzer/rules/`): each one carries an id `<lang|any>-<cwe-slug>-<variant>`, CWE, OWASP category, tier and base severity.
@@ -233,12 +237,12 @@ Rules are declarative (`src/analyzer/rules/`): each one carries an id `<lang|any
 - `js-code-injection-eval`, `js-code-injection-new-function`, `py-code-injection-eval`, `kotlin-code-injection-eval` (CWE-94/95)
 - `js-xss-inner-html` (CWE-79): `innerHTML` assignments
 - `py-command-injection-shell-true`, `java-command-injection-exec` (CWE-78)
-- **Taint rules** (`<lang>-<vuln>-taint`; `lang` = `java`, `py`, `js` for JS/TS, `rust`): intra-procedural AST data flow from user input (Spring/JAX-RS/Servlet, Flask/Django/FastAPI, Express/Koa/NestJS, axum/actix, CLI args) to a sink, honouring sanitizers and confinement guards:
-  - `sql-injection` (CWE-89) and `command-injection` (CWE-78): all four languages
-  - `path-traversal` (CWE-22): Java, Python, JS/TS (Critical for write/delete sinks)
-  - `ssrf` (CWE-918) and `open-redirect` (CWE-601): all four languages
-  - `ssti` (CWE-1336) and `log-injection` (CWE-117): Java, Python, JS/TS
-- `any-sql-injection-heuristic` (CWE-89): String concatenation in SQL contexts; only for languages without SQL taint rules (Go, C#, Kotlin, C)
+- **Taint rules** (`<lang>-<vuln>-taint`; `lang` = `java`, `py`, `js` for JS/TS, `rust`, `go`, `cs`, `kotlin`): AST data flow from user input (Spring/JAX-RS/Servlet, Flask/Django/FastAPI, Express/Koa/NestJS, ASP.NET Core, `net/http`/gin/echo, axum/actix, CLI args) to a sink, honouring sanitizers and confinement guards. Flows are followed through calls to project functions via summaries (up to 3 nested calls, across files); a call whose name is defined more than once is not resolved:
+  - `sql-injection` (CWE-89), `command-injection` (CWE-78), `ssrf` (CWE-918), `open-redirect` (CWE-601): Java, Python, JS/TS, Rust, Go, C#, Kotlin
+  - `path-traversal` (CWE-22): Java, Python, JS/TS, Go, C#, Kotlin (Critical for write/delete sinks)
+  - `ssti` (CWE-1336): Java, Python, JS/TS, Go, C#
+  - `log-injection` (CWE-117): Java, Python, JS/TS, Go, C#, Kotlin
+- `any-sql-injection-heuristic` (CWE-89): String concatenation in SQL contexts; only for languages without SQL taint rules (C)
 - **Configuration and API rules** (`<lang>-<weakness>`; `lang` adds `go`, `cs`, `c`, `kotlin`):
   - `weak-crypto-hash` (CWE-328) / `weak-crypto-cipher` (CWE-327): MD5/SHA-1, DES/3DES/RC2/RC4/Blowfish, ECB — Java, Kotlin, Python, JS/TS, Go, C#, Rust, C
   - `tls-validation-disabled` (CWE-295): `verify=False`, `rejectUnauthorized: false`, `InsecureSkipVerify`, trust-all managers, `danger_accept_invalid_certs(true)`… — Java, Python, JS/TS, Go, C#, Rust, C
@@ -246,10 +250,16 @@ Rules are declarative (`src/analyzer/rules/`): each one carries an id `<lang|any
   - `insecure-deserialization` (CWE-502): `ObjectInputStream`, XStream, `pickle`, unsafe `yaml.load`, `BinaryFormatter`, `TypeNameHandling.All`, `unserialize` — Java, Kotlin, Python, JS/TS, C#
   - `csrf-protection-disabled` (CWE-352), `cors-wildcard-credentials` (CWE-942), `insecure-cookie-flag` (CWE-614), `debug-mode-enabled` (CWE-489) and XXE (CWE-611: Java factories without `disallow-doctype-decl`, lxml `resolve_entities=True`, C# `DtdProcessing.Parse`)
   - C: `c-dangerous-function-gets` (CWE-242), `c-buffer-overflow-unbounded-copy` / `c-buffer-overflow-scanf` (CWE-120), `c-format-string-variable` (CWE-134)
+- **Risk patterns (N4)**: precursors of vulnerabilities, low confidence, reported under "Risk Patterns (informative)" and **excluded from the production gate**: dynamic SQL construction (promoted to the taint finding when a source reaches it), swallowed errors, fail-open authorization (`catch` returning `true` in `isAuthorized`-like functions), non-constant-time secret comparison, secrets written to logs, blacklist validation (`replace("../", "")`), reflection from non-literal names, TOCTOU check-then-use, security TODO/FIXME comments, bind to `0.0.0.0`.
+- **Infrastructure rules (N3)** on `Dockerfile`, YAML (compose, Kubernetes, CI), shell scripts and Spring `.properties` (configuration is matched on its redacted form): `docker-root-user`, `docker-remote-add`, `docker-secret-in-env`, `docker-unpinned-base-image`, `docker-ssh-port-exposed`, `any-download-pipe-to-shell` (CWE-494), `yaml-privileged-container`, `spring-actuator-endpoints-exposed`, `spring-ssl-disabled`.
 
 **Suppressions:** `// nexus-ignore: <rule-id> <reason>` on the finding's line or the line above. The reason is mandatory; suppressed findings are listed in the report, never hidden.
 
-**JSON summary (`schema_version` 2):** each `production_risk` entry includes `rule_id`, `legacy_rule_id` (id used by schema 1, e.g. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `flow` (`source_line`/`sink_line` for taint rules), `fingerprint`; plus `suppressed_total`, `suppressed` and `taint_coverage` (`intra-procedural`: flows across functions or files are not tracked).
+**Baseline:** save `format=baseline` output as `audit-baseline.json` at the project root. Findings listed there are reported as accepted debt (`baselined_total`, SARIF `suppressions`) and only **new** findings count as production risk. Entries use `stable_id` (`rule:file:function:ordinal`), which does not change when lines move. An invalid baseline is reported and ignored; a baseline protected by `.mcpignore` is not read.
+
+**JSON summary (`schema_version` 3):** each `production_risk` / `risk_patterns` entry includes `rule_id`, `legacy_rule_id` (id used by schema 1, e.g. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity` (`critical`/`high`/`medium`/`low`), `confidence`, `file`, `line`, `function`, `flow` (`source_line`/`sink_line` for taint rules), `fingerprint` (line-based, deduplication) and `stable_id` (baseline identity); plus `suppressed`, `suppressed_total`, `baselined_total`, `baseline` (`absent`/`loaded`/`invalid`), `top_risk_functions` (deterministic ranking: Σ severity × confidence weights, plus a bonus when user input reaches the function; use `inspect_symbol` on them) and `taint_coverage` (`inter-procedural-summaries`).
+
+**SARIF (`format=sarif`):** one run with rules (CWE/OWASP tags, `security-severity`), results with `partialFingerprints` (`nexusStableId/v1`), `codeFlows` for taint flows, and `suppressions` (`inSource` for `nexus-ignore`, `external` for the baseline). Messages are fixed rule texts, never source content.
 
 **Important:** Secret _values_ are NEVER included. Only type and location are reported.
 

@@ -23,6 +23,7 @@ pub enum Severity {
     Critical,
     High,
     Medium,
+    Low,
 }
 
 impl Severity {
@@ -31,6 +32,7 @@ impl Severity {
     pub fn escalate_if(self, cond: bool) -> Self {
         match (cond, self) {
             (false, s) => s,
+            (true, Self::Low) => Self::Medium,
             (true, Self::Medium) => Self::High,
             (true, Self::High | Self::Critical) => Self::Critical,
         }
@@ -42,6 +44,7 @@ impl Severity {
 pub enum Confidence {
     High,
     Medium,
+    Low,
 }
 
 /// Analysis tier that produces the finding (see SAST v2 §1).
@@ -678,6 +681,293 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         &["c"],
         include_str!("c/format_string.scm"),
     ),
+    // ── Fase 3: N4 risk patterns (informative, outside the production gate) ──
+    pattern(
+        "java-sql-dynamic-construction",
+        SQL_DYNAMIC,
+        &["java"],
+        include_str!("n4/java_sql_dynamic.scm"),
+    ),
+    pattern(
+        "py-sql-dynamic-construction",
+        SQL_DYNAMIC,
+        &["python"],
+        include_str!("n4/py_sql_dynamic.scm"),
+    ),
+    pattern(
+        "js-sql-dynamic-construction",
+        SQL_DYNAMIC,
+        JS_LANGS,
+        include_str!("n4/js_sql_dynamic.scm"),
+    ),
+    pattern(
+        "go-sql-dynamic-construction",
+        SQL_DYNAMIC,
+        &["go"],
+        include_str!("n4/go_sql_dynamic.scm"),
+    ),
+    pattern(
+        "cs-sql-dynamic-construction",
+        SQL_DYNAMIC,
+        &["csharp"],
+        include_str!("n4/cs_sql_dynamic.scm"),
+    ),
+    pattern(
+        "rust-sql-dynamic-construction",
+        SQL_DYNAMIC,
+        &["rust"],
+        include_str!("n4/rust_sql_dynamic.scm"),
+    ),
+    pattern(
+        "java-error-swallowed-catch",
+        SWALLOWED_ERROR,
+        &["java"],
+        include_str!("n4/java_empty_catch.scm"),
+    ),
+    pattern(
+        "js-error-swallowed-catch",
+        SWALLOWED_ERROR,
+        JS_LANGS,
+        include_str!("n4/js_empty_catch.scm"),
+    ),
+    pattern(
+        "cs-error-swallowed-catch",
+        SWALLOWED_ERROR,
+        &["csharp"],
+        include_str!("n4/cs_empty_catch.scm"),
+    ),
+    pattern(
+        "py-error-swallowed-except",
+        SWALLOWED_ERROR,
+        &["python"],
+        include_str!("n4/py_empty_except.scm"),
+    ),
+    pattern(
+        "go-error-ignored-check",
+        SWALLOWED_ERROR,
+        &["go"],
+        include_str!("n4/go_ignored_error.scm"),
+    ),
+    pattern(
+        "java-fail-open-catch",
+        FAIL_OPEN,
+        &["java"],
+        include_str!("n4/java_fail_open.scm"),
+    )
+    .with_context(AUTH_NAMES),
+    pattern(
+        "js-fail-open-catch",
+        FAIL_OPEN,
+        JS_LANGS,
+        include_str!("n4/js_fail_open.scm"),
+    )
+    .with_context(AUTH_NAMES),
+    pattern(
+        "py-fail-open-except",
+        FAIL_OPEN,
+        &["python"],
+        include_str!("n4/py_fail_open.scm"),
+    )
+    .with_context(AUTH_NAMES),
+    pattern(
+        "cs-fail-open-catch",
+        FAIL_OPEN,
+        &["csharp"],
+        include_str!("n4/cs_fail_open.scm"),
+    )
+    .with_context(AUTH_NAMES),
+    pattern(
+        "java-timing-unsafe-compare",
+        TIMING_COMPARE,
+        &["java"],
+        include_str!("n4/java_timing_compare.scm"),
+    ),
+    pattern(
+        "py-timing-unsafe-compare",
+        TIMING_COMPARE,
+        &["python"],
+        include_str!("n4/py_timing_compare.scm"),
+    ),
+    pattern(
+        "js-timing-unsafe-compare",
+        TIMING_COMPARE,
+        JS_LANGS,
+        include_str!("n4/js_timing_compare.scm"),
+    ),
+    pattern(
+        "go-timing-unsafe-compare",
+        TIMING_COMPARE,
+        &["go"],
+        include_str!("n4/go_timing_compare.scm"),
+    ),
+    pattern(
+        "cs-timing-unsafe-compare",
+        TIMING_COMPARE,
+        &["csharp"],
+        include_str!("n4/cs_timing_compare.scm"),
+    ),
+    pattern(
+        "rust-timing-unsafe-compare",
+        TIMING_COMPARE,
+        &["rust"],
+        include_str!("n4/rust_timing_compare.scm"),
+    ),
+    pattern(
+        "c-timing-unsafe-compare",
+        TIMING_COMPARE,
+        &["c"],
+        include_str!("n4/c_timing_compare.scm"),
+    ),
+    pattern(
+        "java-secret-in-log",
+        SECRET_LOGGED,
+        &["java"],
+        include_str!("n4/java_secret_logged.scm"),
+    ),
+    pattern(
+        "py-secret-in-log",
+        SECRET_LOGGED,
+        &["python"],
+        include_str!("n4/py_secret_logged.scm"),
+    ),
+    pattern(
+        "js-secret-in-log",
+        SECRET_LOGGED,
+        JS_LANGS,
+        include_str!("n4/js_secret_logged.scm"),
+    ),
+    pattern(
+        "go-secret-in-log",
+        SECRET_LOGGED,
+        &["go"],
+        include_str!("n4/go_secret_logged.scm"),
+    ),
+    pattern(
+        "cs-secret-in-log",
+        SECRET_LOGGED,
+        &["csharp"],
+        include_str!("n4/cs_secret_logged.scm"),
+    ),
+    pattern(
+        "java-weak-blacklist-validation",
+        BLACKLIST_VALIDATION,
+        &["java"],
+        include_str!("n4/java_weak_validation.scm"),
+    ),
+    pattern(
+        "py-weak-blacklist-validation",
+        BLACKLIST_VALIDATION,
+        &["python"],
+        include_str!("n4/py_weak_validation.scm"),
+    ),
+    pattern(
+        "js-weak-blacklist-validation",
+        BLACKLIST_VALIDATION,
+        JS_LANGS,
+        include_str!("n4/js_weak_validation.scm"),
+    ),
+    pattern(
+        "go-weak-blacklist-validation",
+        BLACKLIST_VALIDATION,
+        &["go"],
+        include_str!("n4/go_weak_validation.scm"),
+    ),
+    pattern(
+        "cs-weak-blacklist-validation",
+        BLACKLIST_VALIDATION,
+        &["csharp"],
+        include_str!("n4/cs_weak_validation.scm"),
+    ),
+    pattern(
+        "java-unsafe-reflection-dynamic",
+        REFLECTION,
+        &["java"],
+        include_str!("n4/java_reflection.scm"),
+    ),
+    pattern(
+        "py-unsafe-reflection-dynamic",
+        REFLECTION,
+        &["python"],
+        include_str!("n4/py_reflection.scm"),
+    ),
+    pattern(
+        "js-unsafe-reflection-dynamic",
+        REFLECTION,
+        JS_LANGS,
+        include_str!("n4/js_reflection.scm"),
+    ),
+    pattern(
+        "go-unsafe-reflection-dynamic",
+        REFLECTION,
+        &["go"],
+        include_str!("n4/go_reflection.scm"),
+    ),
+    pattern(
+        "cs-unsafe-reflection-dynamic",
+        REFLECTION,
+        &["csharp"],
+        include_str!("n4/cs_reflection.scm"),
+    ),
+    pattern(
+        "py-toctou-check-then-use",
+        TOCTOU,
+        &["python"],
+        include_str!("n4/py_toctou.scm"),
+    ),
+    pattern(
+        "java-toctou-check-then-use",
+        TOCTOU,
+        &["java"],
+        include_str!("n4/java_toctou.scm"),
+    ),
+    pattern(
+        "c-toctou-check-then-use",
+        TOCTOU,
+        &["c"],
+        include_str!("n4/c_toctou.scm"),
+    ),
+    pattern(
+        "go-toctou-check-then-use",
+        TOCTOU,
+        &["go"],
+        include_str!("n4/go_toctou.scm"),
+    ),
+    pattern(
+        "any-suspicious-security-comment",
+        SUSPICIOUS_COMMENT,
+        COMMENT_LANGS,
+        include_str!("n4/comment_todo.scm"),
+    ),
+    pattern(
+        "any-suspicious-security-line-comment",
+        SUSPICIOUS_COMMENT,
+        &["java", "rust"],
+        include_str!("n4/line_comment_todo.scm"),
+    ),
+    pattern(
+        "py-bind-all-interfaces",
+        BIND_ALL,
+        &["python"],
+        include_str!("n4/py_bind_all.scm"),
+    ),
+    pattern(
+        "js-bind-all-interfaces",
+        BIND_ALL,
+        JS_LANGS,
+        include_str!("n4/js_bind_all.scm"),
+    ),
+    pattern(
+        "go-bind-all-interfaces",
+        BIND_ALL,
+        &["go"],
+        include_str!("n4/go_bind_all.scm"),
+    ),
+    pattern(
+        "rust-bind-all-interfaces",
+        BIND_ALL,
+        &["rust"],
+        include_str!("n4/rust_bind_all.scm"),
+    ),
 ];
 
 // ── Structural categories (Fase 1) ──────────────────────────────────────────
@@ -886,6 +1176,158 @@ const fn structural(
     }
 }
 
+// ── Pattern categories (N4, Fase 3) ─────────────────────────────────────────
+
+const fn n4(
+    cwe: &'static str,
+    owasp: Option<&'static str>,
+    category: &'static str,
+    severity: Severity,
+    confidence: Confidence,
+    description: &'static str,
+    remediation: &'static str,
+) -> Category {
+    Category {
+        key: "",
+        cwe,
+        owasp,
+        category,
+        severity,
+        confidence,
+        description,
+        remediation,
+    }
+}
+
+// `sql_injection` lets a taint finding on the same line replace (promote) it.
+const SQL_DYNAMIC: Category = n4(
+    "CWE-89",
+    Some("A03:2021"),
+    "sql_injection",
+    Severity::Medium,
+    Confidence::Low,
+    "SQL statement built dynamically at the call site",
+    "Use parameterized queries even when the input looks trusted today.",
+);
+const SWALLOWED_ERROR: Category = n4(
+    "CWE-390",
+    Some("A09:2021"),
+    "error_handling",
+    Severity::Low,
+    Confidence::Low,
+    "Error silently swallowed",
+    "Handle, log or propagate the error; never ignore failures of security checks.",
+);
+const FAIL_OPEN: Category = n4(
+    "CWE-636",
+    Some("A01:2021"),
+    "fail_open",
+    Severity::Medium,
+    Confidence::Medium,
+    "Authorization check grants access when an error occurs (fail-open)",
+    "Deny by default: return false / rethrow when the check cannot complete.",
+);
+const TIMING_COMPARE: Category = n4(
+    "CWE-208",
+    Some("A02:2021"),
+    "timing_comparison",
+    Severity::Low,
+    Confidence::Low,
+    "Secret compared with a non-constant-time equality",
+    "Compare secrets with a constant-time function (MessageDigest.isEqual, hmac.compare_digest…).",
+);
+const SECRET_LOGGED: Category = n4(
+    "CWE-532",
+    Some("A09:2021"),
+    "sensitive_logging",
+    Severity::Medium,
+    Confidence::Low,
+    "Secret-named value written to a log or stdout",
+    "Never log credentials or tokens; log an identifier or a redacted form.",
+);
+const BLACKLIST_VALIDATION: Category = n4(
+    "CWE-184",
+    Some("A03:2021"),
+    "weak_validation",
+    Severity::Medium,
+    Confidence::Low,
+    "Input filtered with a blacklist (\"../\", \"<script\") instead of an allowlist",
+    "Canonicalize and allowlist (paths under a base dir, encoded output) instead of stripping patterns.",
+);
+const REFLECTION: Category = n4(
+    "CWE-470",
+    Some("A03:2021"),
+    "unsafe_reflection",
+    Severity::Medium,
+    Confidence::Low,
+    "Class, module or member selected from a non-literal name",
+    "Map allowed names to implementations explicitly instead of resolving them dynamically.",
+);
+const TOCTOU: Category = n4(
+    "CWE-367",
+    None,
+    "race_condition",
+    Severity::Low,
+    Confidence::Low,
+    "File checked and then used separately (TOCTOU race)",
+    "Open the file directly and handle the error, or use atomic/O_NOFOLLOW operations.",
+);
+const SUSPICIOUS_COMMENT: Category = n4(
+    "CWE-546",
+    None,
+    "suspicious_comment",
+    Severity::Low,
+    Confidence::Low,
+    "Security-related TODO/FIXME left in code",
+    "Resolve or track the pending security work before release.",
+);
+const BIND_ALL: Category = n4(
+    "CWE-1327",
+    Some("A05:2021"),
+    "exposure",
+    Severity::Low,
+    Confidence::Low,
+    "Service bound to all network interfaces",
+    "Bind to localhost or a specific interface unless exposure is intended.",
+);
+
+/// Names that mark an authorization decision (lowercase substrings).
+const AUTH_NAMES: &[&str] = &[
+    "auth",
+    "permission",
+    "access",
+    "allow",
+    "admin",
+    "verify",
+    "valid",
+    "permit",
+    "role",
+    "acl",
+    "grant",
+    "login",
+];
+
+const fn pattern(
+    id: &'static str,
+    c: Category,
+    languages: &'static [&'static str],
+    query: &'static str,
+) -> Rule {
+    let mut rule = structural(id, c, languages, query);
+    rule.meta.tier = Tier::Pattern;
+    rule
+}
+
+const COMMENT_LANGS: &[&str] = &[
+    "python",
+    "javascript",
+    "typescript",
+    "tsx",
+    "go",
+    "c",
+    "csharp",
+];
+
 // ── Taint rules (N2) ────────────────────────────────────────────────────────
 
 /// A taint rule: metadata plus the `key` it consumes from the language's taint
@@ -1046,6 +1488,35 @@ static RUST_TAINT: &[TaintRule] = &[
     taint("rust-open-redirect-taint", REDIRECT),
 ];
 
+static GO_TAINT: &[TaintRule] = &[
+    taint("go-sql-injection-taint", SQL),
+    taint("go-command-injection-taint", CMD),
+    taint("go-path-traversal-taint", PATH),
+    taint("go-ssrf-taint", SSRF),
+    taint("go-open-redirect-taint", REDIRECT),
+    taint("go-ssti-taint", SSTI),
+    taint("go-log-injection-taint", LOG),
+];
+
+static CS_TAINT: &[TaintRule] = &[
+    taint("cs-sql-injection-taint", SQL),
+    taint("cs-command-injection-taint", CMD),
+    taint("cs-path-traversal-taint", PATH),
+    taint("cs-ssrf-taint", SSRF),
+    taint("cs-open-redirect-taint", REDIRECT),
+    taint("cs-ssti-taint", SSTI),
+    taint("cs-log-injection-taint", LOG),
+];
+
+static KOTLIN_TAINT: &[TaintRule] = &[
+    taint("kotlin-sql-injection-taint", SQL),
+    taint("kotlin-command-injection-taint", CMD),
+    taint("kotlin-path-traversal-taint", PATH),
+    taint("kotlin-ssrf-taint", SSRF),
+    taint("kotlin-open-redirect-taint", REDIRECT),
+    taint("kotlin-log-injection-taint", LOG),
+];
+
 const JS_TAINT_QUERIES: [&str; 4] = [
     include_str!("js/taint_syntax.scm"),
     include_str!("js/taint_sources.scm"),
@@ -1100,6 +1571,36 @@ pub static TAINT_PACKS: &[TaintPack] = &[
             include_str!("rust/taint_sanitizers.scm"),
         ],
         rules: RUST_TAINT,
+    },
+    TaintPack {
+        languages: &["go"],
+        queries: &[
+            include_str!("go/taint_syntax.scm"),
+            include_str!("go/taint_sources.scm"),
+            include_str!("go/taint_sinks.scm"),
+            include_str!("go/taint_sanitizers.scm"),
+        ],
+        rules: GO_TAINT,
+    },
+    TaintPack {
+        languages: &["csharp"],
+        queries: &[
+            include_str!("csharp/taint_syntax.scm"),
+            include_str!("csharp/taint_sources.scm"),
+            include_str!("csharp/taint_sinks.scm"),
+            include_str!("csharp/taint_sanitizers.scm"),
+        ],
+        rules: CS_TAINT,
+    },
+    TaintPack {
+        languages: &["kotlin"],
+        queries: &[
+            include_str!("kotlin/taint_syntax.scm"),
+            include_str!("kotlin/taint_sources.scm"),
+            include_str!("kotlin/taint_sinks.scm"),
+            include_str!("kotlin/taint_sanitizers.scm"),
+        ],
+        rules: KOTLIN_TAINT,
     },
 ];
 
@@ -1243,14 +1744,23 @@ mod tests {
 
     #[test]
     fn rule_ids_are_unique_and_well_formed() {
-        let taint = [JAVA_TAINT, PY_TAINT, JS_TAINT, RUST_TAINT]
-            .into_iter()
-            .flatten()
-            .map(|r| &r.meta);
+        let taint = [
+            JAVA_TAINT,
+            PY_TAINT,
+            JS_TAINT,
+            RUST_TAINT,
+            GO_TAINT,
+            CS_TAINT,
+            KOTLIN_TAINT,
+        ]
+        .into_iter()
+        .flatten()
+        .map(|r| &r.meta);
         let all = STRUCTURAL_RULES
             .iter()
             .map(|r| &r.meta)
             .chain(taint)
+            .chain(crate::analyzer::infra::INFRA_RULES.iter().map(|r| &r.meta))
             .chain([&HARDCODED_SECRET, &SQL_INJECTION_HEURISTIC]);
         let mut seen = HashSet::new();
         for meta in all {
@@ -1282,6 +1792,7 @@ mod tests {
     fn severity_escalation() {
         assert_eq!(Severity::High.escalate_if(true), Severity::Critical);
         assert_eq!(Severity::Medium.escalate_if(true), Severity::High);
+        assert_eq!(Severity::Low.escalate_if(true), Severity::Medium);
         assert_eq!(Severity::Critical.escalate_if(true), Severity::Critical);
         assert_eq!(Severity::High.escalate_if(false), Severity::High);
     }

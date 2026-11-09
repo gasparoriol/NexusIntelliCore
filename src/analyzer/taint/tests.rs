@@ -1040,6 +1040,89 @@ export class UsersController {
   }
 }"#,
     ),
+    // ── Go ──────────────────────────────────────────────────────────────────
+    case("go-sql-injection-taint", "a.go", Positive, "package a\n\nfunc find(w http.ResponseWriter, r *http.Request) {\n\tid := r.URL.Query().Get(\"id\")\n\tdb.Query(\"SELECT * FROM users WHERE id = '\" + id + \"'\")\n}\n"),
+    case("go-sql-injection-taint", "a.go", Safe, "package a\n\nfunc find(w http.ResponseWriter, r *http.Request) {\n\tid := r.URL.Query().Get(\"id\")\n\tdb.Query(\"SELECT * FROM users WHERE id = $1\", id)\n}\n"),
+    case("go-sql-injection-taint", "a.go", Static, "package a\n\nfunc count() { db.Query(\"SELECT COUNT(*) FROM users\") }\n"),
+    case("go-sql-injection-taint", "a.go", Evasion, "package a\n\nfunc del(c *gin.Context) {\n\tvar req Req\n\tc.ShouldBindJSON(&req)\n\tq := fmt.Sprintf(\"DELETE FROM t WHERE name = '%s'\", req.Name)\n\tdb.ExecContext(c, q)\n}\n"),
+    case("go-command-injection-taint", "a.go", Positive, "package a\n\nfunc run(c *gin.Context) { exec.Command(c.Query(\"bin\")).Run() }\n"),
+    case("go-command-injection-taint", "a.go", Safe, "package a\n\nfunc run(c *gin.Context) {\n\tn, _ := strconv.Atoi(c.Query(\"n\"))\n\texec.Command(\"sh\", \"-c\", fmt.Sprintf(\"seq %d\", n)).Run()\n}\n"),
+    case("go-command-injection-taint", "a.go", Static, "package a\n\nfunc run() { exec.Command(\"ls\", \"-la\").Run() }\n"),
+    case("go-command-injection-taint", "a.go", Evasion, "package a\n\nfunc run(r *http.Request) {\n\thost := r.FormValue(\"host\")\n\tcmd := \"ping -c 1 \"\n\tcmd += host\n\texec.Command(\"/bin/sh\", \"-c\", cmd).Run()\n}\n"),
+    case("go-path-traversal-taint", "a.go", Positive, "package a\n\nfunc dl(w http.ResponseWriter, r *http.Request) { os.ReadFile(\"/srv/\" + r.URL.Query().Get(\"f\")) }\n"),
+    case("go-path-traversal-taint", "a.go", Safe, "package a\n\nfunc dl(w http.ResponseWriter, r *http.Request) {\n\tname := filepath.Base(r.URL.Query().Get(\"f\"))\n\tos.ReadFile(filepath.Join(\"/srv\", name))\n}\n"),
+    case("go-path-traversal-taint", "a.go", Static, "package a\n\nfunc cfg() { os.ReadFile(\"config.yaml\") }\n"),
+    case("go-path-traversal-taint", "a.go", Evasion, "package a\n\nfunc up(r *http.Request) {\n\tp := filepath.Join(\"/srv\", mux.Vars(r)[\"name\"])\n\tif strings.HasPrefix(p, \"/srv\") {\n\t\tos.WriteFile(p, nil, 0o600)\n\t}\n}\n"),
+    case("go-ssrf-taint", "a.go", Positive, "package a\n\nfunc proxy(w http.ResponseWriter, r *http.Request) { http.Get(r.URL.Query().Get(\"url\")) }\n"),
+    case("go-ssrf-taint", "a.go", Safe, "package a\n\nfunc search(w http.ResponseWriter, r *http.Request) {\n\tq := url.QueryEscape(r.FormValue(\"q\"))\n\t_ = q\n\thttp.Get(\"https://api.example.org/items\")\n}\n"),
+    case("go-ssrf-taint", "a.go", Static, "package a\n\nfunc health() { http.Get(\"https://example.org/health\") }\n"),
+    case("go-ssrf-taint", "a.go", Evasion, "package a\n\nfunc call(c echo.Context) {\n\ttarget := \"http://\" + c.QueryParam(\"host\") + \"/admin\"\n\treq, _ := http.NewRequest(\"GET\", target, nil)\n\t_ = req\n}\n"),
+    case("go-open-redirect-taint", "a.go", Positive, "package a\n\nfunc login(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, r.FormValue(\"next\"), 302) }\n"),
+    case("go-open-redirect-taint", "a.go", Safe, "package a\n\nfunc page(w http.ResponseWriter, r *http.Request) {\n\tn, _ := strconv.Atoi(r.FormValue(\"p\"))\n\thttp.Redirect(w, r, fmt.Sprintf(\"/list?page=%d\", n), 302)\n}\n"),
+    case("go-open-redirect-taint", "a.go", Static, "package a\n\nfunc logout(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, \"/login\", 302) }\n"),
+    case("go-open-redirect-taint", "a.go", Evasion, "package a\n\nfunc done(c *gin.Context) {\n\tnext := c.DefaultQuery(\"next\", \"/\")\n\tc.Redirect(302, next)\n}\n"),
+    case("go-ssti-taint", "a.go", Positive, "package a\n\nfunc page(r *http.Request) { template.New(\"p\").Parse(r.FormValue(\"tpl\")) }\n"),
+    case("go-ssti-taint", "a.go", Safe, "package a\n\nfunc page(w http.ResponseWriter, r *http.Request) {\n\tt, _ := template.ParseFiles(\"page.html\")\n\tt.Execute(w, r.FormValue(\"name\"))\n}\n"),
+    case("go-ssti-taint", "a.go", Static, "package a\n\nfunc page() { template.New(\"p\").Parse(\"<h1>{{.Name}}</h1>\") }\n"),
+    case("go-ssti-taint", "a.go", Evasion, "package a\n\nfunc page(c *gin.Context) {\n\tbody := \"<h1>\" + c.PostForm(\"title\") + \"</h1>\"\n\ttemplate.Must(template.New(\"x\").Parse(body))\n}\n"),
+    case("go-log-injection-taint", "a.go", Positive, "package a\n\nfunc login(r *http.Request) { log.Printf(\"login %s\", r.FormValue(\"user\")) }\n"),
+    case("go-log-injection-taint", "a.go", Safe, "package a\n\nfunc login(r *http.Request) { log.Printf(\"login %s\", strconv.Quote(r.FormValue(\"user\"))) }\n"),
+    case("go-log-injection-taint", "a.go", Static, "package a\n\nfunc start() { log.Println(\"server started\") }\n"),
+    case("go-log-injection-taint", "a.go", Evasion, "package a\n\nfunc login(c *gin.Context) {\n\tuser := c.GetHeader(\"X-User\")\n\tlogger.Infof(\"attempt by %s\", user)\n}\n"),
+    // ── C# ──────────────────────────────────────────────────────────────────
+    case("cs-sql-injection-taint", "A.cs", Positive, "class C { void Find([FromQuery] string id) { var cmd = new SqlCommand(\"SELECT * FROM users WHERE id = '\" + id + \"'\", conn); } }"),
+    case("cs-sql-injection-taint", "A.cs", Safe, "class C { void Find([FromQuery] string id) { var cmd = new SqlCommand(\"SELECT * FROM users WHERE id = @id\", conn); cmd.Parameters.AddWithValue(\"@id\", id); } }"),
+    case("cs-sql-injection-taint", "A.cs", Static, "class C { void Count() { var cmd = new SqlCommand(\"SELECT COUNT(*) FROM users\", conn); } }"),
+    case("cs-sql-injection-taint", "A.cs", Evasion, "class C { void Del() { var name = Request.Query[\"name\"]; var sb = new StringBuilder(\"DELETE FROM t WHERE name = \"); sb.Append(name); db.Database.ExecuteSqlRaw(sb.ToString()); } }"),
+    case("cs-command-injection-taint", "A.cs", Positive, "class C { void Run([FromQuery] string host) { Process.Start(\"cmd.exe\", \"/c ping \" + host); } }"),
+    case("cs-command-injection-taint", "A.cs", Safe, "class C { void Run([FromQuery] string n) { var count = int.Parse(n); Process.Start(\"ping\", \"-n \" + count); } }"),
+    case("cs-command-injection-taint", "A.cs", Static, "class C { void Run() { Process.Start(\"notepad.exe\"); } }"),
+    case("cs-command-injection-taint", "A.cs", Evasion, "class C { void Run([FromBody] Job job) { var psi = new ProcessStartInfo(\"bash\"); psi.Arguments = \"-c \" + job.Script; } }"),
+    case("cs-path-traversal-taint", "A.cs", Positive, "class C { string Read([FromQuery] string file) { return File.ReadAllText(\"/srv/\" + file); } }"),
+    case("cs-path-traversal-taint", "A.cs", Safe, "class C { string Read([FromQuery] string file) { var name = Path.GetFileName(file); return File.ReadAllText(Path.Combine(Root, name)); } }"),
+    case("cs-path-traversal-taint", "A.cs", Static, "class C { string Read() { return File.ReadAllText(\"appsettings.json\"); } }"),
+    case("cs-path-traversal-taint", "A.cs", Evasion, "class C { void Save([FromRoute] string name) { var full = Path.Combine(Root, name); if (full.StartsWith(Root)) { File.WriteAllText(full, \"\"); } } }"),
+    case("cs-ssrf-taint", "A.cs", Positive, "class C { async Task Proxy([FromQuery] string url) { await _client.GetAsync(url); } }"),
+    case("cs-ssrf-taint", "A.cs", Safe, "class C { async Task Search([FromQuery] string q) { await _client.GetAsync(\"https://api.example.org/items?q=\" + Uri.EscapeDataString(q)); } }"),
+    case("cs-ssrf-taint", "A.cs", Static, "class C { async Task Health() { await _client.GetAsync(\"https://example.org/health\"); } }"),
+    case("cs-ssrf-taint", "A.cs", Evasion, "class C { void Call([FromHeader] string host) { var target = $\"http://{host}/admin\"; var req = new HttpRequestMessage(HttpMethod.Get, target); } }"),
+    case("cs-open-redirect-taint", "A.cs", Positive, "class C : Controller { IActionResult Login([FromQuery] string returnUrl) { return Redirect(returnUrl); } }"),
+    case("cs-open-redirect-taint", "A.cs", Safe, "class C : Controller { IActionResult Login([FromQuery] string returnUrl) { if (Url.IsLocalUrl(returnUrl)) { return Redirect(returnUrl); } return Redirect(\"/\"); } }"),
+    case("cs-open-redirect-taint", "A.cs", Static, "class C : Controller { IActionResult Logout() { return Redirect(\"/login\"); } }"),
+    case("cs-open-redirect-taint", "A.cs", Evasion, "class C { void Done() { var next = Request.Query[\"next\"].ToString(); Response.Redirect(next); } }"),
+    case("cs-ssti-taint", "A.cs", Positive, "class C { string Render([FromBody] string tpl) { return Engine.Razor.RunCompile(tpl, \"key\"); } }"),
+    case("cs-ssti-taint", "A.cs", Safe, "class C : Controller { IActionResult Page([FromQuery] string name) { return View(\"Page\", name); } }"),
+    case("cs-ssti-taint", "A.cs", Static, "class C { string Render() { return Template.Parse(\"Hello {{ name }}\").Render(); } }"),
+    case("cs-ssti-taint", "A.cs", Evasion, "class C { string Render([FromForm] string title) { var body = \"<h1>\" + title + \"</h1>\"; return Template.Parse(body).Render(); } }"),
+    case("cs-log-injection-taint", "A.cs", Positive, "class C { void Login([FromForm] string user) { _logger.LogInformation(\"login \" + user); } }"),
+    case("cs-log-injection-taint", "A.cs", Safe, "class C { void Login([FromForm] string user) { _logger.LogInformation(\"login \" + user.Replace(\"\\n\", \"\")); } }"),
+    case("cs-log-injection-taint", "A.cs", Static, "class C { void Start() { _logger.LogInformation(\"started\"); } }"),
+    case("cs-log-injection-taint", "A.cs", Evasion, "class C { void Login() { var agent = Request.Headers[\"User-Agent\"]; Log.Warning($\"agent {agent}\"); } }"),
+    // ── Kotlin ──────────────────────────────────────────────────────────────
+    case("kotlin-sql-injection-taint", "a.kt", Positive, "class C {\n    fun find(@RequestParam id: String) {\n        jdbc.queryForList(\"SELECT * FROM users WHERE id = '$id'\")\n    }\n}"),
+    case("kotlin-sql-injection-taint", "a.kt", Safe, "class C {\n    fun find(@RequestParam id: String) {\n        val n = id.toLong()\n        jdbc.queryForList(\"SELECT * FROM users WHERE id = \" + n)\n    }\n}"),
+    case("kotlin-sql-injection-taint", "a.kt", Static, "class C {\n    fun count() {\n        jdbc.queryForList(\"SELECT COUNT(*) FROM users\")\n    }\n}"),
+    case("kotlin-sql-injection-taint", "a.kt", Evasion, "class C {\n    fun del(req: HttpServletRequest) {\n        val name = req.getParameter(\"name\")\n        val sb = StringBuilder(\"DELETE FROM t WHERE name = \")\n        sb.append(name)\n        stmt.executeUpdate(sb.toString())\n    }\n}"),
+    case("kotlin-command-injection-taint", "a.kt", Positive, "class C {\n    fun ping(@RequestParam host: String) {\n        Runtime.getRuntime().exec(\"ping -c 1 $host\")\n    }\n}"),
+    case("kotlin-command-injection-taint", "a.kt", Safe, "class C {\n    fun probe(@RequestParam p: String) {\n        val port = p.toInt()\n        Runtime.getRuntime().exec(\"nc -z localhost $port\")\n    }\n}"),
+    case("kotlin-command-injection-taint", "a.kt", Static, "class C {\n    fun list() {\n        Runtime.getRuntime().exec(\"ls -la\")\n    }\n}"),
+    case("kotlin-command-injection-taint", "a.kt", Evasion, "class C {\n    fun run(@RequestBody script: String) {\n        val cmd = \"bash -c \" + script\n        ProcessBuilder(\"sh\", \"-c\", cmd).start()\n    }\n}"),
+    case("kotlin-path-traversal-taint", "a.kt", Positive, "class C {\n    fun dl(@RequestParam(\"f\") name: String) {\n        FileInputStream(\"/srv/\" + name)\n    }\n}"),
+    case("kotlin-path-traversal-taint", "a.kt", Safe, "class C {\n    fun dl(@RequestParam n: String) {\n        val id = n.toLong()\n        FileInputStream(\"/srv/$id.pdf\")\n    }\n}"),
+    case("kotlin-path-traversal-taint", "a.kt", Static, "class C {\n    fun cfg() {\n        FileInputStream(\"config.properties\")\n    }\n}"),
+    case("kotlin-path-traversal-taint", "a.kt", Evasion, "class C {\n    fun up(@PathVariable name: String) {\n        val dest = File(\"/uploads\", name)\n        FileOutputStream(dest)\n    }\n}"),
+    case("kotlin-ssrf-taint", "a.kt", Positive, "class C {\n    fun fetch(@RequestParam target: String) {\n        URL(target).readText()\n    }\n}"),
+    case("kotlin-ssrf-taint", "a.kt", Safe, "class C {\n    fun item(@RequestParam id: String) {\n        val n = id.toInt()\n        URL(\"https://api.example.org/items/$n\").readText()\n    }\n}"),
+    case("kotlin-ssrf-taint", "a.kt", Static, "class C {\n    fun health() {\n        URL(\"https://example.org/health\").readText()\n    }\n}"),
+    case("kotlin-ssrf-taint", "a.kt", Evasion, "class C {\n    fun call(req: HttpServletRequest) {\n        val host = req.getHeader(\"X-Host\")\n        val u = \"http://${host}/admin\"\n        URI(u)\n    }\n}"),
+    case("kotlin-open-redirect-taint", "a.kt", Positive, "class C {\n    fun login(@RequestParam next: String, response: HttpServletResponse) {\n        response.sendRedirect(next)\n    }\n}"),
+    case("kotlin-open-redirect-taint", "a.kt", Safe, "class C {\n    fun open(@RequestParam id: String, response: HttpServletResponse) {\n        response.sendRedirect(\"/items/\" + id.toLong())\n    }\n}"),
+    case("kotlin-open-redirect-taint", "a.kt", Static, "class C {\n    fun logout(response: HttpServletResponse) {\n        response.sendRedirect(\"/login\")\n    }\n}"),
+    case("kotlin-open-redirect-taint", "a.kt", Evasion, "class C {\n    fun done(req: HttpServletRequest, response: HttpServletResponse) {\n        var target = \"/\"\n        target = req.getParameter(\"next\")\n        response.sendRedirect(target)\n    }\n}"),
+    case("kotlin-log-injection-taint", "a.kt", Positive, "class C {\n    fun login(@RequestParam user: String) {\n        log.info(\"User login: $user\")\n    }\n}"),
+    case("kotlin-log-injection-taint", "a.kt", Safe, "class C {\n    fun login(@RequestParam id: String) {\n        log.info(\"User login: \" + id.toLong())\n    }\n}"),
+    case("kotlin-log-injection-taint", "a.kt", Static, "class C {\n    fun start() {\n        log.info(\"Service started\")\n    }\n}"),
+    case("kotlin-log-injection-taint", "a.kt", Evasion, "class C {\n    fun login(req: HttpServletRequest) {\n        val agent = req.getHeader(\"User-Agent\")\n        logger.warn(\"agent ${agent.trim()}\")\n    }\n}"),
     // ── Rust ────────────────────────────────────────────────────────────────
     case(
         "rust-sql-injection-taint",
@@ -1456,4 +1539,218 @@ fn java_path_traversal_fixtures_keep_parity() {
             .any(|f| f.rule.id == "java-path-traversal-taint");
         assert_eq!(fired, vulnerable, "{name}");
     }
+}
+
+/// SAST v2 §4.2.4: an N4 dynamic-SQL pattern is promoted to the taint finding
+/// when a source reaches the same call, and stays a pattern otherwise.
+#[test]
+fn sql_dynamic_pattern_is_promoted_by_taint() {
+    let tainted = "from flask import request\n\ndef f(cur):\n    cur.execute(\"SELECT * FROM t WHERE id = \" + request.args[\"id\"])\n";
+    let unproven = "def f(cur, uid):\n    cur.execute(\"SELECT * FROM t WHERE id = \" + uid)\n";
+    let ids = |src| -> Vec<&'static str> {
+        findings_for("a.py", src)
+            .iter()
+            .map(|f| f.rule.id)
+            .collect()
+    };
+    assert_eq!(ids(tainted), vec!["py-sql-injection-taint"]);
+    assert_eq!(ids(unproven), vec!["py-sql-dynamic-construction"]);
+}
+
+// ── N2b: function summaries ──────────────────────────────────────────────────
+
+fn ids(file: &str, src: &str) -> Vec<&'static str> {
+    findings_for(file, src).iter().map(|f| f.rule.id).collect()
+}
+
+#[test]
+fn flow_through_helper_that_reaches_a_sink() {
+    let src = r#"
+import os
+from flask import request
+
+def run_cmd(cmd):
+    os.system("sh -c " + cmd)
+
+def handler():
+    run_cmd(request.args["c"])
+"#;
+    let findings = findings_for("a.py", src);
+    let f = findings
+        .iter()
+        .find(|f| f.rule.id == "py-command-injection-taint" && f.line == 9)
+        .expect("call to the helper is reported");
+    assert!(f.description.contains("via run_cmd()"), "{}", f.description);
+    assert_eq!(f.flow, Some((9, 9)));
+    assert!(
+        findings.iter().all(|f| f.line != 6),
+        "the helper alone has no source: {findings:?}"
+    );
+}
+
+#[test]
+fn flow_through_helper_return_value() {
+    let src = r#"
+import os
+from flask import request
+
+def read_host():
+    return request.args["host"]
+
+def wrap(x):
+    return "ping " + x
+
+def handler():
+    os.system(wrap(read_host()))
+"#;
+    assert_eq!(ids("a.py", src), vec!["py-command-injection-taint"]);
+}
+
+#[test]
+fn helper_that_sanitizes_does_not_propagate() {
+    let src = r#"
+import os, shlex
+from flask import request
+
+def clean(x):
+    return shlex.quote(x)
+
+def handler():
+    os.system("echo " + clean(request.args["c"]))
+"#;
+    assert!(ids("a.py", src).is_empty(), "{:?}", ids("a.py", src));
+}
+
+#[test]
+fn clean_argument_to_sink_helper_is_not_reported() {
+    let src = r#"
+import os
+
+def run_cmd(cmd):
+    os.system(cmd)
+
+def handler():
+    run_cmd("uptime")
+"#;
+    assert!(ids("a.py", src).is_empty());
+}
+
+#[test]
+fn flows_are_followed_through_three_nested_calls_but_not_four() {
+    let chain = |extra: usize| {
+        let mut s =
+            String::from("import os\nfrom flask import request\n\ndef h0(x):\n    os.system(x)\n");
+        for i in 1..=extra {
+            s.push_str(&format!("\ndef h{i}(x):\n    h{}(x)\n", i - 1));
+        }
+        s.push_str(&format!(
+            "\ndef handler():\n    h{extra}(request.args[\"c\"])\n"
+        ));
+        s
+    };
+    // handler → h2 → h1 → h0 is three nested calls.
+    assert_eq!(ids("a.py", &chain(2)), vec!["py-command-injection-taint"]);
+    assert!(
+        ids("a.py", &chain(3)).is_empty(),
+        "a fourth nested call is beyond depth {SUMMARY_DEPTH}"
+    );
+}
+
+#[test]
+fn ambiguous_function_names_are_not_resolved() {
+    let src = r#"
+import os
+from flask import request
+
+class A:
+    def run(self, x):
+        os.system(x)
+
+class B:
+    def run(self, x):
+        print(x)
+
+def handler(a):
+    a.run(request.args["c"])
+"#;
+    // Only A.run's own body has a sink and `run` is defined twice: precision first.
+    assert!(ids("a.py", src).is_empty(), "{:?}", ids("a.py", src));
+}
+
+#[test]
+fn keyword_arguments_map_to_parameters_by_name() {
+    let src = r#"
+import os
+from flask import request
+
+def run(label, cmd):
+    os.system(cmd)
+
+def safe():
+    run(label=request.args["l"], cmd="uptime")
+
+def unsafe():
+    run(cmd=request.args["c"], label="x")
+"#;
+    let lines: Vec<usize> = findings_for("a.py", src).iter().map(|f| f.line).collect();
+    assert_eq!(lines, vec![12], "only the call passing input as `cmd`");
+}
+
+#[test]
+fn recursion_terminates() {
+    let src = "def f(x):\n    return g(x)\n\ndef g(x):\n    return f(x)\n";
+    assert!(ids("a.py", src).is_empty());
+}
+
+#[test]
+fn summaries_work_in_java_go_and_javascript() {
+    let java = r#"
+class A {
+    void exec(String cmd) throws Exception { Runtime.getRuntime().exec(cmd); }
+    void handler(@RequestParam String c) throws Exception { exec("ping " + c); }
+}"#;
+    let go = "package a\n\nfunc run(c string) { exec.Command(\"sh\", \"-c\", c).Run() }\n\nfunc h(r *http.Request) { run(r.FormValue(\"c\")) }\n";
+    let js = "function run(c) { require('child_process').exec(c); }\napp.get('/p', (req, res) => { run(req.query.c); });\n";
+    let taint_only = |file: &str, src: &str| -> Vec<&'static str> {
+        ids(file, src)
+            .into_iter()
+            .filter(|id| id.ends_with("-taint"))
+            .collect()
+    };
+    assert_eq!(
+        taint_only("A.java", java),
+        vec!["java-command-injection-taint"]
+    );
+    assert_eq!(taint_only("a.go", go), vec!["go-command-injection-taint"]);
+    assert_eq!(taint_only("a.js", js), vec!["js-command-injection-taint"]);
+}
+
+#[test]
+fn project_summaries_resolve_calls_across_files() {
+    let lib = "import os\n\ndef run_cmd(cmd):\n    os.system(cmd)\n";
+    let app = "from flask import request\nfrom lib import run_cmd\n\ndef handler():\n    run_cmd(request.args[\"c\"])\n";
+    let grammar = detect_grammar(Path::new("a.py")).expect("python grammar");
+
+    assert!(
+        audit_file_ast(app, grammar).is_empty(),
+        "no summary for run_cmd in this file alone"
+    );
+
+    let mut known = Summaries::default();
+    for _ in 0..SUMMARY_DEPTH {
+        known = Summaries::from_entries(
+            [lib, app]
+                .iter()
+                .flat_map(|src| crate::analyzer::summarize_file(src, grammar, &known)),
+        );
+    }
+    let findings = crate::analyzer::audit_file_ast_with(app, grammar, &known);
+    assert_eq!(
+        findings.iter().map(|f| f.rule.id).collect::<Vec<_>>(),
+        vec!["py-command-injection-taint"]
+    );
+    assert!(
+        crate::analyzer::audit_file_ast_with(lib, grammar, &known).is_empty(),
+        "the library alone has no source"
+    );
 }

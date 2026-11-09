@@ -340,10 +340,16 @@ fn schema_read_config_file() -> Value {
 fn schema_audit_security_measures() -> Value {
     json!({
         "name": "audit_security_measures",
-        "description": "Analyses the project for common security vulnerabilities and returns a report with recommendations.",
+        "description": "Analyses the project for common security vulnerabilities and returns a report with recommendations. Findings listed in audit-baseline.json at the project root are reported as accepted debt; only new ones count as production risk.",
         "inputSchema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "enum": ["markdown", "sarif", "baseline"],
+                    "description": "Output format. 'markdown' (default): report with an embedded JSON summary. 'sarif': SARIF 2.1.0 log for code scanning. 'baseline': audit-baseline.json content accepting all current findings (save it at the project root)."
+                }
+            },
             "required": []
         }
     })

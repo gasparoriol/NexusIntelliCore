@@ -161,9 +161,13 @@ Detecta patrons de disseny usant heurístiques en els fitxers.
 
 ### 7. `audit_security_measures`
 
-Executa escaneig de secrets i detecció de codi insegur basada en AST en tot el projecte.
+Executa escaneig de secrets, detecció de codi insegur basada en AST, anàlisi taint i comprovacions d'infraestructura en tot el projecte.
 
-**Paràmetres:** Cap
+**Paràmetres:**
+
+| Nom | Tipus | Obligatori | Descripció |
+|---|---|---|---|
+| `format` | string | No | `markdown` (per defecte): informe amb un resum JSON incrustat. `sarif`: log SARIF 2.1.0 pur (GitHub code scanning, IDEs). `baseline`: contingut d'`audit-baseline.json` que accepta totes les troballes actuals. |
 
 **Què detecta:**
 Les regles són declaratives (`src/analyzer/rules/`): cadascuna té un id `<lang|any>-<cwe-slug>-<variant>`, CWE, categoria OWASP, nivell i severitat base.
@@ -174,12 +178,12 @@ Les regles són declaratives (`src/analyzer/rules/`): cadascuna té un id `<lang
 - `js-code-injection-eval`, `js-code-injection-new-function`, `py-code-injection-eval`, `kotlin-code-injection-eval` (CWE-94/95)
 - `js-xss-inner-html` (CWE-79): assignacions a `innerHTML`
 - `py-command-injection-shell-true`, `java-command-injection-exec` (CWE-78)
-- **Regles taint** (`<lang>-<vuln>-taint`; `lang` = `java`, `py`, `js` per a JS/TS, `rust`): flux de dades intra-procedural sobre l'AST des d'entrada d'usuari (Spring/JAX-RS/Servlet, Flask/Django/FastAPI, Express/Koa/NestJS, axum/actix, arguments CLI) fins a un sink, respectant sanititzadors i guardes de confinament:
-  - `sql-injection` (CWE-89) i `command-injection` (CWE-78): els quatre llenguatges
-  - `path-traversal` (CWE-22): Java, Python, JS/TS (Critical en sinks d'escriptura/esborrat)
-  - `ssrf` (CWE-918) i `open-redirect` (CWE-601): els quatre llenguatges
-  - `ssti` (CWE-1336) i `log-injection` (CWE-117): Java, Python, JS/TS
-- `any-sql-injection-heuristic` (CWE-89): Concatenació de cadenes en contextos SQL; només en llenguatges sense regles taint SQL (Go, C#, Kotlin, C)
+- **Regles taint** (`<lang>-<vuln>-taint`; `lang` = `java`, `py`, `js` per a JS/TS, `rust`, `go`, `cs`, `kotlin`): flux de dades sobre l'AST des d'entrada d'usuari (Spring/JAX-RS/Servlet, Flask/Django/FastAPI, Express/Koa/NestJS, ASP.NET Core, `net/http`/gin/echo, axum/actix, arguments CLI) fins a un sink, respectant sanititzadors i guardes de confinament. Els fluxos se segueixen a través de crides a funcions del projecte mitjançant resums (fins a 3 crides aniuades, entre fitxers); una crida el nom de la qual està definit més d'una vegada no es resol:
+  - `sql-injection` (CWE-89), `command-injection` (CWE-78), `ssrf` (CWE-918), `open-redirect` (CWE-601): Java, Python, JS/TS, Rust, Go, C#, Kotlin
+  - `path-traversal` (CWE-22): Java, Python, JS/TS, Go, C#, Kotlin (Critical en sinks d'escriptura/esborrat)
+  - `ssti` (CWE-1336): Java, Python, JS/TS, Go, C#
+  - `log-injection` (CWE-117): Java, Python, JS/TS, Go, C#, Kotlin
+- `any-sql-injection-heuristic` (CWE-89): Concatenació de cadenes en contextos SQL; només en llenguatges sense regles taint SQL (C)
 - **Regles de configuració i API** (`<lang>-<debilitat>`; `lang` afegeix `go`, `cs`, `c`, `kotlin`):
   - `weak-crypto-hash` (CWE-328) / `weak-crypto-cipher` (CWE-327): MD5/SHA-1, DES/3DES/RC2/RC4/Blowfish, ECB — Java, Kotlin, Python, JS/TS, Go, C#, Rust, C
   - `tls-validation-disabled` (CWE-295): `verify=False`, `rejectUnauthorized: false`, `InsecureSkipVerify`, trust managers que accepten tot, `danger_accept_invalid_certs(true)`… — Java, Python, JS/TS, Go, C#, Rust, C
@@ -187,10 +191,16 @@ Les regles són declaratives (`src/analyzer/rules/`): cadascuna té un id `<lang
   - `insecure-deserialization` (CWE-502): `ObjectInputStream`, XStream, `pickle`, `yaml.load` insegur, `BinaryFormatter`, `TypeNameHandling.All`, `unserialize` — Java, Kotlin, Python, JS/TS, C#
   - `csrf-protection-disabled` (CWE-352), `cors-wildcard-credentials` (CWE-942), `insecure-cookie-flag` (CWE-614), `debug-mode-enabled` (CWE-489) i XXE (CWE-611: factories Java sense `disallow-doctype-decl`, lxml `resolve_entities=True`, C# `DtdProcessing.Parse`)
   - C: `c-dangerous-function-gets` (CWE-242), `c-buffer-overflow-unbounded-copy` / `c-buffer-overflow-scanf` (CWE-120), `c-format-string-variable` (CWE-134)
+- **Patrons de risc (N4)**: precursors de vulnerabilitats, confiança baixa, es mostren a "Risk Patterns (informative)" i queden **fora del gate de producció**: construcció dinàmica de SQL (es promou a la troballa taint quan un source hi arriba), errors empassats, autorització fail-open (`catch` que retorna `true` en funcions tipus `isAuthorized`), comparació de secrets no constant, secrets escrits als logs, validació per llista negra (`replace("../", "")`), reflexió amb noms no literals, TOCTOU, comentaris TODO/FIXME de seguretat, bind a `0.0.0.0`.
+- **Regles d'infraestructura (N3)** sobre `Dockerfile`, YAML (compose, Kubernetes, CI), scripts shell i `.properties` de Spring (la configuració s'analitza ja redactada): `docker-root-user`, `docker-remote-add`, `docker-secret-in-env`, `docker-unpinned-base-image`, `docker-ssh-port-exposed`, `any-download-pipe-to-shell` (CWE-494), `yaml-privileged-container`, `spring-actuator-endpoints-exposed`, `spring-ssl-disabled`.
 
 **Supressions:** `// nexus-ignore: <rule-id> <motiu>` a la línia de la troballa o a l'anterior. El motiu és obligatori; les troballes suprimides es llisten a l'informe, mai no s'amaguen.
 
-**Resum JSON (`schema_version` 2):** cada entrada de `production_risk` inclou `rule_id`, `legacy_rule_id` (id de l'esquema 1, p. ex. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `flow` (`source_line`/`sink_line` en regles taint), `fingerprint`; a més de `suppressed_total`, `suppressed` i `taint_coverage` (`intra-procedural`: no se segueixen fluxos entre funcions ni fitxers).
+**Línia base:** desa la sortida de `format=baseline` com a `audit-baseline.json` a l'arrel del projecte. Les troballes llistades es reporten com a deute acceptat (`baselined_total`, `suppressions` a SARIF) i només compten com a risc de producció les troballes **noves**. Les entrades usen `stable_id` (`regla:fitxer:funció:ordinal`), que no canvia en moure línies. Una línia base invàlida s'avisa i s'ignora; si `.mcpignore` la protegeix, no es llegeix.
+
+**Resum JSON (`schema_version` 3):** cada entrada de `production_risk` / `risk_patterns` inclou `rule_id`, `legacy_rule_id` (id de l'esquema 1, p. ex. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity` (`critical`/`high`/`medium`/`low`), `confidence`, `file`, `line`, `function`, `flow` (`source_line`/`sink_line` en regles taint), `fingerprint` (per línia, deduplicació) i `stable_id` (identitat per a la línia base); a més de `suppressed`, `suppressed_total`, `baselined_total`, `baseline` (`absent`/`loaded`/`invalid`), `top_risk_functions` (rànquing determinista: Σ pesos severitat × confiança, més un bonus si l'entrada d'usuari arriba a la funció; fes servir `inspect_symbol` sobre elles) i `taint_coverage` (`inter-procedural-summaries`).
+
+**SARIF (`format=sarif`):** un run amb regles (etiquetes CWE/OWASP, `security-severity`), resultats amb `partialFingerprints` (`nexusStableId/v1`), `codeFlows` per a fluxos taint i `suppressions` (`inSource` per a `nexus-ignore`, `external` per a la línia base). Els missatges són textos fixos de la regla, mai contingut del codi.
 
 > **Important:** Els _valors_ dels secrets NEVER s'inclouen. L'informe només mostra el _tipus_ i la _ubicació_.
 

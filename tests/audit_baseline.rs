@@ -18,13 +18,16 @@ use common::TestMcpClient;
 /// `rust-unsafe-code-*` (real `unsafe`, forbidden by `unsafe_code = "forbid"`)
 /// and `rust-uncaught-panic-unwrap`.
 const BASELINE_RUST_UNSAFE_CODE: usize = 0;
-const BASELINE_RUST_PANIC_UNWRAP: usize = 91;
+/// Fase 3: inline `#[cfg(test)]` modules are now test evidence, so only real
+/// production `unwrap()`/`expect()` calls are counted (was 91 by path).
+const BASELINE_RUST_PANIC_UNWRAP: usize = 14;
 /// SAST v2 Fase 2: the taint engine must not flag the server's own code.
 const BASELINE_TAINT: usize = 0;
 /// Any other rule (Fase 1 structural rules, future rules) must not flag the
 /// server's own production code.
 const BASELINE_OTHER: usize = 0;
-const BASELINE_SECRET_DETECTION: usize = 16;
+/// Fase 3: secrets inside inline test modules no longer count (was 16).
+const BASELINE_SECRET_DETECTION: usize = 1;
 
 fn extract_json_summary(text: &str) -> serde_json::Value {
     let start = text.find("```json\n").map(|i| i + 8);
@@ -54,11 +57,17 @@ fn audit_production_baseline_is_not_exceeded() {
         .unwrap_or("");
     let summary = extract_json_summary(text);
 
-    let production_risk = summary
-        .get("production_risk")
-        .and_then(|v| v.as_array())
+    assert_eq!(
+        summary["schema_version"], "3",
+        "audit JSON summary missing or unexpected: {summary}"
+    );
+    // N4 patterns (e.g. unwrap) are reported apart from the production gate.
+    let production_risk: Vec<serde_json::Value> = ["production_risk", "risk_patterns"]
+        .iter()
+        .filter_map(|key| summary.get(key).and_then(|v| v.as_array()))
+        .flatten()
         .cloned()
-        .unwrap_or_default();
+        .collect();
 
     let count = |pred: &dyn Fn(&str) -> bool| {
         production_risk

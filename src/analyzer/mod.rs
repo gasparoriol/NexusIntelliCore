@@ -6,6 +6,7 @@ pub use types::*;
 // Public sub modules (for external consumers)
 pub mod audit;
 pub mod entrypoints;
+pub mod infra;
 pub mod lang;
 pub mod patterns;
 pub mod predictor;
@@ -26,7 +27,7 @@ mod query;
 mod strings;
 
 // Re-exports of the public API
-pub use audit::audit_file_ast;
+pub use audit::{audit_file_ast, audit_file_ast_with, summarize_file, test_code_lines};
 pub use docs::{extract_module_doc, extract_preceding_comment};
 pub use entrypoints::detect_entrypoints;
 pub use functions::extract_signature;

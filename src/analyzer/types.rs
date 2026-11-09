@@ -138,6 +138,8 @@ pub struct AuditFinding {
     pub description: String,
     /// Taint flow as (source line, sink line); `None` for non-taint rules.
     pub flow: Option<(usize, usize)>,
+    /// Name of the enclosing function, if any (risk ranking, stable ids).
+    pub function: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
