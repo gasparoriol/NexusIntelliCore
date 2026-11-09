@@ -671,7 +671,7 @@ pub struct AuditFinding {
 }
 ```
 
-Rules are registered declaratively in `analyzer::rules`: `STRUCTURAL_RULES` (one query per rule) and `TAINT_PACKS` (per-language taint queries consumed by the intra-procedural engine in `analyzer::taint`). Tree-sitter queries are `.scm` files compiled once per language, on first use.
+Rules are registered declaratively in `analyzer::rules`: `STRUCTURAL_RULES` (one query per rule, with optional `context` name keywords and `unless_scope` markers) and `TAINT_PACKS` (per-language taint queries consumed by the intra-procedural engine in `analyzer::taint`). Tree-sitter queries are `.scm` files compiled once per language, on first use.
 
 **Severity**:
 

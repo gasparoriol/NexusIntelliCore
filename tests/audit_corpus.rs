@@ -220,6 +220,42 @@ public class Repo {
         forbidden: &[],
     },
     CorpusCase {
+        name: "python_weak_hash",
+        extension: "py",
+        source: "import hashlib\n\ndef fingerprint(data):\n    return hashlib.md5(data).hexdigest()\n",
+        expected: &[("py-weak-crypto-hash", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "go_tls_insecure_skip_verify",
+        extension: "go",
+        source: "package client\n\nfunc New() *tls.Config {\n\treturn &tls.Config{InsecureSkipVerify: true}\n}\n",
+        expected: &[("go-tls-validation-disabled", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "c_gets",
+        extension: "c",
+        source: "#include <stdio.h>\n\nint main(void) {\n    char buf[32];\n    gets(buf);\n    return 0;\n}\n",
+        expected: &[("c-dangerous-function-gets", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "java_xxe_hardened_no_alert",
+        extension: "java",
+        source: r#"
+public class Parser {
+    Document parse(InputStream in) throws Exception {
+        DocumentBuilderFactory f = DocumentBuilderFactory.newInstance();
+        f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        return f.newDocumentBuilder().parse(in);
+    }
+}
+"#,
+        expected: &[],
+        forbidden: &[],
+    },
+    CorpusCase {
         name: "java_path_traversal_read",
         extension: "java",
         source: r#"

@@ -180,6 +180,13 @@ Les regles són declaratives (`src/analyzer/rules/`): cadascuna té un id `<lang
   - `ssrf` (CWE-918) i `open-redirect` (CWE-601): els quatre llenguatges
   - `ssti` (CWE-1336) i `log-injection` (CWE-117): Java, Python, JS/TS
 - `any-sql-injection-heuristic` (CWE-89): Concatenació de cadenes en contextos SQL; només en llenguatges sense regles taint SQL (Go, C#, Kotlin, C)
+- **Regles de configuració i API** (`<lang>-<debilitat>`; `lang` afegeix `go`, `cs`, `c`, `kotlin`):
+  - `weak-crypto-hash` (CWE-328) / `weak-crypto-cipher` (CWE-327): MD5/SHA-1, DES/3DES/RC2/RC4/Blowfish, ECB — Java, Kotlin, Python, JS/TS, Go, C#, Rust, C
+  - `tls-validation-disabled` (CWE-295): `verify=False`, `rejectUnauthorized: false`, `InsecureSkipVerify`, trust managers que accepten tot, `danger_accept_invalid_certs(true)`… — Java, Python, JS/TS, Go, C#, Rust, C
+  - `insecure-random-context` (CWE-338): `Math.random`, `java.util.Random`, `random`, `math/rand`, `rand()` només quan el nom d'una variable/funció que l'envolta és sensible (`token`, `password`, `nonce`, `session`…) — Java, Python, JS/TS, Go, C#, C
+  - `insecure-deserialization` (CWE-502): `ObjectInputStream`, XStream, `pickle`, `yaml.load` insegur, `BinaryFormatter`, `TypeNameHandling.All`, `unserialize` — Java, Kotlin, Python, JS/TS, C#
+  - `csrf-protection-disabled` (CWE-352), `cors-wildcard-credentials` (CWE-942), `insecure-cookie-flag` (CWE-614), `debug-mode-enabled` (CWE-489) i XXE (CWE-611: factories Java sense `disallow-doctype-decl`, lxml `resolve_entities=True`, C# `DtdProcessing.Parse`)
+  - C: `c-dangerous-function-gets` (CWE-242), `c-buffer-overflow-unbounded-copy` / `c-buffer-overflow-scanf` (CWE-120), `c-format-string-variable` (CWE-134)
 
 **Supressions:** `// nexus-ignore: <rule-id> <motiu>` a la línia de la troballa o a l'anterior. El motiu és obligatori; les troballes suprimides es llisten a l'informe, mai no s'amaguen.
 

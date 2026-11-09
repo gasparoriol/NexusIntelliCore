@@ -84,16 +84,40 @@ impl RuleMeta {
 }
 
 /// A structural (N1/N4) rule: metadata + query applied to the listed grammars.
+///
+/// The reported line is the earliest capture whose name does not start with
+/// `_` (helper captures only feed predicates).
 pub struct Rule {
     pub meta: RuleMeta,
     /// Grammar names as returned by `LanguageGrammar::name`.
     pub languages: &'static [&'static str],
     pub query: &'static str,
+    /// Report only when the name of an enclosing declaration (variable, key,
+    /// assignment target or function) contains one of these lowercase words.
+    /// Empty: always report.
+    pub context: &'static [&'static str],
+    /// Skip when the enclosing function (or the file, at top level) contains
+    /// one of these markers, e.g. a hardening call next to a parser factory.
+    pub unless_scope: &'static [&'static str],
+}
+
+impl Rule {
+    const fn with_context(mut self, words: &'static [&'static str]) -> Self {
+        self.context = words;
+        self
+    }
+
+    const fn unless_scope(mut self, markers: &'static [&'static str]) -> Self {
+        self.unless_scope = markers;
+        self
+    }
 }
 
 pub struct CompiledRule {
     pub meta: &'static RuleMeta,
     pub query: Query,
+    pub context: &'static [&'static str],
+    pub unless_scope: &'static [&'static str],
 }
 
 const JS_LANGS: &[&str] = &["javascript", "typescript", "tsx"];
@@ -116,6 +140,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["rust"],
         query: include_str!("rust/unsafe_block.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     Rule {
         meta: RuleMeta {
@@ -133,6 +159,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["rust"],
         query: include_str!("rust/unsafe_fn.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     Rule {
         meta: RuleMeta {
@@ -149,6 +177,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["rust"],
         query: include_str!("rust/inline_asm.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     Rule {
         meta: RuleMeta {
@@ -165,6 +195,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["rust"],
         query: include_str!("rust/panic_unwrap.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     // ── JavaScript / TypeScript ─────────────────────────────────────────────
     Rule {
@@ -182,6 +214,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: JS_LANGS,
         query: include_str!("js/eval.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     Rule {
         meta: RuleMeta {
@@ -198,6 +232,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: JS_LANGS,
         query: include_str!("js/new_function.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     Rule {
         meta: RuleMeta {
@@ -214,6 +250,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: JS_LANGS,
         query: include_str!("js/inner_html.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     // ── Python ──────────────────────────────────────────────────────────────
     Rule {
@@ -231,6 +269,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["python"],
         query: include_str!("python/eval_exec.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     Rule {
         meta: RuleMeta {
@@ -247,6 +287,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["python"],
         query: include_str!("python/subprocess_shell_true.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     // ── Java / Kotlin ───────────────────────────────────────────────────────
     Rule {
@@ -264,6 +306,8 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["java"],
         query: include_str!("java/exec.scm"),
+        context: &[],
+        unless_scope: &[],
     },
     Rule {
         meta: RuleMeta {
@@ -280,8 +324,567 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
         },
         languages: &["kotlin"],
         query: include_str!("kotlin/eval.scm"),
+        context: &[],
+        unless_scope: &[],
     },
+    // ── Fase 1: cryptography, TLS, PRNG, deserialization, configuration, C ──
+    structural(
+        "java-weak-crypto-hash",
+        WEAK_HASH,
+        &["java"],
+        include_str!("java/weak_hash.scm"),
+    ),
+    structural(
+        "java-weak-crypto-cipher",
+        WEAK_CIPHER,
+        &["java"],
+        include_str!("java/weak_cipher.scm"),
+    ),
+    structural(
+        "java-tls-validation-disabled",
+        TLS_OFF,
+        &["java"],
+        include_str!("java/tls_disabled.scm"),
+    ),
+    structural(
+        "java-insecure-random-context",
+        WEAK_RANDOM,
+        &["java"],
+        include_str!("java/insecure_random.scm"),
+    )
+    .with_context(SECURITY_NAMES),
+    structural(
+        "java-insecure-deserialization",
+        DESERIALIZATION,
+        &["java"],
+        include_str!("java/deserialization.scm"),
+    ),
+    structural(
+        "java-csrf-protection-disabled",
+        CSRF_OFF,
+        &["java"],
+        include_str!("java/csrf_disabled.scm"),
+    ),
+    structural(
+        "java-cors-wildcard-credentials",
+        CORS_CREDENTIALS,
+        &["java"],
+        include_str!("java/cors_credentials.scm"),
+    ),
+    structural(
+        "java-insecure-cookie-flag",
+        COOKIE_FLAGS,
+        &["java"],
+        include_str!("java/cookie_flags.scm"),
+    ),
+    structural(
+        "java-xxe-unhardened-parser",
+        XXE_DEFAULT,
+        &["java"],
+        include_str!("java/xxe.scm"),
+    )
+    .unless_scope(XXE_HARDENING),
+    structural(
+        "kotlin-weak-crypto-hash",
+        WEAK_HASH,
+        &["kotlin"],
+        include_str!("kotlin/weak_hash.scm"),
+    ),
+    structural(
+        "kotlin-weak-crypto-cipher",
+        WEAK_CIPHER,
+        &["kotlin"],
+        include_str!("kotlin/weak_cipher.scm"),
+    ),
+    structural(
+        "kotlin-insecure-deserialization",
+        DESERIALIZATION,
+        &["kotlin"],
+        include_str!("kotlin/deserialization.scm"),
+    ),
+    structural(
+        "py-weak-crypto-hash",
+        WEAK_HASH,
+        &["python"],
+        include_str!("python/weak_hash.scm"),
+    ),
+    structural(
+        "py-weak-crypto-cipher",
+        WEAK_CIPHER,
+        &["python"],
+        include_str!("python/weak_cipher.scm"),
+    ),
+    structural(
+        "py-tls-validation-disabled",
+        TLS_OFF,
+        &["python"],
+        include_str!("python/tls_disabled.scm"),
+    ),
+    structural(
+        "py-insecure-random-context",
+        WEAK_RANDOM,
+        &["python"],
+        include_str!("python/insecure_random.scm"),
+    )
+    .with_context(SECURITY_NAMES),
+    structural(
+        "py-insecure-deserialization",
+        DESERIALIZATION,
+        &["python"],
+        include_str!("python/deserialization.scm"),
+    ),
+    structural(
+        "py-csrf-protection-disabled",
+        CSRF_OFF,
+        &["python"],
+        include_str!("python/csrf_disabled.scm"),
+    ),
+    structural(
+        "py-cors-wildcard-credentials",
+        CORS_CREDENTIALS,
+        &["python"],
+        include_str!("python/cors_credentials.scm"),
+    ),
+    structural(
+        "py-debug-mode-enabled",
+        DEBUG_ON,
+        &["python"],
+        include_str!("python/debug_mode.scm"),
+    ),
+    structural(
+        "py-insecure-cookie-flag",
+        COOKIE_FLAGS,
+        &["python"],
+        include_str!("python/cookie_flags.scm"),
+    ),
+    structural(
+        "py-xxe-entity-resolution",
+        XXE_EXPLICIT,
+        &["python"],
+        include_str!("python/xxe.scm"),
+    ),
+    structural(
+        "js-weak-crypto-hash",
+        WEAK_HASH,
+        JS_LANGS,
+        include_str!("js/weak_hash.scm"),
+    ),
+    structural(
+        "js-weak-crypto-cipher",
+        WEAK_CIPHER,
+        JS_LANGS,
+        include_str!("js/weak_cipher.scm"),
+    ),
+    structural(
+        "js-tls-validation-disabled",
+        TLS_OFF,
+        JS_LANGS,
+        include_str!("js/tls_disabled.scm"),
+    ),
+    structural(
+        "js-insecure-random-context",
+        WEAK_RANDOM,
+        JS_LANGS,
+        include_str!("js/insecure_random.scm"),
+    )
+    .with_context(SECURITY_NAMES),
+    structural(
+        "js-insecure-deserialization",
+        DESERIALIZATION,
+        JS_LANGS,
+        include_str!("js/deserialization.scm"),
+    ),
+    structural(
+        "js-cors-wildcard-credentials",
+        CORS_CREDENTIALS,
+        JS_LANGS,
+        include_str!("js/cors_credentials.scm"),
+    ),
+    structural(
+        "js-insecure-cookie-flag",
+        COOKIE_FLAGS,
+        JS_LANGS,
+        include_str!("js/cookie_flags.scm"),
+    ),
+    structural(
+        "go-weak-crypto-hash",
+        WEAK_HASH,
+        &["go"],
+        include_str!("go/weak_hash.scm"),
+    ),
+    structural(
+        "go-weak-crypto-cipher",
+        WEAK_CIPHER,
+        &["go"],
+        include_str!("go/weak_cipher.scm"),
+    ),
+    structural(
+        "go-tls-validation-disabled",
+        TLS_OFF,
+        &["go"],
+        include_str!("go/tls_disabled.scm"),
+    ),
+    structural(
+        "go-insecure-random-context",
+        WEAK_RANDOM,
+        &["go"],
+        include_str!("go/insecure_random.scm"),
+    )
+    .with_context(SECURITY_NAMES),
+    structural(
+        "go-cors-wildcard-credentials",
+        CORS_CREDENTIALS,
+        &["go"],
+        include_str!("go/cors_credentials.scm"),
+    ),
+    structural(
+        "go-insecure-cookie-flag",
+        COOKIE_FLAGS,
+        &["go"],
+        include_str!("go/cookie_flags.scm"),
+    ),
+    structural(
+        "cs-weak-crypto-hash",
+        WEAK_HASH,
+        &["csharp"],
+        include_str!("csharp/weak_hash.scm"),
+    ),
+    structural(
+        "cs-weak-crypto-cipher",
+        WEAK_CIPHER,
+        &["csharp"],
+        include_str!("csharp/weak_cipher.scm"),
+    ),
+    structural(
+        "cs-tls-validation-disabled",
+        TLS_OFF,
+        &["csharp"],
+        include_str!("csharp/tls_disabled.scm"),
+    ),
+    structural(
+        "cs-insecure-random-context",
+        WEAK_RANDOM,
+        &["csharp"],
+        include_str!("csharp/insecure_random.scm"),
+    )
+    .with_context(SECURITY_NAMES),
+    structural(
+        "cs-insecure-deserialization",
+        DESERIALIZATION,
+        &["csharp"],
+        include_str!("csharp/deserialization.scm"),
+    ),
+    structural(
+        "cs-csrf-protection-disabled",
+        CSRF_OFF,
+        &["csharp"],
+        include_str!("csharp/csrf_disabled.scm"),
+    ),
+    structural(
+        "cs-cors-wildcard-credentials",
+        CORS_CREDENTIALS,
+        &["csharp"],
+        include_str!("csharp/cors_credentials.scm"),
+    ),
+    structural(
+        "cs-debug-mode-enabled",
+        DEBUG_ON,
+        &["csharp"],
+        include_str!("csharp/debug_mode.scm"),
+    )
+    .unless_scope(&["IsDevelopment"]),
+    structural(
+        "cs-insecure-cookie-flag",
+        COOKIE_FLAGS,
+        &["csharp"],
+        include_str!("csharp/cookie_flags.scm"),
+    ),
+    structural(
+        "cs-xxe-dtd-processing",
+        XXE_EXPLICIT,
+        &["csharp"],
+        include_str!("csharp/xxe.scm"),
+    ),
+    structural(
+        "rust-weak-crypto-hash",
+        WEAK_HASH,
+        &["rust"],
+        include_str!("rust/weak_hash.scm"),
+    ),
+    structural(
+        "rust-weak-crypto-cipher",
+        WEAK_CIPHER,
+        &["rust"],
+        include_str!("rust/weak_cipher.scm"),
+    ),
+    structural(
+        "rust-tls-validation-disabled",
+        TLS_OFF,
+        &["rust"],
+        include_str!("rust/tls_disabled.scm"),
+    ),
+    structural(
+        "rust-insecure-cookie-flag",
+        COOKIE_FLAGS,
+        &["rust"],
+        include_str!("rust/cookie_flags.scm"),
+    ),
+    structural(
+        "c-weak-crypto-hash",
+        WEAK_HASH,
+        &["c"],
+        include_str!("c/weak_hash.scm"),
+    ),
+    structural(
+        "c-weak-crypto-cipher",
+        WEAK_CIPHER,
+        &["c"],
+        include_str!("c/weak_cipher.scm"),
+    ),
+    structural(
+        "c-tls-validation-disabled",
+        TLS_OFF,
+        &["c"],
+        include_str!("c/tls_disabled.scm"),
+    ),
+    structural(
+        "c-insecure-random-context",
+        WEAK_RANDOM,
+        &["c"],
+        include_str!("c/insecure_random.scm"),
+    )
+    .with_context(SECURITY_NAMES),
+    structural(
+        "c-dangerous-function-gets",
+        C_GETS,
+        &["c"],
+        include_str!("c/gets.scm"),
+    ),
+    structural(
+        "c-buffer-overflow-unbounded-copy",
+        C_UNBOUNDED_COPY,
+        &["c"],
+        include_str!("c/unbounded_copy.scm"),
+    ),
+    structural(
+        "c-buffer-overflow-scanf",
+        C_SCANF,
+        &["c"],
+        include_str!("c/scanf_string.scm"),
+    ),
+    structural(
+        "c-format-string-variable",
+        FORMAT_STRING,
+        &["c"],
+        include_str!("c/format_string.scm"),
+    ),
 ];
+
+// ── Structural categories (Fase 1) ──────────────────────────────────────────
+
+const WEAK_HASH: Category = Category {
+    key: "",
+    cwe: "CWE-328",
+    owasp: Some("A02:2021"),
+    category: "weak_crypto",
+    severity: Severity::Medium,
+    confidence: Confidence::High,
+    description: "Weak hash algorithm (MD5/SHA-1)",
+    remediation: "Use SHA-256 or stronger; for passwords use bcrypt, scrypt or Argon2.",
+};
+const WEAK_CIPHER: Category = Category {
+    key: "",
+    cwe: "CWE-327",
+    owasp: Some("A02:2021"),
+    category: "weak_crypto",
+    severity: Severity::High,
+    confidence: Confidence::High,
+    description: "Broken cipher (DES/3DES/RC2/RC4/Blowfish) or ECB mode",
+    remediation: "Use AES-GCM or ChaCha20-Poly1305 with a random nonce.",
+};
+const TLS_OFF: Category = Category {
+    key: "",
+    cwe: "CWE-295",
+    owasp: Some("A07:2021"),
+    category: "tls_validation",
+    severity: Severity::High,
+    confidence: Confidence::High,
+    description: "TLS certificate or hostname validation disabled",
+    remediation: "Keep certificate validation on; trust a private CA explicitly if needed.",
+};
+const WEAK_RANDOM: Category = Category {
+    key: "",
+    cwe: "CWE-338",
+    owasp: Some("A02:2021"),
+    category: "weak_random",
+    severity: Severity::Medium,
+    confidence: Confidence::Medium,
+    description: "Non-cryptographic PRNG used for a security-sensitive value",
+    remediation: "Use a CSPRNG (SecureRandom, secrets, crypto.randomBytes, crypto/rand…).",
+};
+const DESERIALIZATION: Category = Category {
+    key: "",
+    cwe: "CWE-502",
+    owasp: Some("A08:2021"),
+    category: "insecure_deserialization",
+    severity: Severity::High,
+    confidence: Confidence::Medium,
+    description: "Deserialization that can instantiate arbitrary types",
+    remediation: "Use a data-only format (JSON) with an explicit schema or a safe loader.",
+};
+const CSRF_OFF: Category = Category {
+    key: "",
+    cwe: "CWE-352",
+    owasp: Some("A01:2021"),
+    category: "csrf",
+    severity: Severity::Medium,
+    confidence: Confidence::High,
+    description: "CSRF protection disabled",
+    remediation: "Keep CSRF protection on for cookie-authenticated, state-changing endpoints.",
+};
+const CORS_CREDENTIALS: Category = Category {
+    key: "",
+    cwe: "CWE-942",
+    owasp: Some("A05:2021"),
+    category: "cors",
+    severity: Severity::Medium,
+    confidence: Confidence::High,
+    description: "CORS allows any origin together with credentials",
+    remediation: "Allowlist trusted origins when credentials are allowed.",
+};
+const DEBUG_ON: Category = Category {
+    key: "",
+    cwe: "CWE-489",
+    owasp: Some("A05:2021"),
+    category: "debug_mode",
+    severity: Severity::Medium,
+    confidence: Confidence::Medium,
+    description: "Debug mode or developer error pages enabled",
+    remediation: "Enable debug features only in development configuration.",
+};
+const COOKIE_FLAGS: Category = Category {
+    key: "",
+    cwe: "CWE-614",
+    owasp: Some("A05:2021"),
+    category: "cookie_security",
+    severity: Severity::Medium,
+    confidence: Confidence::High,
+    description: "Cookie explicitly set without Secure or HttpOnly",
+    remediation: "Set Secure, HttpOnly and SameSite on session and auth cookies.",
+};
+const XXE_EXPLICIT: Category = Category {
+    key: "",
+    cwe: "CWE-611",
+    owasp: Some("A05:2021"),
+    category: "xxe",
+    severity: Severity::High,
+    confidence: Confidence::High,
+    description: "XML parser configured to process DTDs or external entities",
+    remediation: "Disable DTD processing and external entity resolution.",
+};
+const XXE_DEFAULT: Category = Category {
+    confidence: Confidence::Medium,
+    description: "XML parser factory used without disabling DTDs / external entities",
+    remediation:
+        "Set disallow-doctype-decl (or ACCESS_EXTERNAL_DTD/SCHEMA to \"\") on the factory.",
+    ..XXE_EXPLICIT
+};
+const C_GETS: Category = Category {
+    key: "",
+    cwe: "CWE-242",
+    owasp: None,
+    category: "buffer_overflow",
+    severity: Severity::High,
+    confidence: Confidence::High,
+    description: "gets() always risks a buffer overflow",
+    remediation: "Use fgets() with the buffer size.",
+};
+const C_UNBOUNDED_COPY: Category = Category {
+    key: "",
+    cwe: "CWE-120",
+    owasp: None,
+    category: "buffer_overflow",
+    severity: Severity::Medium,
+    confidence: Confidence::Medium,
+    description: "String copy/format without a destination bound",
+    remediation: "Use bounded variants (snprintf, strlcpy/strncpy with explicit termination).",
+};
+const C_SCANF: Category = Category {
+    key: "",
+    cwe: "CWE-120",
+    owasp: None,
+    category: "buffer_overflow",
+    severity: Severity::High,
+    confidence: Confidence::High,
+    description: "scanf-family \"%s\" without a field width",
+    remediation: "Give every %s a maximum width (e.g. %63s) or use fgets().",
+};
+const FORMAT_STRING: Category = Category {
+    key: "",
+    cwe: "CWE-134",
+    owasp: None,
+    category: "format_string",
+    severity: Severity::High,
+    confidence: Confidence::Medium,
+    description: "Format string is not a literal",
+    remediation: "Use a literal format: printf(\"%s\", value).",
+};
+
+/// Names that make a PRNG call security-relevant (lowercase substrings).
+const SECURITY_NAMES: &[&str] = &[
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "salt",
+    "nonce",
+    "otp",
+    "session",
+    "csrf",
+    "apikey",
+    "api_key",
+    "uuid",
+    "guid",
+    "reset",
+    "verification",
+    "captcha",
+    "credential",
+];
+/// Java XML factory hardening that prevents XXE.
+const XXE_HARDENING: &[&str] = &[
+    "disallow-doctype-decl",
+    "external-general-entities",
+    "ACCESS_EXTERNAL_DTD",
+    "ACCESS_EXTERNAL_SCHEMA",
+    "SUPPORT_DTD",
+    "IS_SUPPORTING_EXTERNAL_ENTITIES",
+];
+
+const fn structural(
+    id: &'static str,
+    c: Category,
+    languages: &'static [&'static str],
+    query: &'static str,
+) -> Rule {
+    Rule {
+        meta: RuleMeta {
+            id,
+            legacy_id: None,
+            cwe: c.cwe,
+            owasp: c.owasp,
+            category: c.category,
+            tier: Tier::Structural,
+            severity: c.severity,
+            confidence: c.confidence,
+            description: c.description,
+            remediation: c.remediation,
+        },
+        languages,
+        query,
+        context: &[],
+        unless_scope: &[],
+    }
+}
 
 // ── Taint rules (N2) ────────────────────────────────────────────────────────
 
@@ -305,10 +908,11 @@ pub struct TaintPack {
 
 /// Per-vulnerability metadata shared by every language implementing it.
 #[derive(Clone, Copy)]
-struct TaintCategory {
+struct Category {
+    /// Taint key (`@sink.<key>`…); empty for structural categories.
     key: &'static str,
     cwe: &'static str,
-    owasp: &'static str,
+    owasp: Option<&'static str>,
     category: &'static str,
     severity: Severity,
     confidence: Confidence,
@@ -316,70 +920,70 @@ struct TaintCategory {
     remediation: &'static str,
 }
 
-const SQL: TaintCategory = TaintCategory {
+const SQL: Category = Category {
     key: "sql",
     cwe: "CWE-89",
-    owasp: "A03:2021",
+    owasp: Some("A03:2021"),
     category: "sql_injection",
     severity: Severity::High,
     confidence: Confidence::High,
     description: "SQL injection: user input reaches a SQL query",
     remediation: "Use parameterized queries / prepared statements; never build SQL from input.",
 };
-const CMD: TaintCategory = TaintCategory {
+const CMD: Category = Category {
     key: "cmd",
     cwe: "CWE-78",
-    owasp: "A03:2021",
+    owasp: Some("A03:2021"),
     category: "command_injection",
     severity: Severity::Critical,
     confidence: Confidence::High,
     description: "OS command injection: user input reaches a command execution",
     remediation: "Run a fixed program with an argument list (no shell) and validate arguments.",
 };
-const PATH: TaintCategory = TaintCategory {
+const PATH: Category = Category {
     key: "path",
     cwe: "CWE-22",
-    owasp: "A01:2021",
+    owasp: Some("A01:2021"),
     category: "path_traversal",
     severity: Severity::High,
     confidence: Confidence::High,
     description: "Path traversal: user input reaches a file system path",
     remediation: "Canonicalize the path and verify it stays under the allowed base directory.",
 };
-const SSRF: TaintCategory = TaintCategory {
+const SSRF: Category = Category {
     key: "ssrf",
     cwe: "CWE-918",
-    owasp: "A10:2021",
+    owasp: Some("A10:2021"),
     category: "ssrf",
     severity: Severity::High,
     confidence: Confidence::Medium,
     description: "SSRF: user input controls the URL of a server-side request",
     remediation: "Allowlist destination hosts and reject private, loopback and link-local IPs.",
 };
-const REDIRECT: TaintCategory = TaintCategory {
+const REDIRECT: Category = Category {
     key: "redirect",
     cwe: "CWE-601",
-    owasp: "A01:2021",
+    owasp: Some("A01:2021"),
     category: "open_redirect",
     severity: Severity::Medium,
     confidence: Confidence::Medium,
     description: "Open redirect: user input controls a redirect target",
     remediation: "Redirect only to relative paths or an allowlist of destinations.",
 };
-const SSTI: TaintCategory = TaintCategory {
+const SSTI: Category = Category {
     key: "ssti",
     cwe: "CWE-1336",
-    owasp: "A03:2021",
+    owasp: Some("A03:2021"),
     category: "ssti",
     severity: Severity::High,
     confidence: Confidence::High,
     description: "Template injection: user input is compiled as a template",
     remediation: "Load templates from trusted files and pass input only as template data.",
 };
-const LOG: TaintCategory = TaintCategory {
+const LOG: Category = Category {
     key: "log",
     cwe: "CWE-117",
-    owasp: "A09:2021",
+    owasp: Some("A09:2021"),
     category: "log_injection",
     severity: Severity::Medium,
     confidence: Confidence::Medium,
@@ -387,14 +991,14 @@ const LOG: TaintCategory = TaintCategory {
     remediation: "Strip or encode CR/LF before logging, or use a structured logger.",
 };
 
-const fn taint(id: &'static str, c: TaintCategory) -> TaintRule {
+const fn taint(id: &'static str, c: Category) -> TaintRule {
     TaintRule {
         key: c.key,
         meta: RuleMeta {
             id,
             legacy_id: None,
             cwe: c.cwe,
-            owasp: Some(c.owasp),
+            owasp: c.owasp,
             category: c.category,
             tier: Tier::Taint,
             severity: c.severity,
@@ -564,6 +1168,8 @@ fn compile_rules(lang: &str) -> Vec<CompiledRule> {
             Ok(query) => Some(CompiledRule {
                 meta: &r.meta,
                 query,
+                context: r.context,
+                unless_scope: r.unless_scope,
             }),
             Err(e) => {
                 tracing::warn!(rule = r.meta.id, error = %e, "invalid audit rule query; skipped");
@@ -580,6 +1186,9 @@ pub fn rules_for(lang: &str) -> &'static [CompiledRule] {
         slot.get_or_init(|| compile_rules(lang)).as_slice()
     })
 }
+
+#[cfg(test)]
+mod corpus;
 
 #[cfg(test)]
 mod tests {

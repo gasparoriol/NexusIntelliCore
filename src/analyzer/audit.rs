@@ -4,7 +4,7 @@ use super::lang::LanguageGrammar;
 use super::rules;
 use super::taint;
 use super::types::AuditFinding;
-use tree_sitter::{Parser, QueryCursor};
+use tree_sitter::{Node, Parser, QueryCursor};
 
 /// Run AST-based security checks on `source` for the given `lang`.
 ///
@@ -38,17 +38,36 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
     let mut findings: Vec<AuditFinding> = Vec::new();
     let mut cursor = QueryCursor::new();
     for rule in compiled {
+        let names = rule.query.capture_names();
         for m in cursor.matches(&rule.query, tree.root_node(), source_bytes) {
-            // The first capture is the representative node for line reporting.
-            if let Some(cap) = m.captures.first() {
-                findings.push(AuditFinding {
-                    rule: rule.meta,
-                    line: cap.node.start_position().row + 1,
-                    is_write_sink: false,
-                    description: rule.meta.description.to_owned(),
-                    flow: None,
-                });
+            // Report the earliest non-helper capture (`@_x` only feed predicates).
+            let earliest = |include_helpers: bool| {
+                m.captures
+                    .iter()
+                    .filter(|c| include_helpers || !names[c.index as usize].starts_with('_'))
+                    .map(|c| c.node)
+                    .min_by_key(|n| (n.start_byte(), std::cmp::Reverse(n.end_byte())))
+            };
+            let Some(node) = earliest(false).or_else(|| earliest(true)) else {
+                continue;
+            };
+            if !rule.context.is_empty() && !in_named_context(node, source_bytes, rule.context) {
+                continue;
             }
+            if !rule.unless_scope.is_empty() {
+                let scope = enclosing_function(node).unwrap_or_else(|| tree.root_node());
+                let text = scope.utf8_text(source_bytes).unwrap_or_default();
+                if rule.unless_scope.iter().any(|marker| text.contains(marker)) {
+                    continue;
+                }
+            }
+            findings.push(AuditFinding {
+                rule: rule.meta,
+                line: node.start_position().row + 1,
+                is_write_sink: false,
+                description: rule.meta.description.to_owned(),
+                flow: None,
+            });
         }
     }
 
@@ -61,4 +80,51 @@ pub fn audit_file_ast(source: &str, lang: &dyn LanguageGrammar) -> Vec<AuditFind
     }
 
     findings
+}
+
+/// Declarations whose name scopes a context check; the search stops at the
+/// first one so a class name does not leak into unrelated methods.
+const FUNCTION_KINDS: &[&str] = &[
+    "function_definition",
+    "function_declaration",
+    "function_item",
+    "method_declaration",
+    "method_definition",
+    "constructor_declaration",
+    "local_function_statement",
+];
+
+/// Fields that name the declaration or target enclosing an expression.
+const NAME_FIELDS: &[&str] = &["name", "left", "key", "declarator"];
+
+/// True when the name of an enclosing variable, key, assignment target or
+/// function contains one of `words` (case-insensitive).
+fn in_named_context(node: Node<'_>, src: &[u8], words: &[&str]) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        for field in NAME_FIELDS {
+            if let Some(name) = n.child_by_field_name(field) {
+                let text = name.utf8_text(src).unwrap_or_default().to_ascii_lowercase();
+                if words.iter().any(|w| text.contains(w)) {
+                    return true;
+                }
+            }
+        }
+        if FUNCTION_KINDS.contains(&n.kind()) {
+            return false;
+        }
+        cur = n.parent();
+    }
+    false
+}
+
+fn enclosing_function(node: Node<'_>) -> Option<Node<'_>> {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if FUNCTION_KINDS.contains(&n.kind()) {
+            return Some(n);
+        }
+        cur = n.parent();
+    }
+    None
 }
