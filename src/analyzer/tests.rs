@@ -9,8 +9,7 @@ use super::imports::classify_import_kind_from_path;
 use super::lang::{detect_grammar, LanguageGrammar, LANGUAGE_REGISTRY};
 use super::parse::analyze_file;
 use super::types::{
-    AuditFindingKind, EntrypointKind, FileAnalysis, FunctionInfo, ImportInfo, ImportKind,
-    UseCaseConfidence,
+    EntrypointKind, FileAnalysis, FunctionInfo, ImportInfo, ImportKind, UseCaseConfidence,
 };
 use super::use_cases::infer_use_cases;
 use std::collections::HashSet;
@@ -621,7 +620,7 @@ fn safe_function() {
     let findings = audit_file_ast(source, grammar("lib.rs"));
     let unsafe_findings: Vec<_> = findings
         .iter()
-        .filter(|f| f.kind == AuditFindingKind::UnsafeCode)
+        .filter(|f| f.rule.category == "unsafe_code")
         .collect();
     assert!(
         unsafe_findings.is_empty(),
@@ -642,11 +641,27 @@ fn raw_write(ptr: *mut u8, val: u8) {
     let findings = audit_file_ast(source, grammar("lib.rs"));
     let unsafe_findings: Vec<_> = findings
         .iter()
-        .filter(|f| f.kind == AuditFindingKind::UnsafeCode)
+        .filter(|f| f.rule.category == "unsafe_code")
         .collect();
     assert!(
         !unsafe_findings.is_empty(),
         "expected at least one UnsafeCode finding for a real unsafe block"
+    );
+}
+
+#[test]
+fn rust_unsafe_fn_declaration_is_detected() {
+    let source = r"
+pub unsafe fn raw_write(ptr: *mut u8) {
+    let _ = ptr;
+}
+";
+    let findings = audit_file_ast(source, grammar("lib.rs"));
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule.id == "rust-unsafe-code-fn" && f.line == 2),
+        "expected rust-unsafe-code-fn at line 2, got: {findings:?}"
     );
 }
 
@@ -660,7 +675,7 @@ def run_user_code(user_input):
     let findings = audit_file_ast(source, grammar("module.py"));
     let eval_findings: Vec<_> = findings
         .iter()
-        .filter(|f| f.kind == AuditFindingKind::DynamicExecution)
+        .filter(|f| f.rule.id == "py-code-injection-eval")
         .collect();
     assert!(
         !eval_findings.is_empty(),
@@ -679,7 +694,7 @@ function buildRunner(code) {
     let findings = audit_file_ast(source, grammar("module.js"));
     let dynamic_findings: Vec<_> = findings
         .iter()
-        .filter(|f| f.kind == AuditFindingKind::DynamicExecution)
+        .filter(|f| f.rule.category == "code_injection")
         .collect();
 
     assert!(
@@ -706,7 +721,7 @@ function render(raw: string, node: HTMLElement) {
     let findings = audit_file_ast(source, grammar("component.ts"));
     let sink_findings: Vec<_> = findings
         .iter()
-        .filter(|f| f.kind == AuditFindingKind::InsecureAssignment)
+        .filter(|f| f.rule.id == "js-xss-inner-html")
         .collect();
 
     assert!(
@@ -728,7 +743,7 @@ def run(user_input):
     let findings = audit_file_ast(source, grammar("module.py"));
     let dynamic_findings: Vec<_> = findings
         .iter()
-        .filter(|f| f.kind == AuditFindingKind::DynamicExecution)
+        .filter(|f| f.rule.id == "py-command-injection-shell-true")
         .collect();
 
     assert!(

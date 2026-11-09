@@ -159,9 +159,20 @@ Ejecuta escaneo de secretos y detección de código inseguro basada en AST en to
 **Parámetros:** Ninguno
 
 **Qué detecta:**
-- `secret-detection`: Claves API codificadas, tokens, credenciales, cadenas de conexión
-- `rust-unsafe`: Bloques Rust inseguros
-- `sql-injection-heuristic`: Concatenación de cadenas en contextos SQL
+Las reglas son declarativas (`src/analyzer/rules/`): cada una tiene un id `<lang|any>-<cwe-slug>-<variante>`, CWE, categoría OWASP, nivel y severidad base.
+
+- `any-hardcoded-secret` (CWE-798): Claves API codificadas, tokens, credenciales, cadenas de conexión
+- `rust-unsafe-code-block` / `-fn` / `-asm` (CWE-676): bloques `unsafe`, `unsafe fn`, `asm!` en línea
+- `rust-uncaught-panic-unwrap` (CWE-248, patrón): llamadas `unwrap()` / `expect()`
+- `js-code-injection-eval`, `js-code-injection-new-function`, `py-code-injection-eval`, `kotlin-code-injection-eval` (CWE-94/95)
+- `js-xss-inner-html` (CWE-79): asignaciones a `innerHTML`
+- `py-command-injection-shell-true`, `java-command-injection-exec` (CWE-78)
+- `java-path-traversal-taint` (CWE-22): entrada de usuario que llega a un sink de fichero (Critical si es de escritura)
+- `any-sql-injection-heuristic` (CWE-89): Concatenación de cadenas en contextos SQL
+
+**Supresiones:** `// nexus-ignore: <rule-id> <motivo>` en la línea del hallazgo o en la anterior. El motivo es obligatorio; los hallazgos suprimidos se listan en el informe, nunca se ocultan.
+
+**Resumen JSON (`schema_version` 2):** cada entrada de `production_risk` incluye `rule_id`, `legacy_rule_id` (id del esquema 1, p. ej. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `fingerprint`; además de `suppressed_total` y `suppressed`.
 
 > **Importante:** Los _valores_ de los secretos NUNCA se incluyen. El informe solo muestra el _tipo_ y la _ubicación_.
 

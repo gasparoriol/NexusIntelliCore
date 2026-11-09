@@ -12,7 +12,8 @@
 //!     separator suffix are NOT valid sanitizers.
 //!  5. If a tainted-but-not-sanitized variable reaches a sink → emit `AuditFinding`.
 
-use super::types::{AuditFinding, AuditFindingKind};
+use super::rules::JAVA_PATH_TRAVERSAL;
+use super::types::AuditFinding;
 
 /// HTTP/Spring/JAX-RS annotation names that mark a parameter as user-controlled.
 const TAINT_ANNOTATIONS: &[&str] = &[
@@ -208,7 +209,8 @@ pub fn detect_path_traversal(source: &str) -> Vec<AuditFinding> {
                 if let Some(arg) = extract_first_constructor_arg(trimmed, sink_type) {
                     if is_tainted_expr(&arg, &tainted_vars) {
                         findings.push(AuditFinding {
-                            kind: AuditFindingKind::PathTraversal { is_write: true },
+                            rule: &JAVA_PATH_TRAVERSAL,
+                            is_write_sink: true,
                             line: lineno,
                             description: format!(
                                 "Path traversal: tainted user input reaches write sink `new {sink_type}(...)` without sufficient validation"
@@ -223,7 +225,8 @@ pub fn detect_path_traversal(source: &str) -> Vec<AuditFinding> {
                 if let Some(arg) = extract_first_constructor_arg(trimmed, sink_type) {
                     if is_tainted_expr(&arg, &tainted_vars) {
                         findings.push(AuditFinding {
-                            kind: AuditFindingKind::PathTraversal { is_write: false },
+                            rule: &JAVA_PATH_TRAVERSAL,
+                            is_write_sink: false,
                             line: lineno,
                             description: format!(
                                 "Path traversal: tainted user input reaches read sink `new {sink_type}(...)` without sufficient validation"
@@ -241,7 +244,8 @@ pub fn detect_path_traversal(source: &str) -> Vec<AuditFinding> {
                     let arg_trimmed = arg.trim();
                     if is_tainted_expr(arg_trimmed, &tainted_vars) {
                         findings.push(AuditFinding {
-                            kind: AuditFindingKind::PathTraversal { is_write: false },
+                            rule: &JAVA_PATH_TRAVERSAL,
+                            is_write_sink: false,
                             line: lineno,
                             description: "Path traversal: tainted user input in `new File(...)` constructor — absolute child path discards parent in Java".to_owned(),
                         });
@@ -262,7 +266,8 @@ pub fn detect_path_traversal(source: &str) -> Vec<AuditFinding> {
                     if let Some(arg) = extract_nio_first_arg(trimmed, "Files", method) {
                         if is_tainted_expr(&arg, &tainted_vars) {
                             findings.push(AuditFinding {
-                                kind: AuditFindingKind::PathTraversal { is_write: true },
+                                rule: &JAVA_PATH_TRAVERSAL,
+                                is_write_sink: true,
                                 line: lineno,
                                 description: format!(
                                     "Path traversal: tainted path reaches NIO write sink `Files.{method}(...)`"
@@ -284,7 +289,8 @@ pub fn detect_path_traversal(source: &str) -> Vec<AuditFinding> {
                     if let Some(arg) = extract_nio_first_arg(trimmed, "Files", method) {
                         if is_tainted_expr(&arg, &tainted_vars) {
                             findings.push(AuditFinding {
-                                kind: AuditFindingKind::PathTraversal { is_write: false },
+                                rule: &JAVA_PATH_TRAVERSAL,
+                                is_write_sink: false,
                                 line: lineno,
                                 description: format!(
                                     "Path traversal: tainted path reaches NIO read/delete sink `Files.{method}(...)`"
@@ -689,7 +695,7 @@ public class VulnerableSpring {
             "Should detect path traversal in Spring @RequestParam → FileInputStream"
         );
         assert!(
-            findings.iter().any(|f| matches!(f.kind, AuditFindingKind::PathTraversal { is_write: false })),
+            findings.iter().any(|f| !f.is_write_sink),
             "Should be a read (High) finding"
         );
     }
@@ -713,7 +719,7 @@ public class VulnerableServlet extends HttpServlet {
             "Should detect path traversal: getParameter → FileOutputStream"
         );
         assert!(
-            findings.iter().any(|f| matches!(f.kind, AuditFindingKind::PathTraversal { is_write: true })),
+            findings.iter().any(|f| f.is_write_sink),
             "Should be a write (Critical) finding"
         );
     }

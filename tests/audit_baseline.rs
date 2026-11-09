@@ -12,8 +12,14 @@ use common::TestMcpClient;
 /// change legitimately. Each increase requires a comment in the PR
 /// explaining the new finding.
 /// Baseline updated for code formatting adjustment in state and watcher modules.
-const BASELINE_RUST_UNSAFE: usize = 92;
-const BASELINE_SECRET_DETECTION: usize = 17;
+///
+/// SAST v2 Fase 0: the former `rust-unsafe` bucket (92) was entirely
+/// `unwrap()`/`expect()` calls mislabeled as unsafe blocks. It is now split into
+/// `rust-unsafe-code-*` (real `unsafe`, forbidden by `unsafe_code = "forbid"`)
+/// and `rust-uncaught-panic-unwrap`.
+const BASELINE_RUST_UNSAFE_CODE: usize = 0;
+const BASELINE_RUST_PANIC_UNWRAP: usize = 92;
+const BASELINE_SECRET_DETECTION: usize = 16;
 
 fn extract_json_summary(text: &str) -> serde_json::Value {
     let start = text.find("```json\n").map(|i| i + 8);
@@ -49,24 +55,38 @@ fn audit_production_baseline_is_not_exceeded() {
         .cloned()
         .unwrap_or_default();
 
-    let mut rust_unsafe = 0usize;
-    let mut secret_detection = 0usize;
-    for finding in &production_risk {
-        match finding.get("rule_id").and_then(|v| v.as_str()) {
-            Some("rust-unsafe") => rust_unsafe += 1,
-            Some("secret-detection") => secret_detection += 1,
-            _ => {}
-        }
+    let count = |pred: &dyn Fn(&str) -> bool| {
+        production_risk
+            .iter()
+            .filter_map(|f| f.get("rule_id").and_then(|v| v.as_str()))
+            .filter(|id| pred(id))
+            .count()
+    };
+    let checks = [
+        (
+            "rust-unsafe-code-*",
+            count(&|id| id.starts_with("rust-unsafe-code-")),
+            BASELINE_RUST_UNSAFE_CODE,
+            "BASELINE_RUST_UNSAFE_CODE",
+        ),
+        (
+            "rust-uncaught-panic-unwrap",
+            count(&|id| id == "rust-uncaught-panic-unwrap"),
+            BASELINE_RUST_PANIC_UNWRAP,
+            "BASELINE_RUST_PANIC_UNWRAP",
+        ),
+        (
+            "any-hardcoded-secret",
+            count(&|id| id == "any-hardcoded-secret"),
+            BASELINE_SECRET_DETECTION,
+            "BASELINE_SECRET_DETECTION",
+        ),
+    ];
+    for (rule, actual, baseline, constant) in checks {
+        assert!(
+            actual <= baseline,
+            "audit baseline: {rule} production findings went from {baseline} to {actual}. \
+             If this is intentional, update {constant} and document the reason."
+        );
     }
-
-    assert!(
-        rust_unsafe <= BASELINE_RUST_UNSAFE,
-        "audit baseline: rust-unsafe production findings went from {BASELINE_RUST_UNSAFE} to {rust_unsafe}. \
-         If this is intentional, update BASELINE_RUST_UNSAFE and document the reason."
-    );
-    assert!(
-        secret_detection <= BASELINE_SECRET_DETECTION,
-        "audit baseline: secret-detection production findings went from {BASELINE_SECRET_DETECTION} to {secret_detection}. \
-         If this is intentional, update BASELINE_SECRET_DETECTION and document the reason."
-    );
 }

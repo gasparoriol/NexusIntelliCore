@@ -3,28 +3,17 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+use tokio::task::JoinSet;
 
 use crate::analyzer;
+use crate::analyzer::rules::{self, Confidence, RuleMeta, Severity};
 use crate::privacy_gateway;
 use crate::protocol::{text_content, tool_response};
 use crate::sanitizer;
 
 // ── Structured finding model ────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Severity {
-    Critical,
-    High,
-    Medium,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Confidence {
-    High,
-    Medium,
-}
 
 /// Distinguishes where a finding originates so production risk is never mixed
 /// with test evidence or the detector definitions themselves.
@@ -38,13 +27,13 @@ enum AuditContext {
 }
 
 /// Enriched finding produced by the tool layer from a raw AST/heuristic hit.
+/// Rule id, CWE, category and confidence come from the rule registry.
 /// Fingerprint is derived from metadata only — secret values are never stored.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct RichFinding {
-    rule_id: &'static str,
-    category: &'static str,
+    rule: &'static RuleMeta,
+    /// Rule base severity, possibly escalated for this occurrence.
     severity: Severity,
-    confidence: Confidence,
     context: AuditContext,
     file: String,
     line: usize,
@@ -55,21 +44,17 @@ struct RichFinding {
 
 impl RichFinding {
     fn new(
-        rule_id: &'static str,
-        category: &'static str,
+        rule: &'static RuleMeta,
         severity: Severity,
-        confidence: Confidence,
         file: &str,
         line: usize,
         description: String,
     ) -> Self {
         let context = classify_context(file);
-        let fingerprint = format!("{rule_id}:{file}:{line}");
+        let fingerprint = format!("{}:{file}:{line}", rule.id);
         Self {
-            rule_id,
-            category,
+            rule,
             severity,
-            confidence,
             context,
             file: file.to_owned(),
             line,
@@ -77,6 +62,54 @@ impl RichFinding {
             fingerprint,
         }
     }
+}
+
+/// Finding silenced by a `nexus-ignore` directive; still listed in the report.
+#[derive(Debug, Clone)]
+struct SuppressedFinding {
+    finding: RichFinding,
+    reason: String,
+}
+
+// ── Suppressions ─────────────────────────────────────────────────────────────
+
+const SUPPRESS_MARKER: &str = "nexus-ignore:";
+const MAX_SUPPRESS_REASON_CHARS: usize = 120;
+
+/// Reason of a `nexus-ignore: <rule-id> <reason>` directive on the finding's
+/// line or the line above. The rule id may be the current or the legacy one;
+/// a directive without a reason does not suppress anything.
+fn suppression_reason(lines: &[&str], line: usize, rule: &RuleMeta) -> Option<String> {
+    [line, line.saturating_sub(1)]
+        .into_iter()
+        .filter(|&l| l >= 1)
+        .find_map(|l| {
+            let text = lines.get(l - 1)?;
+            let rest = &text[text.find(SUPPRESS_MARKER)? + SUPPRESS_MARKER.len()..];
+            let (id, reason) = rest.trim_start().split_once(char::is_whitespace)?;
+            let reason = reason.trim().trim_end_matches("*/").trim_end();
+            (rule.matches_id(id) && !reason.is_empty())
+                .then(|| reason.chars().take(MAX_SUPPRESS_REASON_CHARS).collect())
+        })
+}
+
+fn split_suppressed(
+    source: &str,
+    findings: Vec<RichFinding>,
+) -> (Vec<RichFinding>, Vec<SuppressedFinding>) {
+    if !source.contains(SUPPRESS_MARKER) {
+        return (findings, Vec::new());
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    let mut kept = Vec::with_capacity(findings.len());
+    let mut suppressed = Vec::new();
+    for finding in findings {
+        match suppression_reason(&lines, finding.line, finding.rule) {
+            Some(reason) => suppressed.push(SuppressedFinding { finding, reason }),
+            None => kept.push(finding),
+        }
+    }
+    (kept, suppressed)
 }
 
 // ── Classification helpers ───────────────────────────────────────────────────
@@ -90,6 +123,7 @@ fn classify_context(rel_path: &str) -> AuditContext {
     // Files that define or test the detectors themselves are not production risk.
     if p.ends_with("audit_queries.rs")
         || p.ends_with("src/analyzer/audit.rs")
+        || p.contains("src/analyzer/rules/")
         || p.ends_with("sanitizer.rs")
         || p.ends_with("privacy_gateway.rs")
         || p.ends_with(".md")
@@ -144,18 +178,59 @@ fn render_context_group(out: &mut String, title: &str, findings: &[&RichFinding]
         }
         let _ = write!(out, "### {}\n\n", severity_icon(*sev));
         for f in &group {
-            let conf_tag = match f.confidence {
+            let conf_tag = match f.rule.confidence {
                 Confidence::High => "",
                 Confidence::Medium => " *(heuristic)*",
             };
             let _ = writeln!(
                 out,
-                "  ⚠ `{}` — {} in `{}` at line {}{}",
-                f.rule_id, f.description, f.file, f.line, conf_tag
+                "  ⚠ `{}` ({}) — {} in `{}` at line {}{}",
+                f.rule.id, f.rule.cwe, f.description, f.file, f.line, conf_tag
             );
         }
         out.push('\n');
     }
+}
+
+fn render_suppressed(out: &mut String, suppressed: &[SuppressedFinding]) {
+    if suppressed.is_empty() {
+        return;
+    }
+    out.push_str("## Suppressed (nexus-ignore)\n\n");
+    for s in suppressed {
+        let _ = writeln!(
+            out,
+            "  ⊘ `{}` in `{}` at line {} — reason: {}",
+            s.finding.rule.id, s.finding.file, s.finding.line, s.reason
+        );
+    }
+    out.push('\n');
+}
+
+/// One entry per rule that fired, with its CWE/OWASP mapping and remediation.
+fn render_rule_reference(out: &mut String, findings: &[RichFinding]) {
+    let mut seen = HashSet::new();
+    let mut fired: Vec<&RuleMeta> = findings
+        .iter()
+        .map(|f| f.rule)
+        .filter(|r| seen.insert(r.id))
+        .collect();
+    if fired.is_empty() {
+        return;
+    }
+    fired.sort_by_key(|r| r.id);
+    out.push_str("## Rule Reference\n\n");
+    for r in fired {
+        let _ = writeln!(
+            out,
+            "  - `{}` — {}{} — {}",
+            r.id,
+            r.cwe,
+            r.owasp.map(|o| format!(" / OWASP {o}")).unwrap_or_default(),
+            r.remediation
+        );
+    }
+    out.push('\n');
 }
 
 fn render_summary_table(out: &mut String, findings: &[RichFinding]) {
@@ -186,6 +261,7 @@ fn render_summary_table(out: &mut String, findings: &[RichFinding]) {
 
 fn render_json_summary(
     findings: &[RichFinding],
+    suppressed: &[SuppressedFinding],
     files_scanned: usize,
     restricted: usize,
     dupes_removed: usize,
@@ -203,24 +279,41 @@ fn render_json_summary(
         .filter(|f| f.context == AuditContext::Production)
         .map(|f| {
             json!({
-                "rule_id":     f.rule_id,
-                "category":    f.category,
-                "severity":    f.severity,
-                "confidence":  f.confidence,
-                "file":        f.file,
-                "line":        f.line,
-                "description": f.description,
-                "fingerprint": f.fingerprint,
+                "rule_id":        f.rule.id,
+                "legacy_rule_id": f.rule.legacy_id.unwrap_or(f.rule.id),
+                "category":       f.rule.category,
+                "cwe":            f.rule.cwe,
+                "owasp":          f.rule.owasp,
+                "tier":           f.rule.tier,
+                "severity":       f.severity,
+                "confidence":     f.rule.confidence,
+                "file":           f.file,
+                "line":           f.line,
+                "description":    f.description,
+                "fingerprint":    f.fingerprint,
+            })
+        })
+        .collect();
+    let suppressed_json: Vec<Value> = suppressed
+        .iter()
+        .map(|s| {
+            json!({
+                "rule_id":     s.finding.rule.id,
+                "file":        s.finding.file,
+                "line":        s.finding.line,
+                "reason":      s.reason,
+                "fingerprint": s.finding.fingerprint,
             })
         })
         .collect();
     let summary = json!({
-        "schema_version": "1",
+        "schema_version": "2",
         "files_scanned": files_scanned,
         "restricted_files": restricted,
         "findings_before_dedup": findings.len() + dupes_removed,
         "duplicates_removed": dupes_removed,
         "findings_total": findings.len(),
+        "suppressed_total": suppressed.len(),
         "by_context": {
             "production":          counts(AuditContext::Production),
             "test":                counts(AuditContext::Test),
@@ -228,114 +321,130 @@ fn render_json_summary(
             "detector_definition": counts(AuditContext::DetectorDefinition),
         },
         "production_risk": prod_risk,
+        "suppressed": suppressed_json,
     });
     serde_json::to_string(&summary).unwrap_or_else(|_| "{}".to_owned())
+}
+
+// ── Per-file analysis ────────────────────────────────────────────────────────
+
+/// Runs every detector on one file. Blocking (file I/O + parsing).
+fn audit_file(path: &Path, rel: &str) -> (Vec<RichFinding>, Vec<SuppressedFinding>) {
+    let Ok(source) = std::fs::read_to_string(path) else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut findings: Vec<RichFinding> = Vec::new();
+
+    // Secret detection — location and type only, never the value.
+    for (secret_type, line) in sanitizer::detect_all_secrets(&source) {
+        findings.push(RichFinding::new(
+            &rules::HARDCODED_SECRET,
+            rules::HARDCODED_SECRET.severity,
+            rel,
+            line,
+            format!("[{secret_type}] detected — value NOT recorded"),
+        ));
+    }
+
+    if let Some(grammar) = analyzer::detect_grammar(path) {
+        // AST-based detection (tree-sitter; precise, no string-literal FPs).
+        for f in analyzer::audit_file_ast(&source, grammar) {
+            findings.push(RichFinding::new(
+                f.rule,
+                f.rule.severity.escalate_if(f.is_write_sink),
+                rel,
+                f.line,
+                f.description,
+            ));
+        }
+
+        // SQL-injection heuristic (text-based; replaced by AST taint in Fase 2).
+        let sql = &rules::SQL_INJECTION_HEURISTIC;
+        for (lineno, line) in source.lines().enumerate() {
+            let lower = line.to_lowercase();
+            if (lower.contains("select ") || lower.contains("insert ") || lower.contains("delete "))
+                && (line.contains('+') || line.contains("format!") || line.contains("concat"))
+            {
+                findings.push(RichFinding::new(
+                    sql,
+                    sql.severity,
+                    rel,
+                    lineno + 1,
+                    sql.description.to_owned(),
+                ));
+            }
+        }
+    }
+
+    split_suppressed(&source, findings)
+}
+
+fn report_order(a: &RichFinding, b: &RichFinding) -> std::cmp::Ordering {
+    (a.file.as_str(), a.line, a.rule.id).cmp(&(b.file.as_str(), b.line, b.rule.id))
 }
 
 // ── Tool entry point ─────────────────────────────────────────────────────────
 
 pub(super) async fn audit_security_measures(proj: &crate::state::ProjectContext) -> Result<Value> {
     let index = proj.index().await?;
-    let allowed_files = index.allowed_files.clone();
+    let files_scanned = index.allowed_files.len();
     let restricted_len = index.restricted_files.len();
+    let files: Vec<(PathBuf, String)> = index
+        .allowed_files
+        .iter()
+        .filter_map(|file| {
+            let path = proj.validate_path(file).ok()?;
+            let rel = index.relative(&path).to_string_lossy().into_owned();
+            Some((path, rel))
+        })
+        .collect();
     drop(index);
 
-    let mut findings: Vec<RichFinding> = Vec::new();
-
-    for file in &allowed_files {
-        let Ok(path) = proj.validate_path(file) else {
-            continue;
-        };
-
-        let index_read = proj.index().await?;
-        let rel = index_read.relative(&path).to_string_lossy().into_owned();
-        drop(index_read);
-
-        let path_clone = path.clone();
-        let Ok(source) =
-            tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_clone)).await?
-        else {
-            continue;
-        };
-
-        // Secret detection — location and type only, never the value.
-        for (secret_type, line) in sanitizer::detect_all_secrets(&source) {
-            findings.push(RichFinding::new(
-                "secret-detection",
-                "hardcoded_secret",
-                Severity::Critical,
-                Confidence::Medium,
-                &rel,
-                line,
-                format!("[{secret_type}] detected — value NOT recorded"),
-            ));
-        }
-
-        // AST-based detection (tree-sitter; precise, no string-literal FPs).
-        let Some(grammar) = analyzer::detect_grammar(&path) else {
-            continue;
-        };
-        for f in analyzer::audit_file_ast(&source, grammar) {
-            let (rule_id, category, severity) = match f.kind {
-                analyzer::AuditFindingKind::UnsafeCode => {
-                    ("rust-unsafe", "unsafe_code", Severity::High)
-                }
-                analyzer::AuditFindingKind::DynamicExecution => {
-                    ("dynamic-execution", "dynamic_execution", Severity::High)
-                }
-                analyzer::AuditFindingKind::InsecureAssignment => {
-                    ("insecure-assignment", "insecure_assignment", Severity::High)
-                }
-                analyzer::AuditFindingKind::PathTraversal { is_write } => (
-                    "java-path-traversal-taint",
-                    "path_traversal",
-                    if is_write { Severity::Critical } else { Severity::High },
-                ),
-            };
-            findings.push(RichFinding::new(
-                rule_id,
-                category,
-                severity,
-                Confidence::High,
-                &rel,
-                f.line,
-                f.description,
-            ));
-        }
-
-        // SQL-injection heuristic (text-based; AST queries not yet supported for interpolation).
-        for (lineno, line) in source.lines().enumerate() {
-            let lineno = lineno + 1;
-            let lower = line.to_lowercase();
-            if (lower.contains("select ") || lower.contains("insert ") || lower.contains("delete "))
-                && (line.contains('+') || line.contains("format!") || line.contains("concat"))
-            {
-                findings.push(RichFinding::new(
-                    "sql-injection-heuristic",
-                    "sql_injection",
-                    Severity::High,
-                    Confidence::Medium,
-                    &rel,
-                    lineno,
-                    "Potential SQL injection via string concatenation".to_owned(),
-                ));
+    // One blocking task per CPU, each auditing a contiguous chunk of files.
+    let workers = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    let chunk_size = files.len().div_ceil(workers).max(1);
+    let mut tasks = JoinSet::new();
+    for chunk in files.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        tasks.spawn_blocking(move || {
+            let mut findings = Vec::new();
+            let mut suppressed = Vec::new();
+            for (path, rel) in &chunk {
+                let (f, s) = audit_file(path, rel);
+                findings.extend(f);
+                suppressed.extend(s);
             }
-        }
+            (findings, suppressed)
+        });
     }
 
+    let mut findings: Vec<RichFinding> = Vec::new();
+    let mut suppressed: Vec<SuppressedFinding> = Vec::new();
+    while let Some(joined) = tasks.join_next().await {
+        let (f, s) = joined?;
+        findings.extend(f);
+        suppressed.extend(s);
+    }
+    // Deterministic output regardless of task completion order.
+    findings.sort_by(report_order);
+    suppressed.sort_by(|a, b| report_order(&a.finding, &b.finding));
+
     let (findings, dupes_removed) = dedup(findings);
+    let mut seen = HashSet::new();
+    suppressed.retain(|s| seen.insert(s.finding.fingerprint.clone()));
 
     // ── Render Markdown ─────────────────────────────────────────────────────
     let mut out = String::from("# Security Audit Report\n\n");
     let _ = write!(
         out,
         "Files scanned: {}  Restricted: {}  \
-         Findings: {} ({} after deduplication, {} duplicates removed)\n\n",
-        allowed_files.len(),
+         Findings: {} ({} after deduplication, {} duplicates removed, {} suppressed)\n\n",
+        files_scanned,
         restricted_len,
         findings.len() + dupes_removed,
         findings.len(),
         dupes_removed,
+        suppressed.len(),
     );
     out.push_str("  NOTE: Secret values are NEVER included. Only type and location are shown.\n\n");
 
@@ -365,12 +474,15 @@ pub(super) async fn audit_security_measures(proj: &crate::state::ProjectContext)
         "Fixtures & Detector Definitions (informative)",
         &annexes,
     );
+    render_suppressed(&mut out, &suppressed);
+    render_rule_reference(&mut out, &findings);
 
     // Inline JSON summary for CI — deterministic, versioned, secret-free.
     out.push_str("## JSON Summary\n\n```json\n");
     out.push_str(&render_json_summary(
         &findings,
-        allowed_files.len(),
+        &suppressed,
+        files_scanned,
         restricted_len,
         dupes_removed,
     ));
@@ -391,6 +503,59 @@ pub(super) async fn audit_security_measures(proj: &crate::state::ProjectContext)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unsafe_block_rule() -> &'static RuleMeta {
+        rules::STRUCTURAL_RULES
+            .iter()
+            .map(|r| &r.meta)
+            .find(|m| m.id == "rust-unsafe-code-block")
+            .expect("rust-unsafe-code-block is registered")
+    }
+
+    fn finding_at(line: usize) -> RichFinding {
+        RichFinding::new(
+            unsafe_block_rule(),
+            Severity::High,
+            "src/foo.rs",
+            line,
+            "unsafe block".to_owned(),
+        )
+    }
+
+    #[test]
+    fn suppression_on_same_or_previous_line_with_reason() {
+        let source = "a\n// nexus-ignore: rust-unsafe-code-block FFI boundary audited\nunsafe {}\nunsafe {} // nexus-ignore: rust-unsafe reviewed in PR 12\n";
+        let (kept, suppressed) = split_suppressed(source, vec![finding_at(3), finding_at(4)]);
+        assert!(
+            kept.is_empty(),
+            "both findings must be suppressed: {kept:?}"
+        );
+        assert_eq!(suppressed.len(), 2);
+        assert_eq!(suppressed[0].reason, "FFI boundary audited");
+        assert_eq!(
+            suppressed[1].reason, "reviewed in PR 12",
+            "legacy id must be accepted"
+        );
+    }
+
+    #[test]
+    fn suppression_requires_reason_and_matching_rule() {
+        let source = "// nexus-ignore: rust-unsafe-code-block\nunsafe {}\n// nexus-ignore: js-xss-inner-html not this rule\nunsafe {}\n";
+        let (kept, suppressed) = split_suppressed(source, vec![finding_at(2), finding_at(4)]);
+        assert_eq!(
+            kept.len(),
+            2,
+            "missing reason or other rule must not suppress"
+        );
+        assert!(suppressed.is_empty());
+    }
+
+    #[test]
+    fn suppression_does_not_reach_two_lines_down() {
+        let source = "// nexus-ignore: rust-unsafe-code-block reason\n\nunsafe {}\n";
+        let (kept, _) = split_suppressed(source, vec![finding_at(3)]);
+        assert_eq!(kept.len(), 1);
+    }
 
     #[test]
     fn classify_context_production() {
@@ -442,10 +607,8 @@ mod tests {
     fn dedup_removes_exact_fingerprint_duplicates() {
         let f = |line: usize| {
             RichFinding::new(
-                "rust-unsafe",
-                "unsafe_code",
+                unsafe_block_rule(),
                 Severity::High,
-                Confidence::High,
                 "src/foo.rs",
                 line,
                 "unsafe block".to_owned(),
@@ -461,10 +624,8 @@ mod tests {
     fn dedup_keeps_different_lines() {
         let f = |line: usize| {
             RichFinding::new(
-                "rust-unsafe",
-                "unsafe_code",
+                unsafe_block_rule(),
                 Severity::High,
-                Confidence::High,
                 "src/foo.rs",
                 line,
                 "unsafe block".to_owned(),
@@ -479,10 +640,8 @@ mod tests {
     #[test]
     fn fingerprint_never_contains_description_content() {
         let f = RichFinding::new(
-            "secret-detection",
-            "hardcoded_secret",
+            &rules::HARDCODED_SECRET,
             Severity::Critical,
-            Confidence::Medium,
             "src/config.rs",
             42,
             "[OPENAI_KEY] detected — value NOT recorded".to_owned(),
@@ -493,25 +652,31 @@ mod tests {
             "fingerprint must not echo description: {}",
             f.fingerprint
         );
-        assert_eq!(f.fingerprint, "secret-detection:src/config.rs:42");
+        assert_eq!(
+            f.fingerprint,
+            format!("{}:src/config.rs:42", rules::HARDCODED_SECRET.id)
+        );
     }
 
     #[test]
     fn render_json_summary_is_valid_json_and_has_schema_version() {
         let findings = vec![RichFinding::new(
-            "rust-unsafe",
-            "unsafe_code",
+            unsafe_block_rule(),
             Severity::High,
-            Confidence::High,
             "src/lib.rs",
             5,
             "unsafe block".to_owned(),
         )];
-        let json_str = render_json_summary(&findings, 10, 0, 0);
+        let json_str = render_json_summary(&findings, &[], 10, 0, 0);
         let v: serde_json::Value =
             serde_json::from_str(&json_str).expect("JSON summary must be valid JSON");
-        assert_eq!(v["schema_version"], "1");
+        assert_eq!(v["schema_version"], "2");
         assert!(v["by_context"]["production"]["high"].as_u64().unwrap_or(0) >= 1);
+        let entry = &v["production_risk"][0];
+        assert_eq!(entry["rule_id"], "rust-unsafe-code-block");
+        assert_eq!(entry["legacy_rule_id"], "rust-unsafe");
+        assert_eq!(entry["cwe"], "CWE-676");
+        assert_eq!(entry["tier"], "structural");
     }
 
     #[test]

@@ -166,9 +166,20 @@ Executa escaneig de secrets i detecció de codi insegur basada en AST en tot el 
 **Paràmetres:** Cap
 
 **Què detecta:**
-- `secret-detection`: Claus API codificades, tokens, credencials, cadenes de connexió
-- `rust-unsafe`: Blocs Rust insegurs
-- `sql-injection-heuristic`: Concatenació de cadenes en contextos SQL
+Les regles són declaratives (`src/analyzer/rules/`): cadascuna té un id `<lang|any>-<cwe-slug>-<variant>`, CWE, categoria OWASP, nivell i severitat base.
+
+- `any-hardcoded-secret` (CWE-798): Claus API codificades, tokens, credencials, cadenes de connexió
+- `rust-unsafe-code-block` / `-fn` / `-asm` (CWE-676): blocs `unsafe`, `unsafe fn`, `asm!` en línia
+- `rust-uncaught-panic-unwrap` (CWE-248, patró): crides `unwrap()` / `expect()`
+- `js-code-injection-eval`, `js-code-injection-new-function`, `py-code-injection-eval`, `kotlin-code-injection-eval` (CWE-94/95)
+- `js-xss-inner-html` (CWE-79): assignacions a `innerHTML`
+- `py-command-injection-shell-true`, `java-command-injection-exec` (CWE-78)
+- `java-path-traversal-taint` (CWE-22): entrada d'usuari que arriba a un sink de fitxer (Critical si és d'escriptura)
+- `any-sql-injection-heuristic` (CWE-89): Concatenació de cadenes en contextos SQL
+
+**Supressions:** `// nexus-ignore: <rule-id> <motiu>` a la línia de la troballa o a l'anterior. El motiu és obligatori; les troballes suprimides es llisten a l'informe, mai no s'amaguen.
+
+**Resum JSON (`schema_version` 2):** cada entrada de `production_risk` inclou `rule_id`, `legacy_rule_id` (id de l'esquema 1, p. ex. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `fingerprint`; a més de `suppressed_total` i `suppressed`.
 
 > **Important:** Els _valors_ dels secrets NEVER s'inclouen. L'informe només mostra el _tipus_ i la _ubicació_.
 

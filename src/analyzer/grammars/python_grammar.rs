@@ -1,4 +1,4 @@
-use crate::analyzer::lang::{EvalMode, LanguageGrammar};
+use crate::analyzer::lang::LanguageGrammar;
 use tree_sitter::Language;
 
 pub struct PythonGrammar;
@@ -38,12 +38,5 @@ impl LanguageGrammar for PythonGrammar {
 
     fn is_public_class(&self, _line_text: &str, name: &str) -> bool {
         !name.starts_with('_')
-    }
-
-    fn get_query(&self, mode: EvalMode) -> Option<&'static str> {
-        match mode {
-            EvalMode::Basic => Some(crate::audit_queries::PY_EVAL),
-            EvalMode::Exec => Some(crate::audit_queries::PYTHON_EVAL_EXEC_QUERY),
-        }
     }
 }

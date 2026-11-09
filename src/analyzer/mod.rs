@@ -9,6 +9,7 @@ pub mod entrypoints;
 pub mod lang;
 pub mod patterns;
 pub mod predictor;
+pub mod rules;
 pub mod use_cases;
 
 // Private sub modules (only accessed via parse.rs)
@@ -30,7 +31,7 @@ pub use docs::{extract_module_doc, extract_preceding_comment};
 pub use entrypoints::detect_entrypoints;
 pub use functions::extract_signature;
 pub use imports::classify_import_kind_from_path;
-pub use lang::{detect_grammar, EvalMode, LanguageGrammar, LANGUAGE_REGISTRY};
+pub use lang::{detect_grammar, LanguageGrammar, LANGUAGE_REGISTRY};
 pub use parse::analyze_file;
 pub use java_taint::detect_path_traversal as detect_java_path_traversal;
 pub use patterns::detect_patterns;

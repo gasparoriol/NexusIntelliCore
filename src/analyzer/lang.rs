@@ -6,12 +6,6 @@ use super::grammars::{
     KotlinGrammar, PythonGrammar, RustGrammar, ScssGrammar, TsxGrammar, TypeScriptGrammar,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvalMode {
-    Basic,
-    Exec,
-}
-
 pub trait LanguageGrammar: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     fn extensions(&self) -> &'static [&'static str];
@@ -38,9 +32,6 @@ pub trait LanguageGrammar: Send + Sync + 'static {
     }
     fn uses_custom_parser(&self) -> bool {
         false
-    }
-    fn get_query(&self, _mode: EvalMode) -> Option<&'static str> {
-        None
     }
 }
 

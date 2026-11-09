@@ -40,11 +40,4 @@ impl LanguageGrammar for KotlinGrammar {
     fn is_public_class(&self, line_text: &str, name: &str) -> bool {
         !name.starts_with('_') && !line_text.contains("private ")
     }
-
-    fn get_query(&self, mode: crate::analyzer::lang::EvalMode) -> Option<&'static str> {
-        match mode {
-            crate::analyzer::lang::EvalMode::Basic => Some(crate::audit_queries::KOTLIN_EVAL),
-            crate::analyzer::lang::EvalMode::Exec => Some(crate::audit_queries::KOTLIN_EVAL_QUERY),
-        }
-    }
 }

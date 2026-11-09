@@ -663,22 +663,22 @@ pub struct FunctionInfo {
 
 ```rust
 pub struct AuditFinding {
-  pub kind: AuditFindingKind,
-  pub severity: AuditSeverity,
+  pub rule: &'static RuleMeta,  // id, legacy_id, cwe, owasp, category, tier, severity, confidence, remediation
   pub line: usize,
-  pub message: String,
-  pub context: Option<String>,
-  pub remediation: Option<String>,
+  pub is_write_sink: bool,      // escalates the rule's base severity one level
+  pub description: String,      // never contains user source content
 }
 ```
 
-**AuditSeverity**:
+Rules are registered declaratively in `analyzer::rules` (`STRUCTURAL_RULES` plus taint/text rule metadata); tree-sitter queries are `.scm` files compiled once per language.
+
+**Severity**:
 
 - `Critical`: Immediate action required
 - `High`: Should be fixed soon
 - `Medium`: Consider fixing
-- `Low`: Minor issue, nice to fix
-- `Info`: Informational only
+
+**Tier**: `structural` (N1), `taint` (N2), `text` (N3), `pattern` (N4).
 
 ### PatternMatch
 

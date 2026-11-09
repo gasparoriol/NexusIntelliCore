@@ -74,7 +74,7 @@ fn write_ptr(p: *mut u8, val: u8) {
     unsafe { *p = val; }
 }
 "#,
-        expected: &[("rust-unsafe", "production", 1)],
+        expected: &[("rust-unsafe-code-block", "production", 1)],
         forbidden: &[],
     },
     CorpusCase {
@@ -87,21 +87,21 @@ fn outer() {
 }
 "#,
         // unsafe block inside a function is still an unsafe block finding
-        expected: &[("rust-unsafe", "production", 1)],
+        expected: &[("rust-unsafe-code-block", "production", 1)],
         forbidden: &[],
     },
     CorpusCase {
         name: "js_eval_call",
         extension: "js",
         source: "function run(code) { return eval(code); }\n",
-        expected: &[("dynamic-execution", "production", 1)],
+        expected: &[("js-code-injection-eval", "production", 1)],
         forbidden: &[],
     },
     CorpusCase {
         name: "python_eval_call",
         extension: "py",
         source: "def run(code):\n    return eval(code)\n",
-        expected: &[("dynamic-execution", "production", 1)],
+        expected: &[("py-code-injection-eval", "production", 1)],
         forbidden: &[],
     },
     CorpusCase {
@@ -127,7 +127,7 @@ fn add(a: u32, b: u32) -> u32 { a + b }
         extension: "rs",
         source: "const TOKEN: &str = \"sk-FAKEOPENAIKEYABCDEFGHIJKLMNOPQRS\";\n",
         // Secret is detected but its VALUE must never appear in output.
-        expected: &[("secret-detection", "production", 1)],
+        expected: &[("any-hardcoded-secret", "production", 1)],
         forbidden: &["sk-FAKEOPENAIKEYABCDEFGHIJKLMNOPQRS"],
     },
     CorpusCase {
@@ -138,7 +138,7 @@ fn query(id: &str) -> String {
     format!("SELECT * FROM users WHERE id = {}", id)
 }
 "#,
-        expected: &[("sql-injection-heuristic", "production", 1)],
+        expected: &[("any-sql-injection-heuristic", "production", 1)],
         forbidden: &[],
     },
     CorpusCase {
@@ -299,6 +299,32 @@ fn audit_corpus_precision_and_recall_meet_thresholds() {
         recall >= 0.90,
         "audit corpus recall {recall:.3} below 0.90 threshold. \
          tp={true_positives}, fp={false_positives}, fn={false_negatives}"
+    );
+}
+
+/// `nexus-ignore` with a reason moves the finding to the suppressed list;
+/// without a reason it has no effect.
+#[test]
+fn audit_nexus_ignore_suppresses_and_lists_finding() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let source = "fn a(p: *mut u8) {\n    // nexus-ignore: rust-unsafe-code-block FFI boundary audited\n    unsafe { *p = 0; }\n}\nfn b(p: *mut u8) {\n    // nexus-ignore: rust-unsafe-code-block\n    unsafe { *p = 1; }\n}\n";
+    let path = write_corpus_file(&dir, "suppression_case", "rs", source);
+
+    let text = extract_text(&run_audit_on_file(&path.to_string_lossy()));
+    let summary = extract_json_summary(&text);
+
+    assert_eq!(summary["schema_version"], "2", "summary: {summary}");
+    assert_eq!(
+        summary["findings_total"], 1,
+        "only the reasonless directive keeps its finding: {summary}"
+    );
+    assert_eq!(summary["suppressed_total"], 1, "summary: {summary}");
+    assert_eq!(summary["suppressed"][0]["line"], 3);
+    assert_eq!(summary["suppressed"][0]["reason"], "FFI boundary audited");
+    assert_eq!(summary["production_risk"][0]["line"], 7);
+    assert!(
+        text.contains("Suppressed (nexus-ignore)"),
+        "suppressions must be listed, not hidden"
     );
 }
 

@@ -1,4 +1,4 @@
-use crate::analyzer::lang::{EvalMode, LanguageGrammar};
+use crate::analyzer::lang::LanguageGrammar;
 use tree_sitter::Language;
 
 pub struct JavaScriptGrammar;
@@ -44,12 +44,5 @@ impl LanguageGrammar for JavaScriptGrammar {
 
     fn is_public_class(&self, line_text: &str, name: &str) -> bool {
         !name.starts_with('_') && !line_text.contains("private ")
-    }
-
-    fn get_query(&self, mode: EvalMode) -> Option<&'static str> {
-        match mode {
-            EvalMode::Basic => Some(crate::audit_queries::JS_EVAL),
-            EvalMode::Exec => Some(crate::audit_queries::JS_EVAL_QUERY),
-        }
     }
 }

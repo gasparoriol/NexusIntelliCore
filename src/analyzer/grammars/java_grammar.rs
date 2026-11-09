@@ -1,4 +1,4 @@
-use crate::analyzer::lang::{EvalMode, LanguageGrammar};
+use crate::analyzer::lang::LanguageGrammar;
 use tree_sitter::Language;
 
 pub struct JavaGrammar;
@@ -47,12 +47,5 @@ impl LanguageGrammar for JavaGrammar {
 
     fn is_public_class(&self, line_text: &str, _name: &str) -> bool {
         line_text.contains("public ")
-    }
-
-    fn get_query(&self, mode: EvalMode) -> Option<&'static str> {
-        match mode {
-            EvalMode::Exec => Some(crate::audit_queries::JAVA_EXEC_QUERY),
-            EvalMode::Basic => None,
-        }
     }
 }

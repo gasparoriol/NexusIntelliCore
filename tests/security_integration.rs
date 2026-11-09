@@ -190,8 +190,8 @@ fn audit_report_separates_contexts_and_contains_no_secret_values() {
         let v: serde_json::Value =
             serde_json::from_str(json_str).expect("embedded JSON summary must be valid JSON");
         assert_eq!(
-            v["schema_version"], "1",
-            "JSON summary must carry schema_version=1"
+            v["schema_version"], "2",
+            "JSON summary must carry schema_version=2"
         );
         assert!(
             v["by_context"]["production"].is_object(),

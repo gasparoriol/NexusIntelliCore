@@ -225,9 +225,20 @@ Runs secret scanning and AST-based insecure code detection across the project.
 **Parameters:** None
 
 **What it detects:**
-- `secret-detection`: Hardcoded API keys, tokens, credentials, connection strings
-- `rust-unsafe`: Unsafe Rust blocks
-- `sql-injection-heuristic`: String concatenation in SQL contexts
+Rules are declarative (`src/analyzer/rules/`): each one carries an id `<lang|any>-<cwe-slug>-<variant>`, CWE, OWASP category, tier and base severity.
+
+- `any-hardcoded-secret` (CWE-798): Hardcoded API keys, tokens, credentials, connection strings
+- `rust-unsafe-code-block` / `-fn` / `-asm` (CWE-676): `unsafe` blocks, `unsafe fn`, inline `asm!`
+- `rust-uncaught-panic-unwrap` (CWE-248, pattern): `unwrap()` / `expect()` calls
+- `js-code-injection-eval`, `js-code-injection-new-function`, `py-code-injection-eval`, `kotlin-code-injection-eval` (CWE-94/95)
+- `js-xss-inner-html` (CWE-79): `innerHTML` assignments
+- `py-command-injection-shell-true`, `java-command-injection-exec` (CWE-78)
+- `java-path-traversal-taint` (CWE-22): user input reaching a file sink (Critical for write sinks)
+- `any-sql-injection-heuristic` (CWE-89): String concatenation in SQL contexts
+
+**Suppressions:** `// nexus-ignore: <rule-id> <reason>` on the finding's line or the line above. The reason is mandatory; suppressed findings are listed in the report, never hidden.
+
+**JSON summary (`schema_version` 2):** each `production_risk` entry includes `rule_id`, `legacy_rule_id` (id used by schema 1, e.g. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `fingerprint`; plus `suppressed_total` and `suppressed`.
 
 **Important:** Secret _values_ are NEVER included. Only type and location are reported.
 

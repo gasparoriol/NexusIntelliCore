@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::path::PathBuf;
 
+use super::rules::RuleMeta;
+
 #[derive(Debug, Clone)]
 pub struct FunctionInfo {
     pub name: String,
@@ -122,24 +124,17 @@ pub struct FileAnalysis {
     pub module_doc: Option<String>,
 }
 
-/// Kind of security finding detected by `audit_file_ast`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AuditFindingKind {
-    /// `unsafe { }` block or `unsafe fn` (Rust).
-    UnsafeCode,
-    /// `eval()` / `exec()` / `compile()` dynamic execution call.
-    DynamicExecution,
-    /// Assignment to a dangerous sink (for example `innerHTML = ...`).
-    InsecureAssignment,
-    /// Java Path Traversal via taint flow. `is_write=true` → Critical, `false` → High.
-    PathTraversal { is_write: bool },
-}
-
 /// A single AST-derived security finding with source location.
+///
+/// Rule metadata (id, CWE, severity…) comes from the declarative registry in
+/// `analyzer::rules`; the finding only carries what varies per occurrence.
 #[derive(Debug, Clone)]
 pub struct AuditFinding {
-    pub kind: AuditFindingKind,
+    pub rule: &'static RuleMeta,
     pub line: usize,
+    /// Sink writes or executes; raises the rule's base severity one level.
+    pub is_write_sink: bool,
+    /// Never contains user source content.
     pub description: String,
 }
 
