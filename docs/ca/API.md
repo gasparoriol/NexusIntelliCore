@@ -174,12 +174,16 @@ Les regles són declaratives (`src/analyzer/rules/`): cadascuna té un id `<lang
 - `js-code-injection-eval`, `js-code-injection-new-function`, `py-code-injection-eval`, `kotlin-code-injection-eval` (CWE-94/95)
 - `js-xss-inner-html` (CWE-79): assignacions a `innerHTML`
 - `py-command-injection-shell-true`, `java-command-injection-exec` (CWE-78)
-- `java-path-traversal-taint` (CWE-22): entrada d'usuari que arriba a un sink de fitxer (Critical si és d'escriptura)
-- `any-sql-injection-heuristic` (CWE-89): Concatenació de cadenes en contextos SQL
+- **Regles taint** (`<lang>-<vuln>-taint`; `lang` = `java`, `py`, `js` per a JS/TS, `rust`): flux de dades intra-procedural sobre l'AST des d'entrada d'usuari (Spring/JAX-RS/Servlet, Flask/Django/FastAPI, Express/Koa/NestJS, axum/actix, arguments CLI) fins a un sink, respectant sanititzadors i guardes de confinament:
+  - `sql-injection` (CWE-89) i `command-injection` (CWE-78): els quatre llenguatges
+  - `path-traversal` (CWE-22): Java, Python, JS/TS (Critical en sinks d'escriptura/esborrat)
+  - `ssrf` (CWE-918) i `open-redirect` (CWE-601): els quatre llenguatges
+  - `ssti` (CWE-1336) i `log-injection` (CWE-117): Java, Python, JS/TS
+- `any-sql-injection-heuristic` (CWE-89): Concatenació de cadenes en contextos SQL; només en llenguatges sense regles taint SQL (Go, C#, Kotlin, C)
 
 **Supressions:** `// nexus-ignore: <rule-id> <motiu>` a la línia de la troballa o a l'anterior. El motiu és obligatori; les troballes suprimides es llisten a l'informe, mai no s'amaguen.
 
-**Resum JSON (`schema_version` 2):** cada entrada de `production_risk` inclou `rule_id`, `legacy_rule_id` (id de l'esquema 1, p. ex. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `fingerprint`; a més de `suppressed_total` i `suppressed`.
+**Resum JSON (`schema_version` 2):** cada entrada de `production_risk` inclou `rule_id`, `legacy_rule_id` (id de l'esquema 1, p. ex. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `flow` (`source_line`/`sink_line` en regles taint), `fingerprint`; a més de `suppressed_total`, `suppressed` i `taint_coverage` (`intra-procedural`: no se segueixen fluxos entre funcions ni fitxers).
 
 > **Important:** Els _valors_ dels secrets NEVER s'inclouen. L'informe només mostra el _tipus_ i la _ubicació_.
 

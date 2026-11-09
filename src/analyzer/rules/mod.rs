@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 use tree_sitter::Query;
 
 use super::lang::LANGUAGE_REGISTRY;
@@ -283,20 +283,235 @@ pub static STRUCTURAL_RULES: &[Rule] = &[
     },
 ];
 
-// ── Non-query rules (taint and text tiers) ──────────────────────────────────
+// ── Taint rules (N2) ────────────────────────────────────────────────────────
 
-pub static JAVA_PATH_TRAVERSAL: RuleMeta = RuleMeta {
-    id: "java-path-traversal-taint",
-    legacy_id: None,
-    cwe: "CWE-22",
-    owasp: Some("A01:2021"),
-    category: "path_traversal",
-    tier: Tier::Taint,
+/// A taint rule: metadata plus the `key` it consumes from the language's taint
+/// queries (`@sink.<key>`, `@sanitizer.<key>`, `@guard.<key>`, `@source.<key>`).
+pub struct TaintRule {
+    pub key: &'static str,
+    pub meta: RuleMeta,
+}
+
+/// Taint queries for a family of grammars that share node names.
+///
+/// The queries are concatenated and compiled once per language. Capture
+/// names drive the engine (see `analyzer::taint`); helper captures used only
+/// by predicates must start with `_`.
+pub struct TaintPack {
+    pub languages: &'static [&'static str],
+    pub queries: &'static [&'static str],
+    pub rules: &'static [TaintRule],
+}
+
+/// Per-vulnerability metadata shared by every language implementing it.
+#[derive(Clone, Copy)]
+struct TaintCategory {
+    key: &'static str,
+    cwe: &'static str,
+    owasp: &'static str,
+    category: &'static str,
+    severity: Severity,
+    confidence: Confidence,
+    description: &'static str,
+    remediation: &'static str,
+}
+
+const SQL: TaintCategory = TaintCategory {
+    key: "sql",
+    cwe: "CWE-89",
+    owasp: "A03:2021",
+    category: "sql_injection",
     severity: Severity::High,
     confidence: Confidence::High,
-    description: "Path traversal: tainted user input reaches a file sink",
+    description: "SQL injection: user input reaches a SQL query",
+    remediation: "Use parameterized queries / prepared statements; never build SQL from input.",
+};
+const CMD: TaintCategory = TaintCategory {
+    key: "cmd",
+    cwe: "CWE-78",
+    owasp: "A03:2021",
+    category: "command_injection",
+    severity: Severity::Critical,
+    confidence: Confidence::High,
+    description: "OS command injection: user input reaches a command execution",
+    remediation: "Run a fixed program with an argument list (no shell) and validate arguments.",
+};
+const PATH: TaintCategory = TaintCategory {
+    key: "path",
+    cwe: "CWE-22",
+    owasp: "A01:2021",
+    category: "path_traversal",
+    severity: Severity::High,
+    confidence: Confidence::High,
+    description: "Path traversal: user input reaches a file system path",
     remediation: "Canonicalize the path and verify it stays under the allowed base directory.",
 };
+const SSRF: TaintCategory = TaintCategory {
+    key: "ssrf",
+    cwe: "CWE-918",
+    owasp: "A10:2021",
+    category: "ssrf",
+    severity: Severity::High,
+    confidence: Confidence::Medium,
+    description: "SSRF: user input controls the URL of a server-side request",
+    remediation: "Allowlist destination hosts and reject private, loopback and link-local IPs.",
+};
+const REDIRECT: TaintCategory = TaintCategory {
+    key: "redirect",
+    cwe: "CWE-601",
+    owasp: "A01:2021",
+    category: "open_redirect",
+    severity: Severity::Medium,
+    confidence: Confidence::Medium,
+    description: "Open redirect: user input controls a redirect target",
+    remediation: "Redirect only to relative paths or an allowlist of destinations.",
+};
+const SSTI: TaintCategory = TaintCategory {
+    key: "ssti",
+    cwe: "CWE-1336",
+    owasp: "A03:2021",
+    category: "ssti",
+    severity: Severity::High,
+    confidence: Confidence::High,
+    description: "Template injection: user input is compiled as a template",
+    remediation: "Load templates from trusted files and pass input only as template data.",
+};
+const LOG: TaintCategory = TaintCategory {
+    key: "log",
+    cwe: "CWE-117",
+    owasp: "A09:2021",
+    category: "log_injection",
+    severity: Severity::Medium,
+    confidence: Confidence::Medium,
+    description: "Log injection: user input is written to a log without neutralizing CR/LF",
+    remediation: "Strip or encode CR/LF before logging, or use a structured logger.",
+};
+
+const fn taint(id: &'static str, c: TaintCategory) -> TaintRule {
+    TaintRule {
+        key: c.key,
+        meta: RuleMeta {
+            id,
+            legacy_id: None,
+            cwe: c.cwe,
+            owasp: Some(c.owasp),
+            category: c.category,
+            tier: Tier::Taint,
+            severity: c.severity,
+            confidence: c.confidence,
+            description: c.description,
+            remediation: c.remediation,
+        },
+    }
+}
+
+static JAVA_TAINT: &[TaintRule] = &[
+    taint("java-sql-injection-taint", SQL),
+    taint("java-command-injection-taint", CMD),
+    taint("java-path-traversal-taint", PATH),
+    taint("java-ssrf-taint", SSRF),
+    taint("java-open-redirect-taint", REDIRECT),
+    taint("java-ssti-taint", SSTI),
+    taint("java-log-injection-taint", LOG),
+];
+
+static PY_TAINT: &[TaintRule] = &[
+    taint("py-sql-injection-taint", SQL),
+    taint("py-command-injection-taint", CMD),
+    taint("py-path-traversal-taint", PATH),
+    taint("py-ssrf-taint", SSRF),
+    taint("py-open-redirect-taint", REDIRECT),
+    taint("py-ssti-taint", SSTI),
+    taint("py-log-injection-taint", LOG),
+];
+
+static JS_TAINT: &[TaintRule] = &[
+    taint("js-sql-injection-taint", SQL),
+    taint("js-command-injection-taint", CMD),
+    taint("js-path-traversal-taint", PATH),
+    taint("js-ssrf-taint", SSRF),
+    taint("js-open-redirect-taint", REDIRECT),
+    taint("js-ssti-taint", SSTI),
+    taint("js-log-injection-taint", LOG),
+];
+
+static RUST_TAINT: &[TaintRule] = &[
+    taint("rust-sql-injection-taint", SQL),
+    taint("rust-command-injection-taint", CMD),
+    taint("rust-ssrf-taint", SSRF),
+    taint("rust-open-redirect-taint", REDIRECT),
+];
+
+const JS_TAINT_QUERIES: [&str; 4] = [
+    include_str!("js/taint_syntax.scm"),
+    include_str!("js/taint_sources.scm"),
+    include_str!("js/taint_sinks.scm"),
+    include_str!("js/taint_sanitizers.scm"),
+];
+
+pub static TAINT_PACKS: &[TaintPack] = &[
+    TaintPack {
+        languages: &["java"],
+        queries: &[
+            include_str!("java/taint_syntax.scm"),
+            include_str!("java/taint_sources.scm"),
+            include_str!("java/taint_sinks.scm"),
+            include_str!("java/taint_sanitizers.scm"),
+        ],
+        rules: JAVA_TAINT,
+    },
+    TaintPack {
+        languages: &["python"],
+        queries: &[
+            include_str!("python/taint_syntax.scm"),
+            include_str!("python/taint_sources.scm"),
+            include_str!("python/taint_sinks.scm"),
+            include_str!("python/taint_sanitizers.scm"),
+        ],
+        rules: PY_TAINT,
+    },
+    TaintPack {
+        languages: &["javascript"],
+        queries: &JS_TAINT_QUERIES,
+        rules: JS_TAINT,
+    },
+    TaintPack {
+        // TypeScript adds NestJS parameter decorators on top of the JS pack.
+        languages: &["typescript", "tsx"],
+        queries: &[
+            JS_TAINT_QUERIES[0],
+            JS_TAINT_QUERIES[1],
+            JS_TAINT_QUERIES[2],
+            JS_TAINT_QUERIES[3],
+            include_str!("ts/taint_sources.scm"),
+        ],
+        rules: JS_TAINT,
+    },
+    TaintPack {
+        languages: &["rust"],
+        queries: &[
+            include_str!("rust/taint_syntax.scm"),
+            include_str!("rust/taint_sources.scm"),
+            include_str!("rust/taint_sinks.scm"),
+            include_str!("rust/taint_sanitizers.scm"),
+        ],
+        rules: RUST_TAINT,
+    },
+];
+
+/// Taint pack for a grammar, if any.
+#[must_use]
+pub fn taint_pack(lang: &str) -> Option<&'static TaintPack> {
+    TAINT_PACKS.iter().find(|p| p.languages.contains(&lang))
+}
+
+/// True when the grammar has a taint rule for `category` (e.g. `sql_injection`).
+#[must_use]
+pub fn taint_covers(lang: &str, category: &str) -> bool {
+    taint_pack(lang).is_some_and(|p| p.rules.iter().any(|r| r.meta.category == category))
+}
+
+// ── Text-tier rules (N3) ────────────────────────────────────────────────────
 
 pub static HARDCODED_SECRET: RuleMeta = RuleMeta {
     id: "any-hardcoded-secret",
@@ -324,35 +539,46 @@ pub static SQL_INJECTION_HEURISTIC: RuleMeta = RuleMeta {
     remediation: "Use parameterized queries / prepared statements.",
 };
 
-static COMPILED: LazyLock<HashMap<&'static str, Vec<CompiledRule>>> = LazyLock::new(|| {
-    let mut map = HashMap::new();
-    for grammar in LANGUAGE_REGISTRY.iter() {
-        let Some(ts_lang) = grammar.tree_sitter_language() else {
-            continue;
-        };
-        let compiled: Vec<CompiledRule> = STRUCTURAL_RULES
+/// One slot per grammar; its rules are compiled on first use so a project
+/// only pays for the languages it contains.
+static COMPILED: LazyLock<HashMap<&'static str, OnceLock<Vec<CompiledRule>>>> =
+    LazyLock::new(|| {
+        LANGUAGE_REGISTRY
             .iter()
-            .filter(|r| r.languages.contains(&grammar.name()))
-            .filter_map(|r| match Query::new(&ts_lang, r.query) {
-                Ok(query) => Some(CompiledRule {
-                    meta: &r.meta,
-                    query,
-                }),
-                Err(e) => {
-                    tracing::warn!(rule = r.meta.id, error = %e, "invalid audit rule query; skipped");
-                    None
-                }
-            })
-            .collect();
-        map.insert(grammar.name(), compiled);
-    }
-    map
-});
+            .map(|g| (g.name(), OnceLock::new()))
+            .collect()
+    });
+
+fn compile_rules(lang: &str) -> Vec<CompiledRule> {
+    let Some(ts_lang) = LANGUAGE_REGISTRY
+        .iter()
+        .find(|g| g.name() == lang)
+        .and_then(|g| g.tree_sitter_language())
+    else {
+        return Vec::new();
+    };
+    STRUCTURAL_RULES
+        .iter()
+        .filter(|r| r.languages.contains(&lang))
+        .filter_map(|r| match Query::new(&ts_lang, r.query) {
+            Ok(query) => Some(CompiledRule {
+                meta: &r.meta,
+                query,
+            }),
+            Err(e) => {
+                tracing::warn!(rule = r.meta.id, error = %e, "invalid audit rule query; skipped");
+                None
+            }
+        })
+        .collect()
+}
 
 /// Structural rules for a grammar, compiled once and shared across files.
 #[must_use]
 pub fn rules_for(lang: &str) -> &'static [CompiledRule] {
-    COMPILED.get(lang).map_or(&[], Vec::as_slice)
+    COMPILED.get(lang).map_or(&[], |slot| {
+        slot.get_or_init(|| compile_rules(lang)).as_slice()
+    })
 }
 
 #[cfg(test)]
@@ -408,11 +634,15 @@ mod tests {
 
     #[test]
     fn rule_ids_are_unique_and_well_formed() {
-        let all = STRUCTURAL_RULES.iter().map(|r| &r.meta).chain([
-            &JAVA_PATH_TRAVERSAL,
-            &HARDCODED_SECRET,
-            &SQL_INJECTION_HEURISTIC,
-        ]);
+        let taint = [JAVA_TAINT, PY_TAINT, JS_TAINT, RUST_TAINT]
+            .into_iter()
+            .flatten()
+            .map(|r| &r.meta);
+        let all = STRUCTURAL_RULES
+            .iter()
+            .map(|r| &r.meta)
+            .chain(taint)
+            .chain([&HARDCODED_SECRET, &SQL_INJECTION_HEURISTIC]);
         let mut seen = HashSet::new();
         for meta in all {
             assert!(seen.insert(meta.id), "duplicate rule id {}", meta.id);

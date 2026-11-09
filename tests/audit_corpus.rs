@@ -132,13 +132,91 @@ fn add(a: u32, b: u32) -> u32 { a + b }
     },
     CorpusCase {
         name: "sql_injection_heuristic",
+        // Go has no SQL taint rule yet, so the text heuristic still applies.
+        extension: "go",
+        source: r#"
+package db
+
+func Query(id string) string {
+    return "SELECT * FROM users WHERE id = " + id
+}
+"#,
+        expected: &[("any-sql-injection-heuristic", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "rust_sql_without_source_no_alert",
+        // Rust has SQL taint: a plain parameter is not user input, so the
+        // retired text heuristic no longer reports it.
         extension: "rs",
         source: r#"
 fn query(id: &str) -> String {
     format!("SELECT * FROM users WHERE id = {}", id)
 }
 "#,
-        expected: &[("any-sql-injection-heuristic", "production", 1)],
+        expected: &[],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "rust_sql_injection_taint",
+        extension: "rs",
+        source: r#"
+async fn find(Query(params): Query<Filter>, pool: PgPool) {
+    let sql = format!("SELECT * FROM users WHERE name = '{}'", params.name);
+    sqlx::query(&sql).fetch_all(&pool).await.ok();
+}
+"#,
+        expected: &[("rust-sql-injection-taint", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "python_sql_injection_taint",
+        extension: "py",
+        source: r#"
+from flask import request
+
+def find(cur):
+    cur.execute("SELECT * FROM users WHERE id = '%s'" % request.args["id"])
+"#,
+        expected: &[("py-sql-injection-taint", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "python_parameterized_query_no_alert",
+        extension: "py",
+        source: r#"
+from flask import request
+
+def find(cur):
+    cur.execute("SELECT * FROM users WHERE id = %s", (request.args["id"],))
+"#,
+        expected: &[],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "js_command_injection_taint",
+        extension: "js",
+        source: r#"
+const { exec } = require('child_process');
+app.get('/ping', (req, res) => {
+  exec("ping -c 1 " + req.query.host);
+});
+"#,
+        expected: &[("js-command-injection-taint", "production", 1)],
+        forbidden: &[],
+    },
+    CorpusCase {
+        name: "java_sql_injection_taint",
+        extension: "java",
+        source: r#"
+public class Repo {
+    String find(@RequestParam String id, Statement st) throws Exception {
+        st.executeQuery("SELECT * FROM users WHERE id = '" + id + "'");
+        return "ok";
+    }
+}
+"#,
+        expected: &[("java-sql-injection-taint", "production", 1)],
         forbidden: &[],
     },
     CorpusCase {

@@ -667,10 +667,11 @@ pub struct AuditFinding {
   pub line: usize,
   pub is_write_sink: bool,      // escalates the rule's base severity one level
   pub description: String,      // never contains user source content
+  pub flow: Option<(usize, usize)>, // taint rules: (source line, sink line)
 }
 ```
 
-Rules are registered declaratively in `analyzer::rules` (`STRUCTURAL_RULES` plus taint/text rule metadata); tree-sitter queries are `.scm` files compiled once per language.
+Rules are registered declaratively in `analyzer::rules`: `STRUCTURAL_RULES` (one query per rule) and `TAINT_PACKS` (per-language taint queries consumed by the intra-procedural engine in `analyzer::taint`). Tree-sitter queries are `.scm` files compiled once per language, on first use.
 
 **Severity**:
 

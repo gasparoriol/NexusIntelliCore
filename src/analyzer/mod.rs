@@ -10,6 +10,7 @@ pub mod lang;
 pub mod patterns;
 pub mod predictor;
 pub mod rules;
+pub mod taint;
 pub mod use_cases;
 
 // Private sub modules (only accessed via parse.rs)
@@ -20,7 +21,6 @@ mod functions;
 mod grammars;
 mod html;
 mod imports;
-mod java_taint;
 mod parse;
 mod query;
 mod strings;
@@ -33,7 +33,6 @@ pub use functions::extract_signature;
 pub use imports::classify_import_kind_from_path;
 pub use lang::{detect_grammar, LanguageGrammar, LANGUAGE_REGISTRY};
 pub use parse::analyze_file;
-pub use java_taint::detect_path_traversal as detect_java_path_traversal;
 pub use patterns::detect_patterns;
 pub use predictor::{MarkovAstPredictor, SharedMarkovPredictor};
 pub use use_cases::infer_use_cases;

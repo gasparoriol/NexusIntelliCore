@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
 pub mod analyzer;
-pub mod audit_queries;
 pub mod indexer;
 pub mod linter;
 pub mod privacy_gateway;

@@ -38,6 +38,8 @@ struct RichFinding {
     file: String,
     line: usize,
     description: String,
+    /// Taint flow as (source line, sink line).
+    flow: Option<(usize, usize)>,
     /// Stable, secret-free identity: `rule_id:rel_path:line`.
     fingerprint: String,
 }
@@ -59,6 +61,7 @@ impl RichFinding {
             file: file.to_owned(),
             line,
             description,
+            flow: None,
             fingerprint,
         }
     }
@@ -121,8 +124,7 @@ fn classify_context(rel_path: &str) -> AuditContext {
         return AuditContext::Fixture;
     }
     // Files that define or test the detectors themselves are not production risk.
-    if p.ends_with("audit_queries.rs")
-        || p.ends_with("src/analyzer/audit.rs")
+    if p.ends_with("src/analyzer/audit.rs")
         || p.contains("src/analyzer/rules/")
         || p.ends_with("sanitizer.rs")
         || p.ends_with("privacy_gateway.rs")
@@ -182,10 +184,14 @@ fn render_context_group(out: &mut String, title: &str, findings: &[&RichFinding]
                 Confidence::High => "",
                 Confidence::Medium => " *(heuristic)*",
             };
+            let flow = f
+                .flow
+                .map(|(src, sink)| format!(" (flow: line {src} → line {sink})"))
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
-                "  ⚠ `{}` ({}) — {} in `{}` at line {}{}",
-                f.rule.id, f.rule.cwe, f.description, f.file, f.line, conf_tag
+                "  ⚠ `{}` ({}) — {} in `{}` at line {}{}{}",
+                f.rule.id, f.rule.cwe, f.description, f.file, f.line, flow, conf_tag
             );
         }
         out.push('\n');
@@ -289,6 +295,7 @@ fn render_json_summary(
                 "confidence":     f.rule.confidence,
                 "file":           f.file,
                 "line":           f.line,
+                "flow":           f.flow.map(|(src, sink)| json!({"source_line": src, "sink_line": sink})),
                 "description":    f.description,
                 "fingerprint":    f.fingerprint,
             })
@@ -314,6 +321,7 @@ fn render_json_summary(
         "duplicates_removed": dupes_removed,
         "findings_total": findings.len(),
         "suppressed_total": suppressed.len(),
+        "taint_coverage": "intra-procedural",
         "by_context": {
             "production":          counts(AuditContext::Production),
             "test":                counts(AuditContext::Test),
@@ -349,18 +357,25 @@ fn audit_file(path: &Path, rel: &str) -> (Vec<RichFinding>, Vec<SuppressedFindin
     if let Some(grammar) = analyzer::detect_grammar(path) {
         // AST-based detection (tree-sitter; precise, no string-literal FPs).
         for f in analyzer::audit_file_ast(&source, grammar) {
-            findings.push(RichFinding::new(
+            let mut finding = RichFinding::new(
                 f.rule,
                 f.rule.severity.escalate_if(f.is_write_sink),
                 rel,
                 f.line,
                 f.description,
-            ));
+            );
+            finding.flow = f.flow;
+            findings.push(finding);
         }
 
-        // SQL-injection heuristic (text-based; replaced by AST taint in Fase 2).
+        // SQL-injection text heuristic, only where no SQL taint rule exists.
         let sql = &rules::SQL_INJECTION_HEURISTIC;
-        for (lineno, line) in source.lines().enumerate() {
+        let heuristic_lines = if rules::taint_covers(grammar.name(), sql.category) {
+            None
+        } else {
+            Some(source.lines())
+        };
+        for (lineno, line) in heuristic_lines.into_iter().flatten().enumerate() {
             let lower = line.to_lowercase();
             if (lower.contains("select ") || lower.contains("insert ") || lower.contains("delete "))
                 && (line.contains('+') || line.contains("format!") || line.contains("concat"))
@@ -446,7 +461,10 @@ pub(super) async fn audit_security_measures(proj: &crate::state::ProjectContext)
         dupes_removed,
         suppressed.len(),
     );
-    out.push_str("  NOTE: Secret values are NEVER included. Only type and location are shown.\n\n");
+    out.push_str("  NOTE: Secret values are NEVER included. Only type and location are shown.\n");
+    out.push_str(
+        "  NOTE: Taint analysis is intra-procedural; flows across functions or files are not tracked.\n\n",
+    );
 
     out.push_str("## Summary\n\n");
     render_summary_table(&mut out, &findings);
@@ -590,7 +608,7 @@ mod tests {
     #[test]
     fn classify_context_detector_definition() {
         assert_eq!(
-            classify_context("src/audit_queries.rs"),
+            classify_context("src/analyzer/rules/java/taint_sinks.scm"),
             AuditContext::DetectorDefinition
         );
         assert_eq!(

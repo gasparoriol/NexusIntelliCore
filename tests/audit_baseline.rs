@@ -18,7 +18,9 @@ use common::TestMcpClient;
 /// `rust-unsafe-code-*` (real `unsafe`, forbidden by `unsafe_code = "forbid"`)
 /// and `rust-uncaught-panic-unwrap`.
 const BASELINE_RUST_UNSAFE_CODE: usize = 0;
-const BASELINE_RUST_PANIC_UNWRAP: usize = 92;
+const BASELINE_RUST_PANIC_UNWRAP: usize = 91;
+/// SAST v2 Fase 2: the taint engine must not flag the server's own code.
+const BASELINE_TAINT: usize = 0;
 const BASELINE_SECRET_DETECTION: usize = 16;
 
 fn extract_json_summary(text: &str) -> serde_json::Value {
@@ -74,6 +76,12 @@ fn audit_production_baseline_is_not_exceeded() {
             count(&|id| id == "rust-uncaught-panic-unwrap"),
             BASELINE_RUST_PANIC_UNWRAP,
             "BASELINE_RUST_PANIC_UNWRAP",
+        ),
+        (
+            "*-taint",
+            count(&|id| id.ends_with("-taint")),
+            BASELINE_TAINT,
+            "BASELINE_TAINT",
         ),
         (
             "any-hardcoded-secret",

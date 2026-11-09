@@ -4,7 +4,6 @@
 /// standard MCP framing (Content-Length headers).  All code extracts pass through the
 /// Phase-4 Privacy Gateway before being returned to the LLM client.
 mod analyzer;
-mod audit_queries;
 mod indexer;
 mod linter;
 mod privacy_gateway;

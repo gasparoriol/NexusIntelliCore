@@ -233,12 +233,16 @@ Rules are declarative (`src/analyzer/rules/`): each one carries an id `<lang|any
 - `js-code-injection-eval`, `js-code-injection-new-function`, `py-code-injection-eval`, `kotlin-code-injection-eval` (CWE-94/95)
 - `js-xss-inner-html` (CWE-79): `innerHTML` assignments
 - `py-command-injection-shell-true`, `java-command-injection-exec` (CWE-78)
-- `java-path-traversal-taint` (CWE-22): user input reaching a file sink (Critical for write sinks)
-- `any-sql-injection-heuristic` (CWE-89): String concatenation in SQL contexts
+- **Taint rules** (`<lang>-<vuln>-taint`; `lang` = `java`, `py`, `js` for JS/TS, `rust`): intra-procedural AST data flow from user input (Spring/JAX-RS/Servlet, Flask/Django/FastAPI, Express/Koa/NestJS, axum/actix, CLI args) to a sink, honouring sanitizers and confinement guards:
+  - `sql-injection` (CWE-89) and `command-injection` (CWE-78): all four languages
+  - `path-traversal` (CWE-22): Java, Python, JS/TS (Critical for write/delete sinks)
+  - `ssrf` (CWE-918) and `open-redirect` (CWE-601): all four languages
+  - `ssti` (CWE-1336) and `log-injection` (CWE-117): Java, Python, JS/TS
+- `any-sql-injection-heuristic` (CWE-89): String concatenation in SQL contexts; only for languages without SQL taint rules (Go, C#, Kotlin, C)
 
 **Suppressions:** `// nexus-ignore: <rule-id> <reason>` on the finding's line or the line above. The reason is mandatory; suppressed findings are listed in the report, never hidden.
 
-**JSON summary (`schema_version` 2):** each `production_risk` entry includes `rule_id`, `legacy_rule_id` (id used by schema 1, e.g. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `fingerprint`; plus `suppressed_total` and `suppressed`.
+**JSON summary (`schema_version` 2):** each `production_risk` entry includes `rule_id`, `legacy_rule_id` (id used by schema 1, e.g. `rust-unsafe`), `category`, `cwe`, `owasp`, `tier`, `severity`, `confidence`, `file`, `line`, `flow` (`source_line`/`sink_line` for taint rules), `fingerprint`; plus `suppressed_total`, `suppressed` and `taint_coverage` (`intra-procedural`: flows across functions or files are not tracked).
 
 **Important:** Secret _values_ are NEVER included. Only type and location are reported.
 

@@ -136,6 +136,8 @@ pub struct AuditFinding {
     pub is_write_sink: bool,
     /// Never contains user source content.
     pub description: String,
+    /// Taint flow as (source line, sink line); `None` for non-taint rules.
+    pub flow: Option<(usize, usize)>,
 }
 
 #[derive(Debug, serde::Serialize)]
