@@ -14,8 +14,8 @@ NexusIntelliCore is a secure-by-design MCP server built for single-developer wor
 
 - **Zero Unsafe Code**: Enforced at the compiler level via `#[forbid(unsafe_code)]`.
 - **Zero Clippy Warnings**: Clean build under `-D warnings`.
-- **362 Automated Tests**: 100% pass rate across unit, integration, privacy adversarial, and stress test suites.
-- **Stress-Tested Engine**: Validated against 500+ file synthetic projects and high-concurrency requests with zero memory leaks or deadlocks.
+- **700+ Automated Tests**: 100% pass rate across unit, integration, privacy adversarial, SAST rule corpora (per-rule precision/recall gates), and stress test suites.
+- **Stress-Tested Engine**: Validated against 500+ file synthetic projects and high-concurrency requests with zero memory leaks or deadlocks. The SAST engine audits 500 files in under 350 ms (release) and is gated in CI by a latency budget.
 - **CI/CD Pipeline**: 8 automated security and quality jobs (Gitleaks secret scanning, Cargo Audit, Clippy security lints, MCP handshake probes, Tarpaulin code coverage, internal doc link validation).
 
 ---
@@ -29,7 +29,8 @@ NexusIntelliCore helps LLM-enabled tooling understand repositories safely and ef
 - File-level outlines (types, imports, function signatures)
 - Symbol inspection with targeted source extraction
 - Dependency graph extraction with circular dependency detection
-- Design pattern heuristics and AST-based security checks
+- Design pattern heuristics
+- Multi-language SAST: 170+ declarative rules, taint analysis across functions and files, SARIF 2.1.0 output and baseline adoption (see [Security Audit Engine](#security-audit-engine-sast))
 - Automated project documentation generation (Markdown, multilingual: EN, ES, CA)
 - Safe configuration file reading with key/value redaction
 
@@ -50,6 +51,57 @@ Failed authentication attempts on the `initialize` MCP method trigger an automat
 
 ### 4. Tamper-Evident Audit Logging (`S4`)
 When audit logging is enabled (`MCP_AUDIT_LOG_PATH`), every protocol and lifecycle event is logged in append-only NDJSON format with chained hashes (`prev_hash` + `hash`). This creates an immutable cryptographic hash chain across audit records.
+
+---
+
+## Security Audit Engine (SAST)
+
+`audit_security_measures` is a deterministic, offline static-analysis engine built on tree-sitter. It runs no external binaries and never makes network calls; rules are embedded in the binary.
+
+### How it works
+
+| Tier | What it detects | Examples |
+|---|---|---|
+| **N1 Structural** | A dangerous API or insecure configuration visible in a single AST node | Weak hashes/ciphers, TLS validation disabled, unsafe deserialization, CSRF/CORS/cookie flags, XXE, `gets`/`strcpy` |
+| **N2 Taint** | User input reaching a sink, following sanitizers, guards and calls | SQL/command injection, path traversal, SSRF, open redirect, SSTI, log injection |
+| **N3 Text/Config** | Infrastructure and configuration files (matched on redacted text) | `USER root`, `curl \| sh`, secrets in `ENV`, privileged containers, Spring actuator exposure |
+| **N4 Patterns** | Precursors of vulnerabilities, low confidence, **outside the production gate** | Dynamic SQL construction, swallowed errors, fail-open authorization, non-constant-time secret comparison, secrets in logs, TOCTOU |
+
+- **Languages**: Java, Kotlin, Python, JavaScript/TypeScript, Go, C#, Rust and C (taint analysis for Java, Kotlin, Python, JS/TS, Go, C# and Rust).
+- **Declarative rules**: each rule is a tree-sitter query (`src/analyzer/rules/**/*.scm`) plus metadata (stable id, CWE, OWASP, severity, confidence, remediation). Adding a rule means adding a `.scm` file and one registry entry; queries are compiled once per language, on first use.
+- **Taint across functions and files**: flows are followed through function summaries up to 3 nested calls. A call whose name is defined more than once is not resolved (precision over recall).
+- **Zero secret exposure**: findings carry only rule, location and a fixed description. Secret values are never emitted, and the final report passes through the Privacy Gateway.
+
+### Report formats
+
+```json
+{ "name": "audit_security_measures", "arguments": { "format": "sarif" } }
+```
+
+| `format` | Output |
+|---|---|
+| `markdown` (default) | Human-readable report with production risk, risk patterns, a ranked list of functions to review, and an embedded JSON summary (`schema_version` 3) |
+| `sarif` | Pure SARIF 2.1.0 log with rule metadata, `codeFlows` for taint flows and `suppressions`, ready for GitHub code scanning |
+| `baseline` | Content of `audit-baseline.json` accepting every current finding |
+
+### Adopting it in an existing project
+
+1. Run the audit with `format: "baseline"` and save the output as `audit-baseline.json` at the project root.
+2. From then on, findings in the baseline are reported as accepted debt and only **new** findings count as production risk.
+3. Baseline entries use a line-independent identity (`rule:file:function:ordinal`), so moving code does not resurrect old findings.
+
+### Suppressions
+
+```java
+// nexus-ignore: java-command-injection-exec reviewed in PR 12, fixed program and arguments
+Runtime.getRuntime().exec(CMD);
+```
+
+A suppression on the finding's line or the line above needs a non-empty reason. Suppressed findings are listed in the report and in SARIF, never hidden.
+
+### Quality gates
+
+Every rule ships with positive, safe and evasion fixtures and must reach precision >= 0.95 and recall >= 0.90 per rule and language. The repository's own production code is held to zero taint findings and a fixed baseline for the remaining rules (`tests/audit_baseline.rs`). The full design and implementation status live in [docs/SAST_DISENO_TECNICO_V2.md](docs/SAST_DISENO_TECNICO_V2.md).
 
 ---
 
@@ -124,7 +176,7 @@ The active project lives in the connection's session (not in a process-wide glob
 | `inspect_symbol` | Yes | Sanitized source code of a specific function, class, or method |
 | `get_dependencies_graph` | Yes | Import graph between modules, including dependency-cycle alerts |
 | `search_design_patterns` | Yes | Heuristic design-pattern detection across files |
-| `audit_security_measures` | Yes | Secret scanning and AST-based insecure code detection |
+| `audit_security_measures` | Yes | Multi-language SAST: secrets, structural rules, taint analysis, infrastructure checks, risk patterns; `format` = `markdown` / `sarif` / `baseline` |
 | `analyze_angular_component` | Yes | Angular triad analysis (TS Component + HTML Template + CSS Styles) |
 | `refresh_index` | No | Rebuild file index and flush AST/tool caches |
 | `get_server_stats` | No | Server operational metrics (cache hit ratios, invocation counts, uptime) |
