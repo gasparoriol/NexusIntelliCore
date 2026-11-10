@@ -46,7 +46,11 @@ pub(crate) async fn build_file_dependencies(
 ) -> Result<serde_json::Map<String, Value>> {
     let mut file_deps: serde_json::Map<String, Value> = serde_json::Map::new();
 
-    for file in allowed_files.iter().take(params.max_nodes * 2) {
+    let analyzable_files = allowed_files
+        .iter()
+        .filter(|f| analyzer::detect_grammar(f).is_some());
+
+    for file in analyzable_files.take(params.max_nodes * 2) {
         let Ok(path) = proj.validate_path(file) else {
             continue;
         };
