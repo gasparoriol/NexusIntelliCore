@@ -110,7 +110,7 @@ A suppression on the finding's line or the line above needs a non-empty reason. 
 
 ### Quality gates
 
-Every rule ships with positive, safe and evasion fixtures and must reach precision >= 0.95 and recall >= 0.90 per rule and language. The repository's own production code is held to zero taint findings and a fixed baseline for the remaining rules (`tests/audit_baseline.rs`). The full design and implementation status live in [docs/SAST_DISENO_TECNICO_V2.md](docs/SAST_DISENO_TECNICO_V2.md).
+Every rule ships with positive, safe and evasion fixtures and must reach precision >= 0.95 and recall >= 0.90 per rule and language. The repository's own production code is held to zero taint findings and a fixed baseline for the remaining rules (`tests/audit_baseline.rs`).
 
 ---
 
