@@ -6,9 +6,18 @@ It exposes code intelligence tools over stdio JSON-RPC/MCP and sanitizes all out
 
 ---
 
-## Current Status 
+## Current Status (v2.0.0)
 
 NexusIntelliCore is a secure-by-design MCP server built for single-developer workflows, multi-project environments, and multi-user context-compression pipelines.
+
+### What's New in v2.0.0
+
+- **Declarative SAST Engine v2**: 170+ Tree-Sitter security rules across 8 languages (Java, Kotlin, Python, JavaScript, TypeScript, Go, C#, Rust, C) categorized across 4 tiers (N1 Structural, N2 Taint, N3 Infrastructure, N4 Patterns).
+- **Inter-Procedural Taint Flow Analysis**: Dynamic dataflow tracking across functions and files (depth 3) for SQL injection, command injection, path traversal, SSRF, open redirect, SSTI, and log injection.
+- **Enterprise Standards Compliance**: Native SARIF 2.1.0 output format for seamless GitHub Code Scanning integration.
+- **Baseline Adoption & Debt Management**: Support for `audit-baseline.json` using line-independent identities (`rule:file:function:ordinal`) to accept existing debt without masking new regressions.
+- **In-Code Suppressions**: Auditable, formal code suppressions (`// nexus-ignore: <rule-id> <reason>`).
+- **Session-Aware Multi-Project Engine**: Isolated active project selection (`set_active_project`), unified `project_id` parameter across all tools, and dynamic workspace resolution.
 
 ### Verified Quality & Security Metrics
 
