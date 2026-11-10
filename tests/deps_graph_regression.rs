@@ -50,6 +50,9 @@ fn resolution_coverage_did_not_regress_beyond_threshold() {
         .and_then(|v| v.as_f64())
         .expect("resolution_coverage must be present in meta.summary.statistics");
 
+    eprintln!("DEBUG_COVERAGE: {coverage}");
+    eprintln!("GRAPH STATS: {:?}", graph.pointer("/meta/summary/statistics"));
+
     let drop = RESOLUTION_COVERAGE_BASELINE - coverage;
     assert!(
         drop <= RESOLUTION_COVERAGE_MAX_ABSOLUTE_DROP,

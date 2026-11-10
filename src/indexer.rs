@@ -323,6 +323,9 @@ fn walk_files(root: &Path, matcher: Option<&GlobSet>) -> Result<(Vec<PathBuf>, V
         }
     }
 
+    allowed.sort();
+    restricted.sort();
+
     Ok((allowed, restricted))
 }
 
